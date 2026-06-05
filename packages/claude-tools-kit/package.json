@@ -1,0 +1,23 @@
+{
+  "name": "claude-tools-kit",
+  "version": "1.0.0",
+  "description": "Standalone Claude Code tool kit — Bash, Read, Write, Edit, Glob, Grep, WebFetch + executor",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "dependencies": {
+    "glob": "^13.0.6",
+    "zod": "^3.24.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["claude", "anthropic", "tools", "ai", "agent"],
+  "license": "MIT"
+}

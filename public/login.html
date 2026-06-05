@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 — 知识库</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="login-page">
+
+  <!-- 左侧品牌面板 -->
+  <div class="login-brand-panel">
+    <div class="login-brand-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="26" height="26">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+        <line x1="9" y1="8" x2="15" y2="8"/>
+        <line x1="9" y1="12" x2="13" y2="12"/>
+      </svg>
+    </div>
+    <div class="login-brand-title">企业知识库<br>管理平台</div>
+    <div class="login-brand-desc">基于本地大模型，文档检索与问答一体化。数据不出局域网，安全可控。</div>
+    <div class="login-brand-features">
+      <div class="login-feature-item">
+        <span class="login-feature-dot"></span>
+        本地部署，数据完全自主掌控
+      </div>
+      <div class="login-feature-item">
+        <span class="login-feature-dot"></span>
+        多知识库隔离，权限精细管理
+      </div>
+      <div class="login-feature-item">
+        <span class="login-feature-dot"></span>
+        支持 PDF、Markdown、代码等多格式
+      </div>
+      <div class="login-feature-item">
+        <span class="login-feature-dot"></span>
+        全文检索 + 语义问答双引擎
+      </div>
+    </div>
+  </div>
+
+  <!-- 右侧表单面板 -->
+  <div class="login-form-panel">
+    <div class="login-box">
+      <div class="login-form-header">
+        <div class="login-form-title">欢迎回来</div>
+        <div class="login-form-sub">请输入账号信息以继续</div>
+      </div>
+
+      <div class="login-error" id="login-error"></div>
+
+      <form id="login-form">
+        <div class="form-group">
+          <label class="form-label" for="username">用户名</label>
+          <input class="input" id="username" type="text" placeholder="请输入用户名" autocomplete="username" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="password">密码</label>
+          <input class="input" id="password" type="password" placeholder="请输入密码" autocomplete="current-password" required>
+        </div>
+        <button class="btn btn-primary login-submit" type="submit" id="login-btn">
+          登录
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    if (localStorage.getItem('kb_token')) location.href = '/index.html'
+
+    document.getElementById('login-form').addEventListener('submit', async e => {
+      e.preventDefault()
+      const btn = document.getElementById('login-btn')
+      const errEl = document.getElementById('login-error')
+      errEl.style.display = 'none'
+      btn.disabled = true
+      btn.textContent = '登录中…'
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error ?? '用户名或密码错误')
+
+        localStorage.setItem('kb_token', data.token)
+        localStorage.setItem('kb_user', JSON.stringify(data.user))
+        location.href = '/index.html'
+      } catch (err) {
+        errEl.textContent = err.message
+        errEl.style.display = 'block'
+        btn.disabled = false
+        btn.textContent = '登录'
+      }
+    })
+  </script>
+</body>
+</html>

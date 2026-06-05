@@ -1,0 +1,32 @@
+services:
+  enterprise-kb:
+    build:
+      context: .
+    image: enterprise-kb:local
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      TRUST_PROXY: "${TRUST_PROXY:-false}"
+      CORS_ORIGIN: "${CORS_ORIGIN:-}"
+      JWT_SECRET: "${JWT_SECRET:?Set JWT_SECRET to a random value of at least 32 characters}"
+      JWT_EXPIRES_IN: "${JWT_EXPIRES_IN:-24h}"
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set ADMIN_PASSWORD before starting production}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-http://host.docker.internal:11434/v1}"
+      LLM_API_KEY: "${LLM_API_KEY:-ollama}"
+      LLM_MODEL: "${LLM_MODEL:-qwen2.5:7b}"
+      OLLAMA_MAX_TURNS: "${OLLAMA_MAX_TURNS:-25}"
+      STORAGE_PATH: /app/storage
+      DB_PATH: /app/data/enterprise-kb.db
+      LOGIN_RATE_WINDOW_MS: "${LOGIN_RATE_WINDOW_MS:-900000}"
+      LOGIN_RATE_MAX: "${LOGIN_RATE_MAX:-10}"
+    volumes:
+      - enterprise_kb_data:/app/data
+      - enterprise_kb_storage:/app/storage
+    restart: unless-stopped
+
+volumes:
+  enterprise_kb_data:
+  enterprise_kb_storage:
