@@ -278,6 +278,55 @@ describe('knowledge base access control', () => {
         expect(res.body).toEqual([])
       })
   })
+
+  it('batch deletes docs and clears search hits for removed docs', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Batch Delete Atlas', description: 'KB for batch delete tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const firstDoc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: 'Batch One', content: 'Alpha batch document with a unique search phrase.' })
+      .expect(201)
+
+    const secondDoc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: 'Batch Two', content: 'Beta batch document with another unique phrase.' })
+      .expect(201)
+
+    await request(app)
+      .delete(`/api/kbs/${kbId}/docs/batch`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ ids: [firstDoc.body.id, secondDoc.body.id] })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual({ deleted: 2 })
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual([])
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/search/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'unique search phrase', limit: 5 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual([])
+      })
+  })
 })
 
 describe('conversation search', () => {
@@ -314,6 +363,48 @@ describe('conversation search', () => {
           kb_name: 'Conversation Atlas',
         })
         expect(res.body.items[0].snippet).toContain('release checklist')
+      })
+  })
+
+  it('batch deletes conversations the user owns', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminUser = getUserByUsername('admin')
+    expect(adminUser).toBeDefined()
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Batch Conversation Atlas', description: 'KB for conversation batch delete tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const convOne = createConversation(adminUser!.id, kbId, 'Batch Conv One')
+    const convTwo = createConversation(adminUser!.id, kbId, 'Batch Conv Two')
+
+    insertMessages(convOne.id, [
+      { role: 'user', content: 'Batch conv one keeps a traceable phrase.', tool_calls: null, tool_call_id: null, seq: 0 },
+    ])
+    insertMessages(convTwo.id, [
+      { role: 'user', content: 'Batch conv two keeps another traceable phrase.', tool_calls: null, tool_call_id: null, seq: 0 },
+    ])
+
+    await request(app)
+      .delete('/api/conversations/batch')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ ids: [convOne.id, convTwo.id] })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual({ deleted: 2 })
+      })
+
+    await request(app)
+      .get('/api/search/conversations')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'traceable phrase', limit: 10, offset: 0 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body.total).toBe(0)
+        expect(res.body.items).toEqual([])
       })
   })
 })
