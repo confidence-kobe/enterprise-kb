@@ -18,8 +18,8 @@
  *   - allowedDirectories: [kbPath] → 路径访问限制在知识库目录内
  */
 
-import type { Tool as KitTool, ToolContext } from 'claude-tools-kit'
-import { zodToJsonSchema, resolvePermission } from 'claude-tools-kit'
+import type { Tool as KitTool, ToolContext } from '../packages/claude-tools-kit/dist/index.js'
+import { zodToJsonSchema, resolvePermission } from '../packages/claude-tools-kit/dist/index.js'
 import type { LLMTool } from './tools.js'
 
 /**

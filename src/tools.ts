@@ -12,7 +12,7 @@
 
 import * as fs   from 'node:fs'
 import * as path from 'node:path'
-import { READ_ONLY_TOOLS } from 'claude-tools-kit'
+import { READ_ONLY_TOOLS } from '../packages/claude-tools-kit/dist/index.js'
 import { adaptTools }      from './toolAdapter.js'
 import { searchDocContent } from './db.js'
 import type OpenAI         from 'openai'
