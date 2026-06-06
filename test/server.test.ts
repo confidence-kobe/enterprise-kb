@@ -8,6 +8,15 @@ import type { Express } from 'express'
 let app: Express
 let testRoot: string
 
+async function login(username: string, password: string) {
+  const response = await request(app)
+    .post('/api/auth/login')
+    .send({ username, password })
+    .expect(200)
+
+  return response.body as { token: string; user: { id: number; username: string; role: string } }
+}
+
 beforeAll(async () => {
   testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-kb-test-'))
 
@@ -78,5 +87,100 @@ describe('server health and auth', () => {
       .post('/api/auth/login')
       .send({ username: 'admin', password: 'wrong-password' })
       .expect(401)
+  })
+})
+
+describe('knowledge base access control', () => {
+  it('lets the owner create a kb and grants access through public visibility and memberships', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const alicePassword = 'Alice@123'
+    const createUser = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ username: 'alice', password: alicePassword, role: 'user' })
+      .expect(201)
+
+    expect(createUser.body).toMatchObject({ username: 'alice', role: 'user' })
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Project Atlas', description: 'KB for access control tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    expect(kb.body).toMatchObject({ name: 'Project Atlas', description: 'KB for access control tests' })
+
+    const alice = await login('alice', alicePassword)
+
+    await request(app)
+      .get('/api/kbs')
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(Array.isArray(res.body)).toBe(true)
+        expect(res.body.some((item: { id: number }) => item.id === kbId)).toBe(false)
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}`)
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(403)
+
+    await request(app)
+      .patch(`/api/kbs/${kbId}/public`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ is_public: true })
+      .expect(200)
+
+    await request(app)
+      .get('/api/kbs')
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body.some((item: { id: number; is_public?: number }) => item.id === kbId)).toBe(true)
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}`)
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toMatchObject({ id: kbId, name: 'Project Atlas' })
+      })
+
+    await request(app)
+      .patch(`/api/kbs/${kbId}/public`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ is_public: false })
+      .expect(200)
+
+    await request(app)
+      .post(`/api/kbs/${kbId}/members`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ username: 'alice' })
+      .expect(201)
+
+    await request(app)
+      .get(`/api/kbs/${kbId}`)
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+
+    await request(app)
+      .get('/api/kbs')
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body.some((item: { id: number }) => item.id === kbId)).toBe(true)
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/members`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body.some((member: { username: string }) => member.username === 'alice')).toBe(true)
+      })
   })
 })
