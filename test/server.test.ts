@@ -4,11 +4,7 @@ import path from 'node:path'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Express } from 'express'
-import {
-  createConversation,
-  getUserByUsername,
-  insertMessages,
-} from '../src/db.ts'
+import { createConversation, insertMessages } from '../src/db.ts'
 
 let app: Express
 let testRoot: string
@@ -91,6 +87,48 @@ describe('server health and auth', () => {
     await request(app)
       .post('/api/auth/login')
       .send({ username: 'admin', password: 'wrong-password' })
+      .expect(401)
+  })
+})
+
+describe('admin user management', () => {
+  it('creates, updates, resets, and deletes a managed user', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const created = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ username: 'bob', password: 'Bob@123', role: 'user' })
+      .expect(201)
+
+    expect(created.body).toMatchObject({ username: 'bob', role: 'user' })
+
+    await request(app)
+      .patch(`/api/admin/users/${created.body.id}/role`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ role: 'admin' })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual({ ok: true })
+      })
+
+    await request(app)
+      .post(`/api/admin/users/${created.body.id}/reset-password`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ newPassword: 'Bob@456' })
+      .expect(200)
+
+    const bob = await login('bob', 'Bob@456')
+    expect(bob.user).toMatchObject({ username: 'bob', role: 'admin' })
+
+    await request(app)
+      .delete(`/api/admin/users/${created.body.id}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+
+    await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'bob', password: 'Bob@456' })
       .expect(401)
   })
 })
@@ -189,13 +227,13 @@ describe('knowledge base access control', () => {
       })
   })
 
-  it('indexes text docs and returns previews and search hits', async () => {
+  it('indexes text docs and returns preview and stats', async () => {
     const admin = await login('admin', 'Admin@123')
 
     const kb = await request(app)
       .post('/api/kbs')
       .set('Authorization', `Bearer ${admin.token}`)
-      .send({ name: 'Search Atlas', description: 'KB for document flow tests' })
+      .send({ name: 'Stats Atlas', description: 'KB for stats tests' })
       .expect(201)
 
     const kbId = kb.body.id as number
@@ -232,20 +270,22 @@ describe('knowledge base access control', () => {
       })
 
     await request(app)
-      .get(`/api/kbs/${kbId}/search/docs`)
+      .get(`/api/kbs/${kbId}/stats`)
       .set('Authorization', `Bearer ${admin.token}`)
-      .query({ q: 'migration steps', limit: 5 })
       .expect(200)
       .expect(res => {
-        expect(Array.isArray(res.body)).toBe(true)
-        expect(res.body.length).toBeGreaterThan(0)
-        expect(res.body[0]).toMatchObject({
-          original_name: 'Incident Runbook.md',
-          chunk_line: expect.any(Number),
+        expect(res.body).toMatchObject({
+          name: 'Stats Atlas',
+          totalDocs: 1,
+          totalFiles: 1,
+          byExtension: expect.any(Object),
         })
-        expect((res.body[0] as { snippet: string }).snippet).toContain('migration')
+        expect(res.body.totalLines).toBeGreaterThan(0)
+        expect(res.body.totalSizeKB).toBeGreaterThanOrEqual(0)
+        expect(res.body.byExtension['.md'].count).toBe(1)
       })
   })
+
   it('removes docs from storage and search indexes when deleted', async () => {
     const admin = await login('admin', 'Admin@123')
 
@@ -329,11 +369,9 @@ describe('knowledge base access control', () => {
   })
 })
 
-describe('conversation search', () => {
+describe('conversation search and pinning', () => {
   it('finds accessible conversations by message content', async () => {
     const admin = await login('admin', 'Admin@123')
-    const adminUser = getUserByUsername('admin')
-    expect(adminUser).toBeDefined()
 
     const kb = await request(app)
       .post('/api/kbs')
@@ -342,7 +380,7 @@ describe('conversation search', () => {
       .expect(201)
 
     const kbId = kb.body.id as number
-    const conv = createConversation(adminUser!.id, kbId, 'Release rollout')
+    const conv = createConversation(admin.user.id, kbId, 'Release rollout')
     insertMessages(conv.id, [
       { role: 'user', content: 'How do we roll out the release?', tool_calls: null, tool_call_id: null, seq: 0 },
       { role: 'assistant', content: 'Use the release checklist and watch the deploy job.', tool_calls: null, tool_call_id: null, seq: 1 },
@@ -368,8 +406,6 @@ describe('conversation search', () => {
 
   it('batch deletes conversations the user owns', async () => {
     const admin = await login('admin', 'Admin@123')
-    const adminUser = getUserByUsername('admin')
-    expect(adminUser).toBeDefined()
 
     const kb = await request(app)
       .post('/api/kbs')
@@ -378,8 +414,8 @@ describe('conversation search', () => {
       .expect(201)
 
     const kbId = kb.body.id as number
-    const convOne = createConversation(adminUser!.id, kbId, 'Batch Conv One')
-    const convTwo = createConversation(adminUser!.id, kbId, 'Batch Conv Two')
+    const convOne = createConversation(admin.user.id, kbId, 'Batch Conv One')
+    const convTwo = createConversation(admin.user.id, kbId, 'Batch Conv Two')
 
     insertMessages(convOne.id, [
       { role: 'user', content: 'Batch conv one keeps a traceable phrase.', tool_calls: null, tool_call_id: null, seq: 0 },
@@ -405,6 +441,45 @@ describe('conversation search', () => {
       .expect(res => {
         expect(res.body.total).toBe(0)
         expect(res.body.items).toEqual([])
+      })
+  })
+
+  it('pins conversations and shows them first in lists', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Pinned Conversation Atlas', description: 'KB for pin tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const first = createConversation(admin.user.id, kbId, 'First thread')
+    const second = createConversation(admin.user.id, kbId, 'Second thread')
+
+    await request(app)
+      .patch(`/api/conversations/${first.id}/pin`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ pinned: true })
+      .expect(200)
+
+    await request(app)
+      .get(`/api/conversations/${first.id}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toMatchObject({ id: first.id, is_pinned: 1 })
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/conversations`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ limit: 10, offset: 0 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body.total).toBe(2)
+        expect(res.body.items[0]).toMatchObject({ id: first.id, is_pinned: 1 })
+        expect(res.body.items[1]).toMatchObject({ id: second.id })
       })
   })
 })
