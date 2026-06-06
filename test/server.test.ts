@@ -4,7 +4,7 @@ import path from 'node:path'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Express } from 'express'
-import { createConversation, insertMessages } from '../src/db.ts'
+import { createConversation, insertMessages, isDocIndexed, removeDocFromIndex } from '../src/db.ts'
 
 let app: Express
 let testRoot: string
@@ -26,6 +26,8 @@ beforeAll(async () => {
   process.env.JWT_EXPIRES_IN = '1h'
   process.env.ADMIN_USERNAME = 'admin'
   process.env.ADMIN_PASSWORD = 'Admin@123'
+  process.env.LOGIN_RATE_MAX = '100'
+  process.env.LOGIN_RATE_WINDOW_MS = '600000'
   process.env.DB_PATH = path.join(testRoot, 'data', 'enterprise-kb-test.db')
   process.env.STORAGE_PATH = path.join(testRoot, 'storage')
   process.env.LLM_BASE_URL = 'https://example.test/v1'
@@ -365,6 +367,63 @@ describe('knowledge base access control', () => {
       .expect(200)
       .expect(res => {
         expect(res.body).toEqual([])
+      })
+  })
+
+  it('rebuilds search indexes when reindex is triggered', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Reindex Atlas', description: 'KB for reindex tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const doc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({
+        title: 'Recovery Playbook',
+        content: 'The recovery phrase should be searchable after reindex runs.',
+      })
+      .expect(201)
+
+    const docId = doc.body.id as number
+    expect(isDocIndexed(docId)).toBe(true)
+
+    removeDocFromIndex(docId)
+    expect(isDocIndexed(docId)).toBe(false)
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/search/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'recovery phrase', limit: 5 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual([])
+      })
+
+    await request(app)
+      .post(`/api/kbs/${kbId}/reindex`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toMatchObject({ indexed: 1, total: 1 })
+      })
+
+    expect(isDocIndexed(docId)).toBe(true)
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/search/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'recovery phrase', limit: 5 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body.length).toBe(1)
+        expect(res.body[0]).toMatchObject({
+          original_name: 'Recovery Playbook.md',
+        })
       })
   })
 })
