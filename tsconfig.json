@@ -3,6 +3,11 @@
     "target":          "ES2022",
     "module":          "ESNext",
     "moduleResolution":"bundler",
+    "baseUrl":         ".",
+    "paths": {
+      "claude-tools-kit": ["packages/claude-tools-kit/dist/index.d.ts"],
+      "claude-tools-kit/*": ["packages/claude-tools-kit/dist/*"]
+    },
     "outDir":          "./dist",
     "rootDir":         "./src",
     "strict":          true,
