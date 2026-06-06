@@ -131,6 +131,7 @@ GitHub workflow hygiene files are:
 
 - `.github/pull_request_template.md`
 - `.github/dependabot.yml`
+- `.github/workflows/release.yml`
 - `CODEOWNERS`
 
 Docker deployment files are `Dockerfile`, `.dockerignore`, and `docker-compose.yml`. Validate Docker changes with at least:
@@ -160,6 +161,13 @@ http://localhost:8080/readyz
 ```
 
 Check the browser console for errors and confirm the page is not blank.
+
+## Release Flow
+
+- Release tags follow semantic versioning, such as `v1.0.1`.
+- Update `CHANGELOG.md` before tagging a release.
+- `RELEASE.md` contains the release checklist and artifact contents.
+- Tag pushes trigger `.github/workflows/release.yml` to publish a GitHub Release artifact.
 
 ## Security Notes
 
