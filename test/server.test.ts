@@ -288,6 +288,52 @@ describe('knowledge base access control', () => {
       })
   })
 
+  it('rejects unsupported upload extensions', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Upload Guard Atlas', description: 'KB for upload validation tests' })
+      .expect(201)
+
+    await request(app)
+      .post(`/api/kbs/${kb.body.id}/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .attach('files', Buffer.from('malware-like payload'), 'bad.exe')
+      .expect(400)
+      .expect(res => {
+        expect(res.body).toMatchObject({ error: '未接收到文件' })
+      })
+  })
+
+  it('keeps broken pdf uploads but reports preview failure', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'PDF Atlas', description: 'KB for pdf tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const uploaded = await request(app)
+      .post(`/api/kbs/${kbId}/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .attach('files', Buffer.from('not a real pdf file'), 'broken.pdf')
+      .expect(201)
+
+    const docId = uploaded.body[0].id as number
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/docs/${docId}/preview`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(404)
+      .expect(res => {
+        expect(res.body).toMatchObject({ error: 'PDF 文本提取失败或尚未完成' })
+      })
+  })
+
   it('removes docs from storage and search indexes when deleted', async () => {
     const admin = await login('admin', 'Admin@123')
 
