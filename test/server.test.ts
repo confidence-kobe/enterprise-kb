@@ -4,6 +4,11 @@ import path from 'node:path'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Express } from 'express'
+import {
+  createConversation,
+  getUserByUsername,
+  insertMessages,
+} from '../src/db.ts'
 
 let app: Express
 let testRoot: string
@@ -65,17 +70,17 @@ describe('server health and auth', () => {
   it('protects /api/me and returns the authenticated user after login', async () => {
     await request(app).get('/api/me').expect(401)
 
-    const login = await request(app)
+    const loginResponse = await request(app)
       .post('/api/auth/login')
       .send({ username: 'admin', password: 'Admin@123' })
       .expect(200)
 
-    expect(login.body.token).toEqual(expect.any(String))
-    expect(login.body.user).toMatchObject({ username: 'admin', role: 'admin' })
+    expect(loginResponse.body.token).toEqual(expect.any(String))
+    expect(loginResponse.body.user).toMatchObject({ username: 'admin', role: 'admin' })
 
     await request(app)
       .get('/api/me')
-      .set('Authorization', `Bearer ${login.body.token}`)
+      .set('Authorization', `Bearer ${loginResponse.body.token}`)
       .expect(200)
       .expect(res => {
         expect(res.body).toMatchObject({ username: 'admin', role: 'admin' })
@@ -239,6 +244,76 @@ describe('knowledge base access control', () => {
           chunk_line: expect.any(Number),
         })
         expect((res.body[0] as { snippet: string }).snippet).toContain('migration')
+      })
+  })
+  it('removes docs from storage and search indexes when deleted', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Delete Atlas', description: 'KB for delete tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const doc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: 'Temp Note', content: 'Delete me from the index and storage.' })
+      .expect(201)
+
+    const docId = doc.body.id as number
+
+    await request(app)
+      .delete(`/api/kbs/${kbId}/docs/${docId}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/search/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'Delete me from the index', limit: 5 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual([])
+      })
+  })
+})
+
+describe('conversation search', () => {
+  it('finds accessible conversations by message content', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminUser = getUserByUsername('admin')
+    expect(adminUser).toBeDefined()
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Conversation Atlas', description: 'KB for conversation search tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const conv = createConversation(adminUser!.id, kbId, 'Release rollout')
+    insertMessages(conv.id, [
+      { role: 'user', content: 'How do we roll out the release?', tool_calls: null, tool_call_id: null, seq: 0 },
+      { role: 'assistant', content: 'Use the release checklist and watch the deploy job.', tool_calls: null, tool_call_id: null, seq: 1 },
+    ])
+
+    await request(app)
+      .get('/api/search/conversations')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'release checklist', limit: 10, offset: 0 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body.total).toBeGreaterThanOrEqual(1)
+        expect(res.body.items.length).toBeGreaterThanOrEqual(1)
+        expect(res.body.items[0]).toMatchObject({
+          conv_id: conv.id,
+          conv_title: 'Release rollout',
+          kb_id: kbId,
+          kb_name: 'Conversation Atlas',
+        })
+        expect(res.body.items[0].snippet).toContain('release checklist')
       })
   })
 })
