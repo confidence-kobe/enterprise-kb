@@ -183,4 +183,62 @@ describe('knowledge base access control', () => {
         expect(res.body.some((member: { username: string }) => member.username === 'alice')).toBe(true)
       })
   })
+
+  it('indexes text docs and returns previews and search hits', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Search Atlas', description: 'KB for document flow tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const content = [
+      '# Incident Runbook',
+      '',
+      'Database migration steps:',
+      '1. Take a snapshot.',
+      '2. Run the migration.',
+      '3. Verify indexes.',
+    ].join('\n')
+
+    const doc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: 'Incident Runbook', content })
+      .expect(201)
+
+    const docId = doc.body.id as number
+    expect(doc.body).toMatchObject({ kb_id: kbId, original_name: 'Incident Runbook.md' })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/docs/${docId}/preview`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toMatchObject({
+          filename: 'Incident Runbook.md',
+          ext: '.md',
+          displayExt: '.md',
+          truncated: false,
+        })
+        expect(res.body.content).toContain('Database migration steps')
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/search/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'migration steps', limit: 5 })
+      .expect(200)
+      .expect(res => {
+        expect(Array.isArray(res.body)).toBe(true)
+        expect(res.body.length).toBeGreaterThan(0)
+        expect(res.body[0]).toMatchObject({
+          original_name: 'Incident Runbook.md',
+          chunk_line: expect.any(Number),
+        })
+        expect((res.body[0] as { snippet: string }).snippet).toContain('migration')
+      })
+  })
 })
