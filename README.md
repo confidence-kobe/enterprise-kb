@@ -119,6 +119,10 @@ npm ci
 npm run check
 ```
 
+## Release
+
+See [RELEASE.md](RELEASE.md) for the tag-based release process and artifact contents.
+
 ## Security
 
 See [SECURITY_OWNERSHIP.md](SECURITY_OWNERSHIP.md) for the security ownership map.
