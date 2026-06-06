@@ -90,6 +90,9 @@ Prefer editing:
 - `SECURITY_OWNERSHIP.md`
 - `Dockerfile`
 - `docker-compose.yml`
+- `.github/pull_request_template.md`
+- `.github/dependabot.yml`
+- `CODEOWNERS`
 - `package.json`
 - `tsconfig.json`
 
@@ -123,6 +126,12 @@ npm run check
 ```
 
 GitHub Actions CI is defined in `.github/workflows/ci.yml` and runs `npm ci` followed by `npm run check`.
+
+GitHub workflow hygiene files are:
+
+- `.github/pull_request_template.md`
+- `.github/dependabot.yml`
+- `CODEOWNERS`
 
 Docker deployment files are `Dockerfile`, `.dockerignore`, and `docker-compose.yml`. Validate Docker changes with at least:
 
