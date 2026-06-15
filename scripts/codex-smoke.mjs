@@ -1,3 +1,5 @@
+import 'dotenv/config'
+
 const baseUrl = (process.env.CODEX_APP_URL || `http://localhost:${process.env.PORT || 8080}`).replace(/\/$/, '')
 
 const checks = [

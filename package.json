@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run build && npm run test && npm audit --omit=dev --audit-level=moderate",
-    "codex:smoke": "node scripts/codex-smoke.mjs"
+    "codex:smoke": "node scripts/codex-smoke.mjs",
+    "smoke:full": "node scripts/full-smoke.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

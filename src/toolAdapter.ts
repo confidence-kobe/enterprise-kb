@@ -2,7 +2,7 @@
  * toolAdapter.ts
  *
  * 将 claude-tools-kit（提取自 H:\claude-code-main）的 Tool 接口
- * 适配为 OllamaExecutor 所需的 LLMTool（OpenAI function calling 格式）。
+ * 适配为 LLMExecutor 所需的 LLMTool（OpenAI function calling 格式）。
  *
  * 桥接关系：
  *   claude-tools-kit Tool           →  LLMTool (OpenAI format)
