@@ -13,20 +13,23 @@ import * as url from 'node:url'
 
 import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createUser, deleteUser,
          listKbsForUser, getAllKbs, getKbById, createKb, deleteKb, updateKbPublic, updateKbStoragePath, updateKbMeta,
+         updateKbSyncSource, updateKbSyncResult,
          canUserAccessKb, grantKbAccess, revokeKbAccess, listKbMembers,
-         listDocs, createDoc, deleteDoc, getDocById,
+         listDocs, listDocsBySourceType, createDoc, updateDocFromSync, deleteDoc, getDocById,
          updateUserPassword, updateUserRole,
          listConversations, createConversation, updateConversationTitle, touchConversation,
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
          countConversations, pinConversation, getKbStats, searchConversations,
-         indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs } from './db.js'
-import type { MessageRow } from './db.js'
+         indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
+         updateDocIndexStatus, createAuditEvent, listAuditEvents } from './db.js'
+import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { requireAuth, requireAdmin, signToken, verifyPassword, hashPassword } from './auth.js'
 import type { AuthRequest } from './auth.js'
-import { OllamaExecutor } from './executor.js'
+import { LLMExecutor } from './executor.js'
 import { ALL_TOOLS, collectKbStats } from './tools.js'
 import { buildSystemPrompt } from './prompt.js'
 import type { QAEvent } from './tools.js'
+import { buildTrustedHistory } from './conversationHistory.js'
 
 // pdf-parse 用 CommonJS require，动态导入兼容 ESM
 async function extractPdfText(filePath: string): Promise<string> {
@@ -43,9 +46,10 @@ const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
 
 const NODE_ENV      = process.env.NODE_ENV ?? 'development'
 const IS_PRODUCTION = NODE_ENV === 'production'
-const DEFAULT_ADMIN_PASSWORD = 'Admin@123'
-const DEFAULT_JWT_SECRET     = 'dev-secret-change-me'
-const EXAMPLE_JWT_SECRET     = 'change-this-to-a-random-secret-string-at-least-32-chars'
+const DEFAULT_ADMIN_PASSWORD  = 'Admin@123'
+const EXAMPLE_ADMIN_PASSWORD  = 'change-this-admin-password'
+const DEFAULT_JWT_SECRET      = 'dev-secret-change-me'
+const EXAMPLE_JWT_SECRET      = 'change-this-to-a-random-secret-string-at-least-32-chars'
 
 function envValue(primary: string, ...aliases: string[]): string | undefined {
   for (const key of [primary, ...aliases]) {
@@ -76,9 +80,22 @@ const PORT         = parsePositiveInt(envValue('PORT'), 8080, 'PORT')
 const LLM_BASE_URL = normalizeLlmBaseUrl(envValue('LLM_BASE_URL', 'OLLAMA_BASE_URL') ?? 'http://localhost:11434/v1')
 const LLM_API_KEY  = envValue('LLM_API_KEY', 'OLLAMA_API_KEY') ?? 'ollama'
 let currentModel   = envValue('LLM_MODEL', 'OLLAMA_MODEL') ?? 'qwen2.5:7b'
-const MAX_TURNS    = parsePositiveInt(envValue('OLLAMA_MAX_TURNS', 'LLM_MAX_TURNS'), 25, 'OLLAMA_MAX_TURNS')
+const MAX_TURNS    = parsePositiveInt(envValue('LLM_MAX_TURNS', 'OLLAMA_MAX_TURNS'), 8, 'LLM_MAX_TURNS')
+const HISTORY_MAX_MESSAGES = parsePositiveInt(envValue('HISTORY_MAX_MESSAGES'), 40, 'HISTORY_MAX_MESSAGES')
+const HISTORY_MAX_CHARS    = parsePositiveInt(envValue('HISTORY_MAX_CHARS'), 40_000, 'HISTORY_MAX_CHARS')
 const OLLAMA_URL   = LLM_BASE_URL.replace(/\/v1\/?$/, '')
 const IS_OLLAMA    = isOllamaEndpoint(LLM_BASE_URL)
+const LLM_PROVIDER = (() => {
+  if (IS_OLLAMA) return 'Ollama'
+  try {
+    const hostname = new URL(LLM_BASE_URL).hostname
+    if (hostname.includes('minimaxi.com')) return 'MiniMax'
+    if (hostname.includes('openai.com')) return 'OpenAI'
+    return hostname
+  } catch {
+    return 'OpenAI-compatible'
+  }
+})()
 const PROJECT_ROOT = path.join(__dirname, '..')
 function resolveFromProject(envVal: string | undefined, fallback: string): string {
   const val = envVal ?? fallback
@@ -97,7 +114,7 @@ function validateRuntimeConfig(): void {
     if (!jwtSecret || jwtSecret === DEFAULT_JWT_SECRET || jwtSecret === EXAMPLE_JWT_SECRET || jwtSecret.length < 32) {
       throw new Error('JWT_SECRET must be set to a random string of at least 32 characters in production.')
     }
-    if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD) {
+    if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === EXAMPLE_ADMIN_PASSWORD) {
       throw new Error('ADMIN_PASSWORD must be changed before production deployment.')
     }
   }
@@ -118,6 +135,203 @@ const ALLOWED_EXTS = new Set([
   '.json', '.yaml', '.yml', '.toml',
   '.csv', '.html', '.xml', '.sh',
 ])
+
+const SYNC_SKIP_DIRS = new Set([
+  '.git', '.svn', '.hg',
+  'node_modules', 'dist', 'build', '.next', '.nuxt', '.cache',
+  '__pycache__', '.venv', 'venv',
+])
+const SYNC_MAX_FILES = parsePositiveInt(envValue('SYNC_MAX_FILES'), 1000, 'SYNC_MAX_FILES')
+const SYNC_MAX_TOTAL_BYTES = parsePositiveInt(envValue('SYNC_MAX_TOTAL_MB'), 500, 'SYNC_MAX_TOTAL_MB') * 1024 * 1024
+const SYNC_MAX_FILE_BYTES = 50 * 1024 * 1024
+
+interface SyncFile {
+  absolutePath: string
+  relativePath: string
+  size: number
+  sourceMtime: number
+}
+
+interface SyncSkipped {
+  unsupported: number
+  tooLarge: number
+  limit: number
+  symlink: number
+  hiddenDir: number
+  errors: number
+}
+
+interface SyncSummary {
+  added: number
+  updated: number
+  removed: number
+  queued: number
+  unchanged: number
+  scanned: number
+  skipped: SyncSkipped
+  errors: string[]
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const rel = path.relative(path.resolve(parent), path.resolve(child))
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel))
+}
+
+function normalizeSourcePath(sourcePath: string): string {
+  return path.normalize(path.isAbsolute(sourcePath)
+    ? path.resolve(sourcePath)
+    : path.resolve(PROJECT_ROOT, sourcePath))
+}
+
+function isDirectory(sourcePath: string): boolean {
+  try {
+    return fs.statSync(sourcePath).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function sourcePathKey(sourcePath: string): string {
+  const normalized = path.normalize(sourcePath)
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function makeStoredFilename(originalName: string): string {
+  const ext = path.extname(originalName).toLowerCase()
+  return `${Date.now()}_${Math.random().toString(36).slice(2, 10)}${ext}`
+}
+
+function removeStoredDocument(kbId: number, doc: Document): void {
+  const kbDir = path.join(STORAGE_PATH, `kb_${kbId}`)
+  const filePath = path.join(kbDir, doc.filename)
+  try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath) } catch {}
+  const txtPath = filePath.replace(/\.pdf$/i, '.txt')
+  if (txtPath !== filePath) {
+    try { if (fs.existsSync(txtPath)) fs.unlinkSync(txtPath) } catch {}
+  }
+  removeDocFromIndex(doc.id)
+  deleteDoc(doc.id)
+}
+
+function canManageKb(kb: KnowledgeBase, user: AuthRequest['user']): boolean {
+  return Boolean(user && (user.role === 'admin' || kb.owner_id === user.userId))
+}
+
+function publicKb(kb: KnowledgeBase, user: AuthRequest['user']): KnowledgeBase {
+  if (canManageKb(kb, user)) return kb
+  return { ...kb, sync_source_path: null, sync_last_at: null, sync_last_result: null }
+}
+
+function publicDoc(doc: Document, kb: KnowledgeBase, user: AuthRequest['user']): Document {
+  if (canManageKb(kb, user)) return doc
+  return { ...doc, source_path: null }
+}
+
+function audit(
+  req: AuthRequest | Request,
+  action: string,
+  entityType: string,
+  data: {
+    entityId?: number | null
+    kbId?: number | null
+    detail?: unknown
+    userId?: number | null
+    username?: string | null
+  } = {},
+): void {
+  const authUser = (req as AuthRequest).user
+  createAuditEvent({
+    userId: data.userId ?? authUser?.userId ?? null,
+    username: data.username ?? authUser?.username ?? null,
+    action,
+    entityType,
+    entityId: data.entityId ?? null,
+    kbId: data.kbId ?? null,
+    detail: data.detail,
+    ip: req.ip,
+  })
+}
+
+function requireKbOwnerOrAdmin(req: AuthRequest, res: Response, kbId: number): KnowledgeBase | null {
+  const kb = getKbById(kbId)
+  if (!kb) {
+    res.status(404).json({ error: '知识库不存在' })
+    return null
+  }
+  if (!canManageKb(kb, req.user)) {
+    res.status(403).json({ error: '无权限' })
+    return null
+  }
+  return kb
+}
+
+function scanSyncDirectory(root: string): { files: SyncFile[]; skipped: SyncSkipped; errors: string[] } {
+  const files: SyncFile[] = []
+  const skipped: SyncSkipped = { unsupported: 0, tooLarge: 0, limit: 0, symlink: 0, hiddenDir: 0, errors: 0 }
+  const errors: string[] = []
+  let totalBytes = 0
+
+  function walk(dir: string): void {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch (err) {
+      skipped.errors++
+      errors.push(`${dir}: ${(err as Error).message}`)
+      return
+    }
+
+    for (const entry of entries) {
+      const absolutePath = path.join(dir, entry.name)
+      if (entry.isSymbolicLink()) {
+        skipped.symlink++
+        continue
+      }
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.') || SYNC_SKIP_DIRS.has(entry.name)) {
+          skipped.hiddenDir++
+          continue
+        }
+        walk(absolutePath)
+        continue
+      }
+      if (!entry.isFile()) continue
+
+      const ext = path.extname(entry.name).toLowerCase()
+      if (!ALLOWED_EXTS.has(ext)) {
+        skipped.unsupported++
+        continue
+      }
+      let stat: fs.Stats
+      try {
+        stat = fs.statSync(absolutePath)
+      } catch (err) {
+        skipped.errors++
+        errors.push(`${absolutePath}: ${(err as Error).message}`)
+        continue
+      }
+      if (stat.size > SYNC_MAX_FILE_BYTES) {
+        skipped.tooLarge++
+        continue
+      }
+      if (files.length >= SYNC_MAX_FILES || totalBytes + stat.size > SYNC_MAX_TOTAL_BYTES) {
+        skipped.limit++
+        continue
+      }
+
+      totalBytes += stat.size
+      files.push({
+        absolutePath,
+        relativePath: path.relative(root, absolutePath).replace(/\\/g, '/'),
+        size: stat.size,
+        sourceMtime: Math.round(stat.mtimeMs),
+      })
+    }
+  }
+
+  walk(root)
+  return { files, skipped, errors }
+}
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -141,6 +355,152 @@ const upload = multer({
   },
 })
 
+interface DocIndexJob {
+  docId: number
+  kbId: number
+  originalName: string
+  filePath: string
+}
+
+const docIndexQueue: DocIndexJob[] = []
+let docIndexWorkerRunning = false
+
+async function extractIndexableText(job: DocIndexJob): Promise<{ text: string; indexPath: string }> {
+  const ext = path.extname(job.originalName).toLowerCase()
+  if (ext === '.pdf') {
+    const text = await extractPdfText(job.filePath)
+    const txtPath = job.filePath.replace(/\.pdf$/i, '.txt')
+    fs.writeFileSync(txtPath, text, 'utf-8')
+    return { text, indexPath: txtPath }
+  }
+  return { text: fs.readFileSync(job.filePath, 'utf-8'), indexPath: job.filePath }
+}
+
+async function processDocIndexJob(job: DocIndexJob): Promise<void> {
+  if (!getDocById(job.docId)) return
+  updateDocIndexStatus(job.docId, 'processing')
+
+  try {
+    const { text, indexPath } = await extractIndexableText(job)
+    if (!text.trim()) throw new Error('文档没有可索引文本')
+    indexDocContent(job.docId, job.kbId, job.originalName, indexPath, text)
+  } catch (err) {
+    removeDocFromIndex(job.docId)
+    const message = (err as Error).message || '索引失败'
+    updateDocIndexStatus(job.docId, 'error', message.slice(0, 500))
+    console.warn(`[index] 文档解析失败 ${job.originalName}: ${message}`)
+  }
+}
+
+function enqueueDocIndex(job: DocIndexJob): void {
+  docIndexQueue.push(job)
+  void drainDocIndexQueue()
+}
+
+async function drainDocIndexQueue(): Promise<void> {
+  if (docIndexWorkerRunning) return
+  docIndexWorkerRunning = true
+  try {
+    while (docIndexQueue.length) {
+      await processDocIndexJob(docIndexQueue.shift()!)
+    }
+  } finally {
+    docIndexWorkerRunning = false
+  }
+}
+
+function syncKnowledgeBase(kb: KnowledgeBase, sourceRoot: string): SyncSummary {
+  const { files, skipped, errors } = scanSyncDirectory(sourceRoot)
+  const summary: SyncSummary = {
+    added: 0,
+    updated: 0,
+    removed: 0,
+    queued: 0,
+    unchanged: 0,
+    scanned: files.length,
+    skipped,
+    errors: errors.slice(0, 20),
+  }
+  const kbDir = kb.storage_path || path.join(STORAGE_PATH, `kb_${kb.id}`)
+  fs.mkdirSync(kbDir, { recursive: true })
+
+  const sourceDocs = listDocsBySourceType(kb.id, 'sync')
+  const docsBySource = new Map(sourceDocs
+    .filter(doc => doc.source_path)
+    .map(doc => [sourcePathKey(doc.source_path!), doc]))
+  const scannedSourceKeys = new Set<string>()
+
+  for (const file of files) {
+    const sourcePath = normalizeSourcePath(file.absolutePath)
+    const key = sourcePathKey(sourcePath)
+    scannedSourceKeys.add(key)
+
+    const existing = docsBySource.get(key)
+    if (existing) {
+      const unchanged = existing.source_mtime === file.sourceMtime
+        && existing.source_size === file.size
+        && isDocIndexed(existing.id)
+      if (unchanged) {
+        summary.unchanged++
+        continue
+      }
+
+      const storedPath = path.join(kbDir, existing.filename)
+      try {
+        fs.copyFileSync(sourcePath, storedPath)
+        const extractedTxt = storedPath.replace(/\.pdf$/i, '.txt')
+        if (extractedTxt !== storedPath && fs.existsSync(extractedTxt)) fs.unlinkSync(extractedTxt)
+        removeDocFromIndex(existing.id)
+        updateDocFromSync({
+          id: existing.id,
+          filename: existing.filename,
+          originalName: file.relativePath,
+          size: file.size,
+          sourcePath,
+          sourceMtime: file.sourceMtime,
+          sourceSize: file.size,
+        })
+        enqueueDocIndex({ docId: existing.id, kbId: kb.id, originalName: file.relativePath, filePath: storedPath })
+        summary.updated++
+        summary.queued++
+      } catch (err) {
+        summary.errors.push(`${file.relativePath}: ${(err as Error).message}`)
+      }
+      continue
+    }
+
+    const filename = makeStoredFilename(file.relativePath)
+    const storedPath = path.join(kbDir, filename)
+    try {
+      fs.copyFileSync(sourcePath, storedPath)
+      const doc = createDoc({
+        kbId: kb.id,
+        filename,
+        originalName: file.relativePath,
+        size: file.size,
+        indexStatus: 'pending',
+        sourceType: 'sync',
+        sourcePath,
+        sourceMtime: file.sourceMtime,
+        sourceSize: file.size,
+      })
+      enqueueDocIndex({ docId: doc.id, kbId: kb.id, originalName: file.relativePath, filePath: storedPath })
+      summary.added++
+      summary.queued++
+    } catch (err) {
+      summary.errors.push(`${file.relativePath}: ${(err as Error).message}`)
+    }
+  }
+
+  for (const doc of sourceDocs) {
+    if (!doc.source_path || scannedSourceKeys.has(sourcePathKey(doc.source_path))) continue
+    removeStoredDocument(kb.id, doc)
+    summary.removed++
+  }
+
+  return summary
+}
+
 // ── Express ───────────────────────────────────────────
 
 export const app = express()
@@ -157,6 +517,7 @@ const corsOrigins = CORS_ORIGIN?.split(',').map(s => s.trim()).filter(Boolean) ?
 app.use(cors(corsOrigins.length ? { origin: corsOrigins } : IS_PRODUCTION ? { origin: false } : undefined))
 app.use(express.json({ limit: '4mb' }))
 app.use(express.static(path.join(__dirname, '../public')))
+app.get('/favicon.ico', (_req, res) => res.status(204).end())
 
 app.get('/healthz', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() })
@@ -201,10 +562,16 @@ app.post('/api/auth/login', loginRateLimit, (req, res) => {
 
   const user = getUserByUsername(username)
   if (!user || !verifyPassword(password, user.password_hash)) {
+    audit(req, 'auth.login_failed', 'auth', {
+      userId: user?.id ?? null,
+      username: username || null,
+      detail: { username },
+    })
     res.status(401).json({ error: '用户名或密码错误' }); return
   }
 
   const token = signToken({ userId: user.id, username: user.username, role: user.role })
+  audit(req, 'auth.login', 'auth', { userId: user.id, username: user.username })
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } })
 })
 
@@ -229,6 +596,7 @@ app.patch('/api/me/password', requireAuth, (req: AuthRequest, res) => {
   }
 
   updateUserPassword(req.user!.userId, hashPassword(newPassword))
+  audit(req, 'user.password_changed', 'user', { entityId: req.user!.userId })
   res.json({ ok: true })
 })
 
@@ -238,7 +606,7 @@ app.get('/api/kbs', requireAuth, (req: AuthRequest, res) => {
   const kbs = req.user!.role === 'admin'
     ? getAllKbs()
     : listKbsForUser(req.user!.userId)
-  res.json(kbs.map(kb => ({ ...kb, ...getKbStats(kb.id) })))
+  res.json(kbs.map(kb => ({ ...publicKb(kb, req.user), ...getKbStats(kb.id) })))
 })
 
 app.post('/api/kbs', requireAuth, (req: AuthRequest, res) => {
@@ -250,6 +618,7 @@ app.post('/api/kbs', requireAuth, (req: AuthRequest, res) => {
   const realPath = path.join(STORAGE_PATH, `kb_${kb.id}`)
   fs.mkdirSync(realPath, { recursive: true })
   updateKbStoragePath(kb.id, realPath)
+  audit(req, 'kb.create', 'kb', { entityId: kb.id, kbId: kb.id, detail: { name: name.trim() } })
 
   res.status(201).json({ ...kb, storage_path: realPath })
 })
@@ -261,7 +630,7 @@ app.get('/api/kbs/:id', requireAuth, (req: AuthRequest, res) => {
   }
   const kb = getKbById(kbId)
   if (!kb) { res.status(404).json({ error: '知识库不存在' }); return }
-  res.json(kb)
+  res.json(publicKb(kb, req.user))
 })
 
 app.delete('/api/kbs/:id', requireAuth, (req: AuthRequest, res) => {
@@ -278,6 +647,7 @@ app.delete('/api/kbs/:id', requireAuth, (req: AuthRequest, res) => {
     fs.rmSync(kbDir, { recursive: true, force: true })
   }
   deleteKb(kbId)
+  audit(req, 'kb.delete', 'kb', { entityId: kbId, kbId, detail: { name: kb.name } })
   res.json({ ok: true })
 })
 
@@ -291,6 +661,7 @@ app.patch('/api/kbs/:id', requireAuth, (req: AuthRequest, res) => {
   const { name, description } = req.body as { name?: string; description?: string }
   if (!name?.trim()) { res.status(400).json({ error: '名称不能为空' }); return }
   updateKbMeta(kbId, name.trim(), description?.trim() ?? null)
+  audit(req, 'kb.update', 'kb', { entityId: kbId, kbId, detail: { name: name.trim() } })
   res.json({ ok: true })
 })
 
@@ -302,7 +673,66 @@ app.patch('/api/kbs/:id/public', requireAuth, (req: AuthRequest, res) => {
     res.status(403).json({ error: '无权限修改' }); return
   }
   updateKbPublic(kbId, Boolean(req.body.is_public))
+  audit(req, 'kb.public_update', 'kb', {
+    entityId: kbId,
+    kbId,
+    detail: { is_public: Boolean(req.body.is_public) },
+  })
   res.json({ ok: true })
+})
+
+app.patch('/api/kbs/:id/sync-source', requireAuth, (req: AuthRequest, res) => {
+  const kbId = Number(req.params.id)
+  const kb = requireKbOwnerOrAdmin(req, res, kbId)
+  if (!kb) return
+
+  const rawPath = typeof req.body?.path === 'string' ? req.body.path.trim() : ''
+  if (!rawPath) {
+    updateKbSyncSource(kbId, null)
+    updateKbSyncResult(kbId, '同步目录已清空')
+    audit(req, 'kb.sync_source_clear', 'kb', { entityId: kbId, kbId })
+    res.json({ ok: true, sync_source_path: null })
+    return
+  }
+
+  const sourcePath = normalizeSourcePath(rawPath)
+  if (!isDirectory(sourcePath)) {
+    res.status(400).json({ error: '同步路径不存在或不是文件夹' })
+    return
+  }
+  if (isPathInside(STORAGE_PATH, sourcePath) || isPathInside(sourcePath, STORAGE_PATH)) {
+    res.status(400).json({ error: '同步路径不能指向或包含应用存储目录' })
+    return
+  }
+
+  updateKbSyncSource(kbId, sourcePath)
+  audit(req, 'kb.sync_source_update', 'kb', { entityId: kbId, kbId, detail: { path: sourcePath } })
+  res.json({ ok: true, sync_source_path: sourcePath })
+})
+
+app.post('/api/kbs/:id/sync', requireAuth, (req: AuthRequest, res) => {
+  const kbId = Number(req.params.id)
+  const kb = requireKbOwnerOrAdmin(req, res, kbId)
+  if (!kb) return
+
+  const sourcePath = kb.sync_source_path ? normalizeSourcePath(kb.sync_source_path) : ''
+  if (!sourcePath) {
+    res.status(400).json({ error: '请先设置同步文件夹' })
+    return
+  }
+  if (!isDirectory(sourcePath)) {
+    res.status(400).json({ error: '同步路径不存在或不是文件夹' })
+    return
+  }
+
+  const summary = syncKnowledgeBase(kb, sourcePath)
+  updateKbSyncResult(kbId, JSON.stringify(summary))
+  audit(req, 'kb.sync_run', 'kb', {
+    entityId: kbId,
+    kbId,
+    detail: { ...summary, errors: summary.errors.slice(0, 5) },
+  })
+  res.json(summary)
 })
 
 // ── 知识库成员路由 ────────────────────────────────────
@@ -332,6 +762,11 @@ app.post('/api/kbs/:id/members', requireAuth, (req: AuthRequest, res) => {
   if (target.id === kb.owner_id) { res.status(400).json({ error: '创建者已有访问权限' }); return }
 
   grantKbAccess(kbId, target.id)
+  audit(req, 'kb.member_add', 'kb_member', {
+    entityId: target.id,
+    kbId,
+    detail: { username: target.username },
+  })
   res.status(201).json({ id: target.id, username: target.username, role: target.role })
 })
 
@@ -344,6 +779,7 @@ app.delete('/api/kbs/:id/members/:userId', requireAuth, (req: AuthRequest, res) 
     res.status(403).json({ error: '无权限' }); return
   }
   revokeKbAccess(kbId, userId)
+  audit(req, 'kb.member_remove', 'kb_member', { entityId: userId, kbId })
   res.json({ ok: true })
 })
 
@@ -351,13 +787,15 @@ app.delete('/api/kbs/:id/members/:userId', requireAuth, (req: AuthRequest, res) 
 
 app.get('/api/kbs/:id/docs', requireAuth, (req: AuthRequest, res) => {
   const kbId   = Number(req.params.id)
+  const kb = getKbById(kbId)
+  if (!kb) { res.status(404).json({ error: '知识库不存在' }); return }
   if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
     res.status(403).json({ error: '无权限' }); return
   }
   const limit  = req.query.limit  ? Math.min(Number(req.query.limit),  200) : undefined
   const offset = req.query.offset ? Number(req.query.offset) : undefined
   const total  = countDocs(kbId)
-  const items  = listDocs(kbId, limit, offset)
+  const items  = listDocs(kbId, limit, offset).map(doc => publicDoc(doc, kb, req.user))
   if (limit != null) {
     res.json({ items, total, hasMore: (offset ?? 0) + items.length < total })
   } else {
@@ -374,38 +812,17 @@ app.post('/api/kbs/:id/docs', requireAuth, upload.array('files', 20), async (req
   const files = req.files as Express.Multer.File[] | undefined
   if (!files?.length) { res.status(400).json({ error: '未接收到文件' }); return }
 
-  const docs = await Promise.all(files.map(async f => {
+  const docs = files.map(f => {
     // multer 在 Windows 上把中文文件名按 Latin-1 读取，需转回 UTF-8
     const origName = Buffer.from(f.originalname, 'latin1').toString('utf8')
-    const ext = path.extname(origName).toLowerCase()
-    let extractedText = ''
-
-    // PDF → 提取文本，存为同名 .txt 供 Grep/Read 检索
-    if (ext === '.pdf') {
-      try {
-        extractedText = await extractPdfText(f.path)
-        const txtName = f.filename.replace(/\.pdf$/i, '.txt')
-        fs.writeFileSync(path.join(path.dirname(f.path), txtName), extractedText, 'utf-8')
-      } catch (e) {
-        console.warn('[PDF] 文本提取失败:', (e as Error).message)
-      }
-    } else {
-      try { extractedText = fs.readFileSync(f.path, 'utf-8') } catch { /* binary, skip */ }
-    }
-
-    const doc = createDoc({ kbId, filename: f.filename, originalName: origName, size: f.size })
-
-    // 建立 FTS5 索引
-    if (extractedText) {
-      try {
-        indexDocContent(doc.id, kbId, origName, f.path, extractedText)
-      } catch (e) {
-        console.warn('[FTS5] 索引失败:', (e as Error).message)
-      }
-    }
-
+    const doc = createDoc({ kbId, filename: f.filename, originalName: origName, size: f.size, indexStatus: 'pending' })
+    enqueueDocIndex({ docId: doc.id, kbId, originalName: origName, filePath: f.path })
     return doc
-  }))
+  })
+  audit(req, 'doc.upload', 'doc', {
+    kbId,
+    detail: { count: docs.length, names: docs.map(doc => doc.original_name).slice(0, 20) },
+  })
   res.status(201).json(docs)
 })
 
@@ -433,13 +850,19 @@ app.post('/api/kbs/:id/docs/text', requireAuth, async (req: AuthRequest, res) =>
   fs.writeFileSync(filePath, content, 'utf-8')
   const size = Buffer.byteLength(content, 'utf-8')
 
-  const doc = createDoc({ kbId, filename, originalName: origName, size })
+  const doc = createDoc({ kbId, filename, originalName: origName, size, indexStatus: 'processing', sourceType: 'text' })
   try {
     indexDocContent(doc.id, kbId, origName, filePath, content)
   } catch (e) {
+    updateDocIndexStatus(doc.id, 'error', (e as Error).message.slice(0, 500))
     console.warn('[FTS5] 索引失败:', (e as Error).message)
   }
 
+  audit(req, 'doc.create_text', 'doc', {
+    entityId: doc.id,
+    kbId,
+    detail: { title: origName, size },
+  })
   res.status(201).json(doc)
 })
 
@@ -494,27 +917,23 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
 
 app.delete('/api/kbs/:id/docs/batch', requireAuth, async (req: AuthRequest, res) => {
   const kbId = Number(req.params.id)
-  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
+  const kb = getKbById(kbId)
+  if (!kb) { res.status(404).json({ error: '知识库不存在' }); return }
+  if (kb.owner_id !== req.user!.userId && req.user!.role !== 'admin') {
     res.status(403).json({ error: '无权限' }); return
   }
   const ids: number[] = req.body?.ids ?? []
   if (!Array.isArray(ids) || ids.length === 0) {
     res.status(400).json({ error: '请提供文档 id 列表' }); return
   }
-  const kbDir = path.join(STORAGE_PATH, `kb_${kbId}`)
   let deleted = 0
   for (const docId of ids) {
     const doc = getDocById(docId)
     if (!doc || doc.kb_id !== kbId) continue
-    try { fs.unlinkSync(path.join(kbDir, doc.filename)) } catch {}
-    const txtPath = path.join(kbDir, doc.filename.replace(/\.pdf$/i, '.txt'))
-    if (txtPath !== path.join(kbDir, doc.filename) && fs.existsSync(txtPath)) {
-      try { fs.unlinkSync(txtPath) } catch {}
-    }
-    removeDocFromIndex(docId)
-    deleteDoc(docId)
+    removeStoredDocument(kbId, doc)
     deleted++
   }
+  audit(req, 'doc.batch_delete', 'doc', { kbId, detail: { requested: ids.length, deleted } })
   res.json({ deleted })
 })
 
@@ -523,19 +942,18 @@ app.delete('/api/kbs/:id/docs/:docId', requireAuth, (req: AuthRequest, res) => {
   const docId = Number(req.params.docId)
   const kb  = getKbById(kbId)
   const doc = getDocById(docId)
-  if (!kb || !doc) { res.status(404).json({ error: '不存在' }); return }
+  if (!kb || !doc || doc.kb_id !== kbId) { res.status(404).json({ error: '不存在' }); return }
 
   if (kb.owner_id !== req.user!.userId && req.user!.role !== 'admin') {
     res.status(403).json({ error: '无权限' }); return
   }
 
-  const kbDir = path.join(STORAGE_PATH, `kb_${kbId}`)
-  const filePath = path.join(kbDir, doc.filename)
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-  const txtPath = filePath.replace(/\.pdf$/i, '.txt')
-  if (filePath !== txtPath && fs.existsSync(txtPath)) fs.unlinkSync(txtPath)
-  removeDocFromIndex(docId)
-  deleteDoc(docId)
+  removeStoredDocument(kbId, doc)
+  audit(req, 'doc.delete', 'doc', {
+    entityId: docId,
+    kbId,
+    detail: { name: doc.original_name },
+  })
   res.json({ ok: true })
 })
 
@@ -655,6 +1073,7 @@ app.delete('/api/conversations/batch', requireAuth, (req: AuthRequest, res) => {
     deleteConversation(id)
     deleted++
   }
+  audit(req, 'conversation.batch_delete', 'conversation', { detail: { requested: ids.length, deleted } })
   res.json({ deleted })
 })
 
@@ -665,6 +1084,7 @@ app.delete('/api/conversations/:convId', requireAuth, (req: AuthRequest, res) =>
     res.status(403).json({ error: '无权限' }); return
   }
   deleteConversation(conv.id)
+  audit(req, 'conversation.delete', 'conversation', { entityId: conv.id, kbId: conv.kb_id })
   res.json({ ok: true })
 })
 
@@ -713,8 +1133,8 @@ app.post('/api/kbs/:id/ask', requireAuth, async (req: AuthRequest, res) => {
   const kb = getKbById(kbId)
   if (!kb) { res.status(404).json({ error: '知识库不存在' }); return }
 
-  const { question, history = [], conversationId: convIdParam } = req.body as {
-    question: string; history: unknown[]; conversationId?: number | null
+  const { question, conversationId: convIdParam } = req.body as {
+    question: string; conversationId?: number | null
   }
   if (!question?.trim()) { res.status(400).json({ error: '问题不能为空' }); return }
 
@@ -724,11 +1144,17 @@ app.post('/api/kbs/:id/ask', requireAuth, async (req: AuthRequest, res) => {
     conv = getConversationById(Number(convIdParam))
     if (!conv) { res.status(404).json({ error: '对话不存在' }); return }
     if (conv.user_id !== req.user!.userId) { res.status(403).json({ error: '无权限' }); return }
+    if (conv.kb_id !== kbId) { res.status(400).json({ error: '对话不属于当前知识库' }); return }
   } else {
     conv = createConversation(req.user!.userId, kb.id)
   }
 
   const prevCount = countMessages(conv.id)
+  const trustedHistory = buildTrustedHistory(
+    listMessages(conv.id),
+    HISTORY_MAX_MESSAGES,
+    HISTORY_MAX_CHARS,
+  )
 
   // SSE 头
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
@@ -753,7 +1179,7 @@ app.post('/api/kbs/:id/ask', requireAuth, async (req: AuthRequest, res) => {
 
   const kbPath = path.join(STORAGE_PATH, `kb_${kb.id}`)
 
-  const executor = new OllamaExecutor({
+  const executor = new LLMExecutor({
     baseUrl:      LLM_BASE_URL,
     apiKey:       LLM_API_KEY,
     model:        currentModel,
@@ -767,11 +1193,11 @@ app.post('/api/kbs/:id/ask', requireAuth, async (req: AuthRequest, res) => {
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await executor.run(question, ALL_TOOLS, history as any, abortCtrl.signal)
+    const result = await executor.run(question, ALL_TOOLS, trustedHistory.messages as any, abortCtrl.signal)
 
     // 客户端已断开时不持久化未完成的对话
     if (!abortCtrl.signal.aborted) {
-      const newMsgs = (result.messages as unknown as Record<string, unknown>[]).slice(history.length)
+      const newMsgs = (result.messages as unknown as Record<string, unknown>[]).slice(trustedHistory.messages.length)
       insertMessages(conv.id, newMsgs.map((m, i) => serializeMessage(m, prevCount + i)))
       touchConversation(conv.id)
 
@@ -780,7 +1206,17 @@ app.post('/api/kbs/:id/ask', requireAuth, async (req: AuthRequest, res) => {
         updateConversationTitle(conv.id, generateTitle(question))
       }
 
-      send({ type: 'done', turns: result.turns, messages: result.messages, conversationId: conv.id })
+      send({
+        type: 'done',
+        turns: result.turns,
+        messages: newMsgs,
+        conversationId: conv.id,
+        context: {
+          usedMessages: trustedHistory.messages.length,
+          totalMessages: trustedHistory.totalMessages,
+          truncated: trustedHistory.truncated,
+        },
+      })
     }
   } catch (err) {
     if (!abortCtrl.signal.aborted) {
@@ -816,23 +1252,21 @@ app.post('/api/kbs/:id/reindex', requireAuth, async (req: AuthRequest, res) => {
     res.status(403).json({ error: '无权限' }); return
   }
 
-  const docs   = listDocs(kbId)
-  const kbDir  = path.join(STORAGE_PATH, `kb_${kbId}`)
-  let indexed  = 0
+  const docs  = listDocs(kbId)
+  const kbDir = path.join(STORAGE_PATH, `kb_${kbId}`)
+  let indexed = 0
+  let failed  = 0
 
   for (const doc of docs) {
-    const ext      = path.extname(doc.original_name).toLowerCase()
-    let   filePath = path.join(kbDir, doc.filename)
-    if (ext === '.pdf') filePath = filePath.replace(/\.pdf$/i, '.txt')
+    const filePath = path.join(kbDir, doc.filename)
     if (!fs.existsSync(filePath)) continue
-    try {
-      const text = fs.readFileSync(filePath, 'utf-8')
-      indexDocContent(doc.id, kbId, doc.original_name, filePath, text)
-      indexed++
-    } catch { /* skip unreadable */ }
+    await processDocIndexJob({ docId: doc.id, kbId, originalName: doc.original_name, filePath })
+    if (isDocIndexed(doc.id)) indexed++
+    else failed++
   }
 
-  res.json({ indexed, total: docs.length })
+  audit(req, 'doc.reindex', 'doc', { kbId, detail: { indexed, failed, total: docs.length } })
+  res.json({ indexed, failed, total: docs.length })
 })
 
 app.get('/api/search/conversations', requireAuth, (req: AuthRequest, res) => {
@@ -845,6 +1279,22 @@ app.get('/api/search/conversations', requireAuth, (req: AuthRequest, res) => {
 })
 
 // ── 管理员路由 ────────────────────────────────────────
+
+app.get('/api/admin/audit', requireAdmin, (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 200)
+  const offset = Number(req.query.offset) || 0
+  const action = String(req.query.action ?? '').trim()
+  const username = String(req.query.username ?? '').trim()
+  const kbIdRaw = req.query.kbId != null ? Number(req.query.kbId) : undefined
+  const result = listAuditEvents({
+    limit,
+    offset,
+    action: action || undefined,
+    username: username || undefined,
+    kbId: Number.isFinite(kbIdRaw) ? kbIdRaw : undefined,
+  })
+  res.json({ ...result, hasMore: offset + result.items.length < result.total })
+})
 
 app.get('/api/admin/users', requireAdmin, (_req, res) => {
   res.json(listUsers())
@@ -861,6 +1311,10 @@ app.post('/api/admin/users', requireAdmin, (req, res) => {
     res.status(409).json({ error: '用户名已存在' }); return
   }
   const user = createUser(username.trim(), password, role ?? 'user')
+  audit(req, 'admin.user_create', 'user', {
+    entityId: user.id,
+    detail: { username: user.username, role: user.role },
+  })
   res.status(201).json({ id: user.id, username: user.username, role: user.role })
 })
 
@@ -869,7 +1323,12 @@ app.delete('/api/admin/users/:id', requireAdmin, (req: AuthRequest, res) => {
   if (id === req.user!.userId) {
     res.status(400).json({ error: '不能删除自己' }); return
   }
+  const target = getUserById(id)
   deleteUser(id)
+  audit(req, 'admin.user_delete', 'user', {
+    entityId: id,
+    detail: { username: target?.username ?? null },
+  })
   res.json({ ok: true })
 })
 
@@ -883,6 +1342,7 @@ app.patch('/api/admin/users/:id/role', requireAdmin, (req: AuthRequest, res) => 
     res.status(400).json({ error: '不能修改自己的角色' }); return
   }
   updateUserRole(uid, role)
+  audit(req, 'admin.user_role_update', 'user', { entityId: uid, detail: { role } })
   res.json({ ok: true })
 })
 
@@ -894,25 +1354,30 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, (req, res) => {
   }
   if (!getUserById(id)) { res.status(404).json({ error: '用户不存在' }); return }
   updateUserPassword(id, hashPassword(newPassword))
+  audit(req, 'admin.user_password_reset', 'user', { entityId: id })
   res.json({ ok: true })
 })
 
 // ── 服务端配置（供前端读取） ───────────────────────────
 
 async function checkLlmOnline(): Promise<boolean> {
+  if (NODE_ENV === 'test') return true
   try {
     if (IS_OLLAMA) {
       const r = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(2000) })
       return r.ok
     }
-    // 非 Ollama（MiniMax / OpenAI 等）：配置即视为在线，不发探测请求
-    return true
+    const r = await fetch(`${LLM_BASE_URL}/models/${encodeURIComponent(currentModel)}`, {
+      headers: { Authorization: `Bearer ${LLM_API_KEY}` },
+      signal: AbortSignal.timeout(5000),
+    })
+    return r.ok
   } catch { return false }
 }
 
 app.get('/api/config', async (_req, res) => {
-  const ollamaOnline = await checkLlmOnline()
-  res.json({ model: currentModel, ollamaUrl: OLLAMA_URL, ollamaOnline })
+  const llmOnline = await checkLlmOnline()
+  res.json({ model: currentModel, provider: LLM_PROVIDER, llmOnline, ollamaOnline: llmOnline })
 })
 
 app.get('/api/config/models', requireAuth, async (_req, res) => {
@@ -922,6 +1387,16 @@ app.get('/api/config/models', requireAuth, async (_req, res) => {
       if (r.ok) {
         const data = await r.json() as { models?: Array<{ name: string }> }
         const models = (data.models ?? []).map((m: { name: string }) => m.name)
+        res.json({ models: models.length ? models : [currentModel], current: currentModel }); return
+      }
+    } else {
+      const r = await fetch(`${LLM_BASE_URL}/models`, {
+        headers: { Authorization: `Bearer ${LLM_API_KEY}` },
+        signal: AbortSignal.timeout(5000),
+      })
+      if (r.ok) {
+        const data = await r.json() as { data?: Array<{ id?: string }> }
+        const models = (data.data ?? []).map(m => m.id).filter((id): id is string => Boolean(id))
         res.json({ models: models.length ? models : [currentModel], current: currentModel }); return
       }
     }
@@ -936,6 +1411,7 @@ app.patch('/api/config/model', requireAdmin, (req: AuthRequest, res) => {
   if (!model) { res.status(400).json({ error: '模型名不能为空' }); return }
   currentModel = model
   console.log(`模型已切换为：${currentModel}`)
+  audit(req, 'config.model_update', 'config', { detail: { model: currentModel } })
   res.json({ ok: true, model: currentModel })
 })
 
@@ -943,21 +1419,14 @@ app.patch('/api/config/model', requireAdmin, (req: AuthRequest, res) => {
 
 async function checkLLM(): Promise<void> {
   try {
-    if (IS_OLLAMA) {
-      const url = `${OLLAMA_URL}/api/tags`
-      const res = await fetch(url, { signal: AbortSignal.timeout(3000) })
-      if (res.ok) {
-        console.log(`✓  Ollama 在线 (${LLM_BASE_URL})，当前模型 "${currentModel}"`)
-      } else {
-        console.warn(`⚠  Ollama 连接异常 (HTTP ${res.status})，请确认 ollama serve 已启动`)
-      }
+    const online = await checkLlmOnline()
+    if (online) {
+      console.log(`✓  ${LLM_PROVIDER} 模型服务在线，当前模型 "${currentModel}"`)
     } else {
-      // 远程 API（MiniMax / OpenAI 等）：仅验证配置，不做网络探测
-      console.log(`✓  远程 LLM 已配置：${LLM_BASE_URL}，模型 "${currentModel}"`)
+      console.warn(`⚠  ${LLM_PROVIDER} 模型服务连接失败 (${LLM_BASE_URL})`)
     }
   } catch (err) {
-    console.warn(`⚠  无法连接 Ollama (${LLM_BASE_URL})：${(err as Error).message}`)
-    console.warn('   请先启动：ollama serve')
+    console.warn(`⚠  无法连接模型服务 (${LLM_BASE_URL})：${(err as Error).message}`)
   }
 }
 
@@ -965,25 +1434,20 @@ async function checkLLM(): Promise<void> {
 
 async function reindexExistingDocs(): Promise<void> {
   const allKbs = getAllKbs()
-  let total = 0, indexed = 0
+  let total = 0, queued = 0
   for (const kb of allKbs) {
     const docs = listDocs(kb.id)
     for (const doc of docs) {
       total++
       if (isDocIndexed(doc.id)) continue
       const kbDir = path.join(STORAGE_PATH, `kb_${kb.id}`)
-      const ext   = path.extname(doc.original_name).toLowerCase()
-      let filePath = path.join(kbDir, doc.filename)
-      if (ext === '.pdf') filePath = filePath.replace(/\.pdf$/i, '.txt')
+      const filePath = path.join(kbDir, doc.filename)
       if (!fs.existsSync(filePath)) continue
-      try {
-        const text = fs.readFileSync(filePath, 'utf-8')
-        indexDocContent(doc.id, kb.id, doc.original_name, filePath, text)
-        indexed++
-      } catch { /* binary or unreadable, skip */ }
+      enqueueDocIndex({ docId: doc.id, kbId: kb.id, originalName: doc.original_name, filePath })
+      queued++
     }
   }
-  if (total > 0) console.log(`[FTS5] 补建索引完成：${indexed}/${total} 个文档`)
+  if (total > 0) console.log(`[FTS5] 已排队补建索引：${queued}/${total} 个文档`)
 }
 
 // ── 启动 ──────────────────────────────────────────────
