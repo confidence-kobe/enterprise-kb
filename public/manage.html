@@ -4,10 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>管理控制台</title>
+  <script>
+    if (localStorage.getItem('kb_theme') === 'dark' || (!localStorage.getItem('kb_theme') && matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.dataset.theme = 'dark'
+    }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=13">
+  <link rel="stylesheet" href="style.css?v=21">
 </head>
 <body class="manage-layout">
 
@@ -44,6 +49,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         用户
       </button>
+      <button class="tab-btn" data-tab="audit" id="audit-tab" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-5"/></svg>
+        审计
+      </button>
       <button class="tab-btn" data-tab="settings" id="settings-tab" style="display:none">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         设置
@@ -66,7 +75,7 @@
       <div class="section-header">
         <div>
           <div class="section-title">文档管理</div>
-          <div style="font-size:13px;color:var(--muted);margin-top:4px">选择知识库后可上传或删除文档</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:4px">选择知识库后可上传、同步或删除文档</div>
         </div>
       </div>
 
@@ -87,6 +96,13 @@
           <span id="doc-search-count" style="font-size:12px;color:var(--muted)"></span>
           <button class="btn btn-secondary btn-sm" id="reindex-btn" title="重新为所有文档建立全文检索索引">重建索引</button>
           <span id="reindex-status" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+        <div class="sync-source-panel hidden" id="sync-source-panel">
+          <div class="sync-source-label">本地同步</div>
+          <input class="input sync-source-input" id="sync-path-input" placeholder="D:\Knowledge 或 ./docs">
+          <button class="btn btn-secondary btn-sm" id="sync-save-btn">保存路径</button>
+          <button class="btn btn-primary btn-sm" id="sync-run-btn">立即同步</button>
+          <span class="sync-source-status" id="sync-status"></span>
         </div>
         <div id="doc-bulk-bar" class="doc-bulk-bar hidden">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -142,22 +158,50 @@
         </table>
       </div>
     </div>
-  </div>
 
-  <!-- 系统设置标签（仅 admin） -->
-  <div class="tab-panel" id="tab-settings">
-    <div class="section-header">
-      <div class="section-title">系统设置</div>
-    </div>
-    <div class="card" style="padding:20px;max-width:480px">
-      <div class="form-group">
-        <label class="form-label">Ollama 模型</label>
-        <div style="display:flex;gap:8px">
-          <select class="input" id="model-select" style="flex:1"></select>
-          <button class="btn btn-primary btn-sm" id="model-save-btn">应用</button>
+    <!-- 审计日志标签（仅 admin） -->
+    <div class="tab-panel" id="tab-audit">
+      <div class="section-header">
+        <div class="section-title">审计日志</div>
+        <div class="audit-filter-bar">
+          <input class="input input-sm" id="audit-action-filter" placeholder="操作">
+          <input class="input input-sm" id="audit-user-filter" placeholder="用户">
+          <button class="btn btn-secondary btn-sm" id="audit-refresh-btn">刷新</button>
         </div>
-        <div style="font-size:12px;color:var(--muted);margin-top:6px">
-          切换后新对话立即生效，进行中的流式响应不受影响
+      </div>
+      <div class="card audit-card">
+        <table class="user-table audit-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>用户</th>
+              <th>操作</th>
+              <th>对象</th>
+              <th>知识库</th>
+              <th>详情</th>
+            </tr>
+          </thead>
+          <tbody id="audit-list"></tbody>
+        </table>
+        <button class="conv-load-more hidden" id="audit-load-more">加载更多</button>
+      </div>
+    </div>
+
+    <!-- 系统设置标签（仅 admin） -->
+    <div class="tab-panel" id="tab-settings">
+      <div class="section-header">
+        <div class="section-title">系统设置</div>
+      </div>
+      <div class="card" style="padding:20px;max-width:480px">
+        <div class="form-group">
+          <label class="form-label">问答模型</label>
+          <div style="display:flex;gap:8px">
+            <select class="input" id="model-select" style="flex:1"></select>
+            <button class="btn btn-primary btn-sm" id="model-save-btn">应用</button>
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-top:6px">
+            切换后新对话立即生效，进行中的流式响应不受影响
+          </div>
         </div>
       </div>
     </div>
@@ -368,6 +412,6 @@
   <!-- Toast -->
   <div id="toast" class="hidden"></div>
 
-  <script src="manage.js"></script>
+<script src="manage.js?v=21"></script>
 </body>
 </html>
