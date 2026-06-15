@@ -38,6 +38,10 @@ const uploadArea   = document.getElementById('upload-area')
 const uploadZone   = document.getElementById('upload-zone')
 const fileInput    = document.getElementById('file-input')
 const userList     = document.getElementById('user-list')
+const auditList    = document.getElementById('audit-list')
+const syncSourcePanel = document.getElementById('sync-source-panel')
+const syncPathInput   = document.getElementById('sync-path-input')
+const syncStatusEl    = document.getElementById('sync-status')
 
 /* ── 初始化 ───────────────────────────────────────── */
 document.getElementById('user-badge').textContent = isAdmin ? '管理员' : '用户'
@@ -45,9 +49,11 @@ document.getElementById('user-badge').className   = `badge badge-${user.role}`
 
 if (isAdmin) {
   document.getElementById('users-tab').style.display = ''
+  document.getElementById('audit-tab').style.display = ''
   document.getElementById('settings-tab').style.display = ''
   loadUsers()
   initModelSettings()
+  initAuditLog()
 }
 
 loadKbs()
@@ -62,6 +68,7 @@ initPreviewModal()
 initDocBulk()
 initReindex()
 initTextDocModal()
+initSyncSource()
 if (isAdmin) initResetPwdModal()
 
 // 事件委托：KB 卡片操作（一次性绑定，覆盖所有渲染周期）
@@ -72,6 +79,7 @@ kbList.addEventListener('click', e => {
   const kb = allKbs.find(k => k.id === id)
   if (!kb) return
   const action = btn.dataset.action
+  if (action === 'open-chat')     openKbChat(id)
   if (action === 'edit')          openKbEditModal(kb)
   if (action === 'members')       openMembersModal(kb)
   if (action === 'toggle-public') togglePublic(id, !kb.is_public)
@@ -102,12 +110,14 @@ function initTabs() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'))
       btn.classList.add('active')
       document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active')
+      if (btn.dataset.tab === 'audit' && isAdmin) loadAuditLog(false)
     })
   })
 }
 
 /* ── 知识库列表 ────────────────────────────────────── */
 let allKbs = []
+let initialRouteApplied = false
 
 async function loadKbs() {
   try {
@@ -116,8 +126,25 @@ async function loadKbs() {
     allKbs = await res.json()
     renderKbList()
     renderDocKbSelect()
+    applyInitialManageRoute()
   } catch {
     kbList.innerHTML = '<div class="empty-state"><div>加载失败，请刷新重试</div></div>'
+  }
+}
+
+function applyInitialManageRoute() {
+  if (initialRouteApplied) return
+  initialRouteApplied = true
+
+  const params = new URLSearchParams(location.search)
+  const tab = params.get('tab')
+  const kbId = Number(params.get('kb'))
+  if (tab && document.querySelector(`.tab-btn[data-tab="${tab}"]`)) {
+    document.querySelector(`.tab-btn[data-tab="${tab}"]`).click()
+  }
+  if (tab === 'docs' && kbId && allKbs.some(kb => kb.id === kbId)) {
+    docKbSelect.value = String(kbId)
+    docKbSelect.dispatchEvent(new Event('change'))
   }
 }
 
@@ -133,7 +160,11 @@ function renderKbList() {
     card.className = 'kb-card'
     const isOwner = kb.owner_id === user.id || isAdmin
     card.innerHTML = `
-      <div class="kb-card-icon">📚</div>
+      <div class="kb-card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+        </svg>
+      </div>
       <div class="kb-card-body">
         <div class="kb-card-name">
           ${escHtml(kb.name)}
@@ -148,6 +179,7 @@ function renderKbList() {
         </div>
       </div>
       <div class="kb-card-actions">
+        <button class="btn btn-primary btn-sm" data-action="open-chat" data-id="${kb.id}">进入问答</button>
         ${isOwner ? `
           <button class="btn btn-secondary btn-sm" data-action="edit" data-id="${kb.id}">编辑</button>
           <button class="btn btn-secondary btn-sm" data-action="members" data-id="${kb.id}">成员</button>
@@ -161,6 +193,11 @@ function renderKbList() {
     kbList.appendChild(card)
   }
 
+}
+
+function openKbChat(id) {
+  localStorage.setItem('kb_last_selected_id', String(id))
+  location.href = '/index.html'
 }
 
 function renderDocKbSelect() {
@@ -266,6 +303,7 @@ docKbSelect.addEventListener('change', () => {
   const docSearch = document.getElementById('doc-search')
   if (docSearch) docSearch.value = ''
   document.getElementById('doc-search-count').textContent = ''
+  renderSyncSourcePanel()
   if (currentDocKbId) { uploadArea.classList.remove('hidden'); loadDocs() }
   else { uploadArea.classList.add('hidden') }
 })
@@ -312,9 +350,34 @@ async function searchDocContent(q) {
 const DOC_PAGE_SIZE = 30
 let docOffset = 0
 let docTotal  = 0
+let docRefreshTimer = null
+
+function docStatusBadge(doc) {
+  const status = doc.index_status ?? 'ready'
+  const labels = {
+    pending: '待解析',
+    processing: '解析中',
+    ready: doc.index_version ? '已索引' : '未索引',
+    error: '失败',
+  }
+  const title = status === 'error' && doc.index_error
+    ? ` title="${escHtml(doc.index_error)}"`
+    : ''
+  return `<span class="doc-status doc-status-${status}"${title}>${labels[status] ?? status}</span>`
+}
+
+function docSourceBadge(doc) {
+  if (doc.source_type !== 'sync') return ''
+  const title = doc.source_path ? ` title="${escHtml(doc.source_path)}"` : ''
+  return `<span class="doc-source doc-source-sync"${title}>同步</span>`
+}
 
 async function loadDocs(append = false) {
   if (!currentDocKbId) return
+  if (docRefreshTimer) {
+    clearTimeout(docRefreshTimer)
+    docRefreshTimer = null
+  }
   if (!append) {
     docOffset = 0
     docList.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:13px">加载中…</div>'
@@ -346,6 +409,8 @@ async function loadDocs(append = false) {
       <input type="checkbox" class="doc-cb" data-cb-id="${doc.id}">
       <span style="color:var(--light);flex-shrink:0"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M9 1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5L9 1z"/><polyline points="9 1 9 5 13 5"/></svg></span>
       <span class="doc-name" title="${escHtml(doc.original_name)}">${escHtml(doc.original_name)}</span>
+      ${docSourceBadge(doc)}
+      ${docStatusBadge(doc)}
       <span class="doc-size">${fmtSize(doc.size)}</span>
       <button class="btn btn-secondary btn-sm" data-preview-id="${doc.id}">预览</button>
       <button class="btn btn-danger btn-sm" data-doc-id="${doc.id}">删除</button>
@@ -380,6 +445,10 @@ async function loadDocs(append = false) {
   document.getElementById('doc-bulk-bar').classList.remove('hidden')
   if (!append) { selectedDocIds.clear(); updateBulkBar(); syncSelectAllCheckbox() }
   updateBulkBar()
+  const hasActiveIndexJobs = docs.some(doc => ['pending', 'processing'].includes(doc.index_status))
+  if (!append && hasActiveIndexJobs) {
+    docRefreshTimer = setTimeout(() => loadDocs(false), 3000)
+  }
 }
 
 function updateBulkBar() {
@@ -454,6 +523,109 @@ function initReindex() {
     } finally {
       btn.disabled = false
       btn.textContent = '重建索引'
+    }
+  })
+}
+
+function selectedDocKb() {
+  return allKbs.find(kb => kb.id === currentDocKbId) ?? null
+}
+
+function canManageCurrentKb() {
+  const kb = selectedDocKb()
+  return Boolean(kb && (isAdmin || kb.owner_id === user.id))
+}
+
+function renderSyncSourcePanel() {
+  if (!syncSourcePanel) return
+  const kb = selectedDocKb()
+  if (!kb || !canManageCurrentKb()) {
+    syncSourcePanel.classList.add('hidden')
+    if (syncPathInput) syncPathInput.value = ''
+    if (syncStatusEl) syncStatusEl.textContent = ''
+    return
+  }
+  syncSourcePanel.classList.remove('hidden')
+  syncPathInput.value = kb.sync_source_path || ''
+  if (kb.sync_last_result) {
+    try {
+      const last = JSON.parse(kb.sync_last_result)
+      syncStatusEl.textContent = `上次：新增 ${last.added || 0} / 更新 ${last.updated || 0} / 删除 ${last.removed || 0}`
+    } catch {
+      syncStatusEl.textContent = kb.sync_last_result
+    }
+  } else {
+    syncStatusEl.textContent = ''
+  }
+}
+
+function syncSummaryText(summary) {
+  const skipped = summary.skipped
+    ? Object.values(summary.skipped).reduce((sum, value) => sum + Number(value || 0), 0)
+    : 0
+  return `新增 ${summary.added || 0} / 更新 ${summary.updated || 0} / 删除 ${summary.removed || 0} / 跳过 ${skipped}`
+}
+
+function updateKbLocal(id, patch) {
+  const idx = allKbs.findIndex(kb => kb.id === id)
+  if (idx >= 0) allKbs[idx] = { ...allKbs[idx], ...patch }
+}
+
+function initSyncSource() {
+  const saveBtn = document.getElementById('sync-save-btn')
+  const runBtn  = document.getElementById('sync-run-btn')
+  if (!saveBtn || !runBtn) return
+
+  async function savePath() {
+    if (!currentDocKbId || !canManageCurrentKb()) return
+    const nextPath = syncPathInput.value.trim()
+    saveBtn.disabled = true
+    try {
+      const res = await fetch(`/api/kbs/${currentDocKbId}/sync-source`, {
+        method: 'PATCH',
+        headers: { ...auth(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: nextPath || null }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '保存失败')
+      updateKbLocal(currentDocKbId, { sync_source_path: data.sync_source_path, sync_last_result: null })
+      renderSyncSourcePanel()
+      showToast(data.sync_source_path ? '同步路径已保存' : '同步路径已清空', 'success')
+    } catch (e) {
+      showToast(e.message, 'error')
+    } finally {
+      saveBtn.disabled = false
+    }
+  }
+
+  saveBtn.addEventListener('click', savePath)
+  syncPathInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') savePath()
+  })
+
+  runBtn.addEventListener('click', async () => {
+    if (!currentDocKbId || !canManageCurrentKb()) return
+    if (!syncPathInput.value.trim()) {
+      showToast('请先保存同步路径', 'error')
+      return
+    }
+    runBtn.disabled = true
+    runBtn.textContent = '同步中…'
+    syncStatusEl.textContent = ''
+    try {
+      const res  = await fetch(`/api/kbs/${currentDocKbId}/sync`, { method: 'POST', headers: auth() })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '同步失败')
+      const text = syncSummaryText(data)
+      syncStatusEl.textContent = text
+      updateKbLocal(currentDocKbId, { sync_last_result: JSON.stringify(data) })
+      showToast(`同步完成：${text}`, 'success')
+      loadDocs()
+    } catch (e) {
+      showToast(e.message, 'error')
+    } finally {
+      runBtn.disabled = false
+      runBtn.textContent = '立即同步'
     }
   })
 }
@@ -566,9 +738,9 @@ function uploadFiles(files) {
     uploadZone.style.opacity = '1'
     progressBar.style.width = '100%'
     if (xhr.status >= 200 && xhr.status < 300) {
-      progressText.textContent = '上传成功！'
+      progressText.textContent = '上传成功，已加入解析队列'
       progressPct.textContent = '100%'
-      showToast(`成功上传 ${files.length} 个文件`, 'success')
+      showToast(`成功上传 ${files.length} 个文件，正在后台解析`, 'success')
       loadDocs()
     } else {
       let errMsg = '上传失败'
@@ -671,6 +843,122 @@ function initUserModal() {
     if (res.ok) { showToast('用户创建成功', 'success'); close(); loadUsers() }
     else { showToast(data.error ?? '创建失败', 'error') }
   })
+}
+
+/* ── 审计日志 ──────────────────────────────────────── */
+const AUDIT_PAGE_SIZE = 40
+let auditOffset = 0
+let auditTotal = 0
+let auditLoading = false
+
+const auditActionLabels = {
+  'auth.login': '登录成功',
+  'auth.login_failed': '登录失败',
+  'user.password_changed': '修改密码',
+  'admin.user_create': '创建用户',
+  'admin.user_delete': '删除用户',
+  'admin.user_role_update': '修改角色',
+  'admin.user_password_reset': '重置密码',
+  'kb.create': '创建知识库',
+  'kb.update': '更新知识库',
+  'kb.delete': '删除知识库',
+  'kb.public_update': '公开设置',
+  'kb.member_add': '添加成员',
+  'kb.member_remove': '移除成员',
+  'kb.sync_source_update': '保存同步路径',
+  'kb.sync_source_clear': '清空同步路径',
+  'kb.sync_run': '执行同步',
+  'doc.upload': '上传文档',
+  'doc.create_text': '新建文档',
+  'doc.delete': '删除文档',
+  'doc.batch_delete': '批量删除文档',
+  'doc.reindex': '重建索引',
+  'conversation.delete': '删除对话',
+  'conversation.batch_delete': '批量删除对话',
+  'config.model_update': '切换模型',
+}
+
+function initAuditLog() {
+  const refreshBtn = document.getElementById('audit-refresh-btn')
+  const loadMoreBtn = document.getElementById('audit-load-more')
+  const actionInput = document.getElementById('audit-action-filter')
+  const userInput = document.getElementById('audit-user-filter')
+  if (!refreshBtn || !loadMoreBtn) return
+
+  refreshBtn.addEventListener('click', () => loadAuditLog(false))
+  loadMoreBtn.addEventListener('click', () => loadAuditLog(true))
+  ;[actionInput, userInput].filter(Boolean).forEach(input => {
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') loadAuditLog(false)
+    })
+  })
+}
+
+async function loadAuditLog(append = false) {
+  if (!isAdmin || auditLoading || !auditList) return
+  auditLoading = true
+  if (!append) {
+    auditOffset = 0
+    auditList.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">加载中…</td></tr>'
+  }
+
+  const params = new URLSearchParams({
+    limit: String(AUDIT_PAGE_SIZE),
+    offset: String(auditOffset),
+  })
+  const action = document.getElementById('audit-action-filter')?.value.trim()
+  const username = document.getElementById('audit-user-filter')?.value.trim()
+  if (action) params.set('action', action)
+  if (username) params.set('username', username)
+
+  try {
+    const res = await fetch(`/api/admin/audit?${params.toString()}`, { headers: auth() })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || '加载审计日志失败')
+    if (!append) {
+      auditList.innerHTML = ''
+      auditTotal = data.total || 0
+    }
+    if (!data.items.length && !append) {
+      auditList.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">暂无审计记录</td></tr>'
+    }
+    for (const item of data.items) auditList.appendChild(renderAuditRow(item))
+    auditOffset += data.items.length
+    const loadMoreBtn = document.getElementById('audit-load-more')
+    loadMoreBtn.classList.toggle('hidden', auditOffset >= auditTotal)
+  } catch (e) {
+    auditList.innerHTML = `<tr><td colspan="6" style="color:var(--red)">加载失败：${escHtml(e.message)}</td></tr>`
+  } finally {
+    auditLoading = false
+  }
+}
+
+function renderAuditRow(item) {
+  const tr = document.createElement('tr')
+  const detail = formatAuditDetail(item.detail)
+  tr.innerHTML = `
+    <td style="white-space:nowrap;color:var(--muted)">${fmtDateTime(item.created_at)}</td>
+    <td>${escHtml(item.username || '系统')}</td>
+    <td><span class="audit-action">${escHtml(auditActionLabels[item.action] || item.action)}</span></td>
+    <td>${escHtml(item.entity_type)}${item.entity_id ? ` #${item.entity_id}` : ''}</td>
+    <td>${item.kb_id ? `#${item.kb_id}` : ''}</td>
+    <td class="audit-detail" title="${escHtml(detail)}">${escHtml(detail)}</td>
+  `
+  return tr
+}
+
+function formatAuditDetail(detail) {
+  if (!detail) return ''
+  try {
+    const value = JSON.parse(detail)
+    if (value && typeof value === 'object') {
+      return Object.entries(value)
+        .map(([key, val]) => `${key}: ${typeof val === 'object' ? JSON.stringify(val) : val}`)
+        .join(' · ')
+        .slice(0, 240)
+    }
+  } catch { /* plain text */ }
+  return String(detail).slice(0, 240)
 }
 
 /* ── 成员管理弹层 ──────────────────────────────────── */
@@ -864,6 +1152,16 @@ function escHtml(s) {
 
 function fmtTime(ts) {
   return new Date(ts * 1000).toLocaleDateString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit' })
+}
+
+function fmtDateTime(ts) {
+  return new Date(ts * 1000).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function fmtSize(bytes) {
