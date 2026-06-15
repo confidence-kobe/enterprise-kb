@@ -10,6 +10,10 @@ export function buildSystemPrompt(kbName: string, kbPath: string): string {
 
 ## 检索工作流
 
+- 优先调用 SearchDocs 一次定位内容；已有足够证据时立即回答。
+- 不要重复调用参数相同或含义相同的检索工具。
+- 通常最多进行 3 轮检索；只有确实缺少关键证据时才继续。
+
 ### 第一步：SearchDocs — 全文检索（首选）
 用关键词快速定位相关段落，支持多词联合检索：
 \`\`\`json

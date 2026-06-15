@@ -2,6 +2,8 @@
 
 Enterprise KB is a Node.js/TypeScript knowledge-base app with multi-user auth, SQLite storage, document management, and OpenAI-compatible LLM support.
 
+Document retrieval uses structure-aware chunks plus hybrid lexical ranking across strict FTS, relaxed term recall, filename matches, and substring fallback. Uploaded files and local folder sync jobs are parsed and indexed by a background queue, so large PDFs do not block document intake. Admins can review audit logs for login, user, knowledge-base, document, sync, and configuration changes.
+
 ## Stack
 
 - Node.js 20+
@@ -51,6 +53,7 @@ npm run build
 npm run test
 npm run check
 npm run codex:smoke
+npm run smoke:full
 npm start
 ```
 
@@ -58,6 +61,7 @@ npm start
 - `npm run test`: run Vitest API tests.
 - `npm run check`: build, test, then run production dependency audit.
 - `npm run codex:smoke`: check the running app health endpoints.
+- `npm run smoke:full`: exercise auth, users, KBs, documents, permissions, conversations, and a real model answer, then remove its temporary data.
 - `npm start`: run `dist/server.js`.
 
 For smoke checks against a non-default port:
@@ -79,6 +83,11 @@ Use `.env.example` as the template. Important variables:
 - `LLM_BASE_URL`
 - `LLM_API_KEY`
 - `LLM_MODEL`
+- `LLM_MAX_TURNS`
+- `HISTORY_MAX_MESSAGES`
+- `HISTORY_MAX_CHARS`
+- `SYNC_MAX_FILES`
+- `SYNC_MAX_TOTAL_MB`
 - `STORAGE_PATH`
 - `DB_PATH`
 - `CORS_ORIGIN`

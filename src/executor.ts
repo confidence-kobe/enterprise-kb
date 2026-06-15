@@ -1,6 +1,6 @@
 /**
- * OllamaExecutor — OpenAI 兼容接口的工具调用循环（流式输出）
- * 连接 Ollama 本地大模型，执行 Glob/Grep/Read 工具
+ * LLMExecutor — OpenAI 兼容接口的工具调用循环（流式输出）
+ * 连接本地或远程模型，执行知识库检索工具。
  */
 
 import OpenAI from 'openai'
@@ -14,7 +14,68 @@ export interface RunResult {
   messages: Message[]
 }
 
-export class OllamaExecutor {
+export class ReasoningStreamFilter {
+  private buffer = ''
+  private inThink = false
+
+  push(chunk: string): string {
+    this.buffer += chunk
+    let visible = ''
+
+    while (this.buffer) {
+      if (this.inThink) {
+        const close = this.buffer.indexOf('</think>')
+        if (close === -1) {
+          this.buffer = this.buffer.slice(-7)
+          break
+        }
+        this.buffer = this.buffer.slice(close + 8)
+        this.inThink = false
+        continue
+      }
+
+      const open = this.buffer.indexOf('<think>')
+      if (open !== -1) {
+        visible += this.buffer.slice(0, open)
+        this.buffer = this.buffer.slice(open + 7)
+        this.inThink = true
+        continue
+      }
+
+      const partialLength = this.partialOpeningTagLength()
+      const emitLength = this.buffer.length - partialLength
+      visible += this.buffer.slice(0, emitLength)
+      this.buffer = this.buffer.slice(emitLength)
+      break
+    }
+
+    return visible
+  }
+
+  flush(): string {
+    const visible = this.inThink ? '' : this.buffer
+    this.buffer = ''
+    return visible
+  }
+
+  private partialOpeningTagLength(): number {
+    const tag = '<think>'
+    const max = Math.min(tag.length - 1, this.buffer.length)
+    for (let length = max; length > 0; length--) {
+      if (this.buffer.endsWith(tag.slice(0, length))) return length
+    }
+    return 0
+  }
+}
+
+export function mergeStreamedToolName(current: string, incoming: string): string {
+  if (!current) return incoming
+  if (!incoming || incoming === current || current.endsWith(incoming)) return current
+  if (incoming.startsWith(current)) return incoming
+  return current + incoming
+}
+
+export class LLMExecutor {
   private client: OpenAI
 
   constructor(private config: {
@@ -74,7 +135,7 @@ export class OllamaExecutor {
         )
       } catch (err) {
         if (signal?.aborted) break
-        const msg = `Ollama 调用失败：${(err as Error).message}`
+        const msg = `模型调用失败：${(err as Error).message}`
         onEvent?.({ type: 'error', message: msg })
         throw new Error(msg)
       }
@@ -83,6 +144,7 @@ export class OllamaExecutor {
       let assistantContent = ''
       let finishReason: string | null = null
       const toolCallAcc: Map<number, { id: string; name: string; arguments: string }> = new Map()
+      const reasoningFilter = new ReasoningStreamFilter()
 
       for await (const chunk of stream) {
         if (signal?.aborted) break
@@ -97,8 +159,11 @@ export class OllamaExecutor {
         // 文本增量 → 实时推送
         if (delta.content) {
           assistantContent += delta.content
-          responseText     += delta.content
-          onEvent?.({ type: 'text', text: delta.content })
+          const visible = reasoningFilter.push(delta.content)
+          if (visible && (responseText || visible.trim())) {
+            responseText += visible
+            onEvent?.({ type: 'text', text: visible })
+          }
         }
 
         // 工具调用增量 → 按 index 累积
@@ -109,13 +174,19 @@ export class OllamaExecutor {
             }
             const entry = toolCallAcc.get(tc.index)!
             if (tc.id)              entry.id   = tc.id
-            if (tc.function?.name) entry.name += tc.function.name
+            if (tc.function?.name) entry.name = mergeStreamedToolName(entry.name, tc.function.name)
             if (tc.function?.arguments) entry.arguments += tc.function.arguments
           }
         }
       }
 
       if (signal?.aborted) break
+
+      const remainingVisible = reasoningFilter.flush()
+      if (remainingVisible && (responseText || remainingVisible.trim())) {
+        responseText += remainingVisible
+        onEvent?.({ type: 'text', text: remainingVisible })
+      }
 
       // ── 构建 assistant message ────────────────────────
       const toolCallsFinal = toolCallAcc.size > 0

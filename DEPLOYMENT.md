@@ -14,7 +14,8 @@ Copy `.env.example` to `.env` and set production values:
 - `NODE_ENV=production` in the runtime environment.
 - `JWT_SECRET`: random string, at least 32 characters.
 - `ADMIN_PASSWORD`: non-default initial admin password.
-- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
+- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_MAX_TURNS`.
+- `HISTORY_MAX_MESSAGES`, `HISTORY_MAX_CHARS` to cap trusted persisted conversation context sent to the model.
 - `STORAGE_PATH`, `DB_PATH`.
 - `CORS_ORIGIN` only when the UI and API are served from different origins.
 
