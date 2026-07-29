@@ -55,7 +55,7 @@ let history               = []
 let isLoading             = false
 let currentConversationId = null
 let conversations         = []
-let ollamaOnline          = true
+let llmOnline             = true
 let convOffset            = 0
 let convHasMore           = false
 let convLoading           = false
@@ -63,6 +63,7 @@ const CONV_PAGE_SIZE      = 20
 
 let convBulkMode          = false
 const selectedConvIds     = new Set()
+const LAST_KB_KEY         = 'kb_last_selected_id'
 
 // 文档名 → docId 映射，用于 source-ref 点击预览
 const kbDocMap = new Map()  // originalName (lower) → docId
@@ -70,6 +71,17 @@ const kbDocMap = new Map()  // originalName (lower) → docId
 /* ── DOM ──────────────────────────────────────────── */
 const messagesEl   = document.getElementById('messages')
 const welcomeEl    = document.getElementById('welcome')
+const welcomeKbName = document.getElementById('welcome-kb-name')
+const welcomeDocCount = document.getElementById('welcome-doc-count')
+const welcomeConvCount = document.getElementById('welcome-conv-count')
+const welcomeAccessCount = document.getElementById('welcome-access-count')
+const welcomeStatsAction = document.getElementById('welcome-stats-action')
+const welcomeManageAction = document.getElementById('welcome-manage-action')
+const welcomeDocsAction = document.getElementById('welcome-docs-action')
+const welcomeNewConvAction = document.getElementById('welcome-new-conv-action')
+const welcomeRecentDocs = document.getElementById('welcome-recent-docs')
+const welcomeRecentConvs = document.getElementById('welcome-recent-convs')
+const welcomeTitle = document.getElementById('welcome-title')
 const welcomeSub   = document.getElementById('welcome-sub')
 const inputEl      = document.getElementById('question-input')
 const sendBtn      = document.getElementById('send-btn')
@@ -109,29 +121,74 @@ const convBulkDeleteBtn   = document.getElementById('conv-bulk-delete-btn')
 const convBulkCancelBtn   = document.getElementById('conv-bulk-cancel-btn')
 
 /* ── 初始化 ───────────────────────────────────────── */
-userNameEl.textContent = user.username
-userBadgeEl.textContent = user.role === 'admin' ? '管理员' : '用户'
-userBadgeEl.className = `badge badge-${user.role}`
+userNameEl.textContent = user?.username ?? ''
+userBadgeEl.textContent = user?.role === 'admin' ? '管理员' : '用户'
+userBadgeEl.className = `badge badge-${user?.role ?? 'user'}`
 
 fetch('/api/config', { headers: auth() })
   .then(r => r.json())
   .then(d => {
     topbarModel.textContent = d.model
-    if (!d.ollamaOnline) {
-      ollamaOnline = false
-      topbarModel.title = 'Ollama 未连接，请先运行 ollama serve'
+    if (!d.llmOnline && !d.ollamaOnline) {
+      llmOnline = false
+      topbarModel.title = '模型服务连接失败，请检查模型配置'
       topbarModel.style.color = 'var(--red)'
       if (currentKb) {
         sendBtn.disabled = true
-        sendBtn.title = 'Ollama 未连接，无法发送'
+        sendBtn.title = '模型服务连接失败，无法发送'
       }
+    } else if (d.provider) {
+      topbarModel.title = `模型供应商：${d.provider}`
     }
   })
 
 loadKbs()
+clearAutofilledSidebarSearches()
+
+welcomeStatsAction?.addEventListener('click', () => {
+  if (!currentKb) return
+  openStats()
+})
+
+welcomeManageAction?.addEventListener('click', () => {
+  location.href = '/manage.html'
+})
+
+welcomeDocsAction?.addEventListener('click', () => {
+  if (!currentKb) return
+  location.href = `/manage.html?tab=docs&kb=${currentKb.id}`
+})
+
+welcomeNewConvAction?.addEventListener('click', () => {
+  if (!currentKb) return
+  startNewConversation()
+})
 
 function auth() {
   return { Authorization: `Bearer ${token}` }
+}
+
+function clearAutofilledSidebarSearches() {
+  const clearIfAutofilled = input => {
+    if (!input || !input.value || input.dataset.userEdited === 'true') return
+    input.value = ''
+    input.dispatchEvent(new Event('input'))
+  }
+
+  ;[kbSearchEl, convSearchEl].forEach(input => {
+    input?.addEventListener('input', e => {
+      if (e.isTrusted) input.dataset.userEdited = 'true'
+    })
+  })
+
+  requestAnimationFrame(() => {
+    clearIfAutofilled(kbSearchEl)
+    clearIfAutofilled(convSearchEl)
+  })
+  setTimeout(() => {
+    clearIfAutofilled(kbSearchEl)
+    clearIfAutofilled(convSearchEl)
+  }, 500)
 }
 
 /* ── 加载知识库列表 ────────────────────────────────── */
@@ -160,10 +217,11 @@ async function loadKbs() {
       sidebarKbs.appendChild(btn)
     }
 
-    // 只有一个知识库时自动选中
-    if (kbs.length === 1) {
+    const lastKbId = Number(localStorage.getItem(LAST_KB_KEY) || '')
+    const preferredKb = kbs.find(kb => kb.id === lastKbId) || kbs[0]
+    if (preferredKb && !currentKb) {
       kbSearchEl.value = ''
-      selectKb(kbs[0])
+      selectKb(preferredKb)
     }
 
   } catch (e) {
@@ -200,6 +258,7 @@ function renderWelcomeChips(kb) {
 
 async function selectKb(kb) {
   currentKb = kb
+  localStorage.setItem(LAST_KB_KEY, String(kb.id))
   currentConversationId = null
   history = []
   messagesEl.innerHTML = ''
@@ -212,8 +271,14 @@ async function selectKb(kb) {
   })
 
   topbarKb.textContent = kb.name
-  sendBtn.disabled = !ollamaOnline
-  sendBtn.title = ollamaOnline ? '发送' : 'Ollama 未连接，无法发送'
+  if (welcomeKbName) welcomeKbName.textContent = kb.is_public ? '公开知识库' : '私有知识库'
+  if (welcomeTitle) welcomeTitle.textContent = kb.name
+  if (welcomeDocCount) welcomeDocCount.textContent = kb.doc_count ?? 0
+  if (welcomeConvCount) welcomeConvCount.textContent = kb.conv_count ?? 0
+  if (welcomeAccessCount) welcomeAccessCount.textContent = kb.is_public ? '公开' : '受限'
+  welcomeEl.classList.remove('hidden')
+  sendBtn.disabled = !llmOnline
+  sendBtn.title = llmOnline ? '发送' : '模型服务连接失败，无法发送'
   statsBtn.disabled = false
   exportBtn.disabled = history.length === 0
   inputEl.placeholder = `在「${kb.name}」中提问…`
@@ -222,8 +287,10 @@ async function selectKb(kb) {
   welcomeEl.classList.remove('hidden')
   const descPart = kb.description ? `${kb.description}` : ''
   const statPart = kb.doc_count != null ? `${kb.doc_count} 份文档` : ''
-  welcomeSub.textContent = [descPart, statPart].filter(Boolean).join('　·　') || '暂无文档，请前往管理页上传'
+  const accessPart = kb.is_public ? '公开可访问' : '成员权限控制'
+  welcomeSub.textContent = [descPart, statPart, accessPart].filter(Boolean).join('　·　') || '暂无文档，请前往管理页上传'
   renderWelcomeChips(kb)
+  loadDashboardDocs(kb.id)
 
   // 加载文档名→ID 映射，供 source-ref 点击使用
   kbDocMap.clear()
@@ -238,6 +305,99 @@ async function selectKb(kb) {
   sidebarConvs.classList.remove('hidden')
   convSearchEl.value = ''
   await loadConversations(kb.id)
+}
+
+async function loadDashboardDocs(kbId) {
+  if (!welcomeRecentDocs) return
+  welcomeRecentDocs.innerHTML = '<div class="dashboard-empty">加载文档中…</div>'
+  try {
+    const res = await fetch(`/api/kbs/${kbId}/docs?limit=5&offset=0`, { headers: auth() })
+    if (!res.ok) throw new Error('加载失败')
+    const data = await res.json()
+    const docs = Array.isArray(data) ? data : data.items
+    welcomeRecentDocs.innerHTML = ''
+    if (!docs.length) {
+      welcomeRecentDocs.innerHTML = '<div class="dashboard-empty">这个知识库还没有文档。</div>'
+      return
+    }
+    docs.forEach(doc => {
+      const item = document.createElement('button')
+      item.className = 'dashboard-list-item'
+      item.type = 'button'
+      item.innerHTML = `
+        <span class="dashboard-list-icon">DOC</span>
+        <span class="dashboard-list-copy">
+          <span class="dashboard-list-title">${escHtml(doc.original_name)}</span>
+          <span class="dashboard-list-meta">${formatFileSize(doc.size)} · ${formatDashboardTime(doc.uploaded_at)}</span>
+        </span>
+        <span class="dashboard-list-arrow">›</span>
+      `
+      item.addEventListener('click', () => openSrcPreview(doc.id, doc.original_name, 0))
+      welcomeRecentDocs.appendChild(item)
+    })
+  } catch {
+    welcomeRecentDocs.innerHTML = '<div class="dashboard-empty">文档加载失败。</div>'
+  }
+}
+
+function renderDashboardConversations() {
+  if (!welcomeRecentConvs) return
+  welcomeRecentConvs.innerHTML = ''
+  const recent = conversations.slice(0, 5)
+  if (!recent.length) {
+    welcomeRecentConvs.innerHTML = '<div class="dashboard-empty">还没有会话，先发起一个问题。</div>'
+    return
+  }
+  recent.forEach(conv => {
+    const item = document.createElement('button')
+    item.className = 'dashboard-list-item'
+    item.type = 'button'
+    item.innerHTML = `
+      <span class="dashboard-list-icon">${conv.is_pinned ? 'PIN' : 'AI'}</span>
+      <span class="dashboard-list-copy">
+        <span class="dashboard-list-title">${escHtml(conv.title)}</span>
+        <span class="dashboard-list-meta">${formatDashboardTime(conv.updated_at)}</span>
+      </span>
+      <span class="dashboard-list-arrow">›</span>
+    `
+    item.addEventListener('click', () => loadConversation(conv))
+    welcomeRecentConvs.appendChild(item)
+  })
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatDashboardTime(ts) {
+  if (!ts) return '暂无更新时间'
+  return new Date(ts * 1000).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+}
+
+function startNewConversation() {
+  currentConversationId = null
+  history = []
+  messagesEl.innerHTML = ''
+  welcomeEl.classList.remove('hidden')
+  updateConvHighlight()
+  updateHistoryCount()
+  inputEl.focus()
+}
+
+async function openStats() {
+  if (!currentKb) return
+  statsModal.classList.remove('hidden')
+  statsContent.textContent = '加载中…'
+  try {
+    const res = await fetch(`/api/kbs/${currentKb.id}/stats`, { headers: auth() })
+    const data = await res.json()
+    statsContent.textContent = data.stats ?? '无数据'
+  } catch (err) {
+    statsContent.textContent = `请求失败：${err.message}`
+  }
 }
 
 /* ── 发送问题 ──────────────────────────────────────── */
@@ -257,7 +417,7 @@ async function sendQuestion(question) {
     const res = await fetch(`/api/kbs/${currentKb.id}/ask`, {
       method: 'POST',
       headers: { ...auth(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, history, conversationId: currentConversationId }),
+      body: JSON.stringify({ question, conversationId: currentConversationId }),
     })
 
     if (res.status === 401) { location.href = '/login.html'; return }
@@ -320,9 +480,11 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
         case 'done': {
           cursorEl.remove()
           renderMd(responseText, responseText.dataset.raw ?? '', false)
-          if (Array.isArray(ev.messages)) history = ev.messages
+          if (Array.isArray(ev.messages)) history = [...history, ...ev.messages]
           updateHistoryCount()
-          row.querySelector('.msg-meta').textContent = `${ev.turns} 轮检索`
+          row.querySelector('.msg-meta').textContent = ev.context?.truncated
+            ? `${ev.turns} 轮检索 · 已使用最近上下文`
+            : `${ev.turns} 轮检索`
           if (copyBtn) copyBtn.classList.remove('hidden')
           setLoading(false)
           scrollBottom()
@@ -351,7 +513,8 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
 function appendUserMessage(text) {
   const row = document.createElement('div')
   row.className = 'msg-user'
-  row.innerHTML = `<span class="msg-user-label">Q</span><div class="msg-user-text">${escHtml(text).replace(/\n/g, '<br>')}</div>`
+  const initials = (user?.username || 'U').slice(0, 1).toUpperCase()
+  row.innerHTML = `<div class="msg-user-avatar">${initials}</div><div class="msg-user-text">${escHtml(text).replace(/\n/g, '<br>')}</div>`
   messagesEl.appendChild(row)
   scrollBottom()
 }
@@ -491,11 +654,11 @@ function renderMd(el, raw, streaming) {
 
 function setLoading(val) {
   isLoading = val
-  sendBtn.disabled = val || !currentKb || !ollamaOnline
+  sendBtn.disabled = val || !currentKb || !llmOnline
   inputEl.disabled = val
   thinkingEl.classList.toggle('hidden', !val)
-  if (!val && currentKb && !ollamaOnline) {
-    sendBtn.title = 'Ollama 未连接，无法发送'
+  if (!val && currentKb && !llmOnline) {
+    sendBtn.title = '模型服务连接失败，无法发送'
   } else if (!val) {
     sendBtn.title = '发送'
   }
@@ -630,6 +793,7 @@ async function loadConversations(kbId, reset = true) {
     convHasMore   = data.hasMore
     convOffset    = data.nextOffset
     renderConversations()
+    renderDashboardConversations()
   } catch {
     if (reset) sidebarConvs.innerHTML = '<div class="no-kb-hint" style="color:var(--red)">加载失败</div>'
   } finally {
