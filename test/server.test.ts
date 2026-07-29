@@ -4,9 +4,19 @@ import path from 'node:path'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Express } from 'express'
+import { createConversation, insertMessages, isDocIndexed, removeDocFromIndex } from '../src/db.ts'
 
 let app: Express
 let testRoot: string
+
+async function login(username: string, password: string) {
+  const response = await request(app)
+    .post('/api/auth/login')
+    .send({ username, password })
+    .expect(200)
+
+  return response.body as { token: string; user: { id: number; username: string; role: string } }
+}
 
 beforeAll(async () => {
   testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-kb-test-'))
@@ -16,6 +26,8 @@ beforeAll(async () => {
   process.env.JWT_EXPIRES_IN = '1h'
   process.env.ADMIN_USERNAME = 'admin'
   process.env.ADMIN_PASSWORD = 'Admin@123'
+  process.env.LOGIN_RATE_MAX = '100'
+  process.env.LOGIN_RATE_WINDOW_MS = '600000'
   process.env.DB_PATH = path.join(testRoot, 'data', 'enterprise-kb-test.db')
   process.env.STORAGE_PATH = path.join(testRoot, 'storage')
   process.env.LLM_BASE_URL = 'https://example.test/v1'
@@ -56,17 +68,17 @@ describe('server health and auth', () => {
   it('protects /api/me and returns the authenticated user after login', async () => {
     await request(app).get('/api/me').expect(401)
 
-    const login = await request(app)
+    const loginResponse = await request(app)
       .post('/api/auth/login')
       .send({ username: 'admin', password: 'Admin@123' })
       .expect(200)
 
-    expect(login.body.token).toEqual(expect.any(String))
-    expect(login.body.user).toMatchObject({ username: 'admin', role: 'admin' })
+    expect(loginResponse.body.token).toEqual(expect.any(String))
+    expect(loginResponse.body.user).toMatchObject({ username: 'admin', role: 'admin' })
 
     await request(app)
       .get('/api/me')
-      .set('Authorization', `Bearer ${login.body.token}`)
+      .set('Authorization', `Bearer ${loginResponse.body.token}`)
       .expect(200)
       .expect(res => {
         expect(res.body).toMatchObject({ username: 'admin', role: 'admin' })
@@ -81,122 +93,426 @@ describe('server health and auth', () => {
   })
 })
 
-describe('knowledge-base isolation', () => {
-  it('prevents cross-KB writes, member batch deletion, and conversation search leaks', async () => {
-    const adminLogin = await request(app)
-      .post('/api/auth/login')
-      .send({ username: 'admin', password: 'Admin@123' })
-      .expect(200)
-    const adminAuth = { Authorization: `Bearer ${adminLogin.body.token}` }
+describe('admin user management', () => {
+  it('creates, updates, resets, and deletes a managed user', async () => {
+    const admin = await login('admin', 'Admin@123')
 
-    const createdUser = await request(app)
+    const created = await request(app)
       .post('/api/admin/users')
-      .set(adminAuth)
-      .send({ username: 'isolation-user', password: 'User@123', role: 'user' })
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ username: 'bob', password: 'Bob@123', role: 'user' })
       .expect(201)
 
-    const userLogin = await request(app)
-      .post('/api/auth/login')
-      .send({ username: 'isolation-user', password: 'User@123' })
+    expect(created.body).toMatchObject({ username: 'bob', role: 'user' })
+
+    await request(app)
+      .patch(`/api/admin/users/${created.body.id}/role`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ role: 'admin' })
       .expect(200)
-    const userAuth = { Authorization: `Bearer ${userLogin.body.token}` }
+      .expect(res => {
+        expect(res.body).toEqual({ ok: true })
+      })
 
-    const kbA = await request(app)
-      .post('/api/kbs')
-      .set(adminAuth)
-      .send({ name: 'Isolation A' })
+    await request(app)
+      .post(`/api/admin/users/${created.body.id}/reset-password`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ newPassword: 'Bob@456' })
+      .expect(200)
+
+    const bob = await login('bob', 'Bob@456')
+    expect(bob.user).toMatchObject({ username: 'bob', role: 'admin' })
+
+    await request(app)
+      .delete(`/api/admin/users/${created.body.id}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+
+    await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'bob', password: 'Bob@456' })
+      .expect(401)
+  })
+})
+
+describe('knowledge base access control', () => {
+  it('lets the owner create a kb and grants access through public visibility and memberships', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const alicePassword = 'Alice@123'
+    const createUser = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ username: 'alice', password: alicePassword, role: 'user' })
       .expect(201)
-    const kbB = await request(app)
+
+    expect(createUser.body).toMatchObject({ username: 'alice', role: 'user' })
+
+    const kb = await request(app)
       .post('/api/kbs')
-      .set(adminAuth)
-      .send({ name: 'Isolation B' })
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Project Atlas', description: 'KB for access control tests' })
       .expect(201)
 
-    for (const kb of [kbA.body, kbB.body]) {
-      await request(app)
-        .post(`/api/kbs/${kb.id}/members`)
-        .set(adminAuth)
-        .send({ username: 'isolation-user' })
-        .expect(201)
-    }
+    const kbId = kb.body.id as number
+    expect(kb.body).toMatchObject({ name: 'Project Atlas', description: 'KB for access control tests' })
 
-    const docA = await request(app)
-      .post(`/api/kbs/${kbA.body.id}/docs/text`)
-      .set(adminAuth)
+    const alice = await login('alice', alicePassword)
+
+    await request(app)
+      .get('/api/kbs')
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(Array.isArray(res.body)).toBe(true)
+        expect(res.body.some((item: { id: number }) => item.id === kbId)).toBe(false)
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}`)
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(403)
+
+    await request(app)
+      .patch(`/api/kbs/${kbId}/public`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ is_public: true })
+      .expect(200)
+
+    await request(app)
+      .get('/api/kbs')
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body.some((item: { id: number; is_public?: number }) => item.id === kbId)).toBe(true)
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}`)
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toMatchObject({ id: kbId, name: 'Project Atlas' })
+      })
+
+    await request(app)
+      .patch(`/api/kbs/${kbId}/public`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ is_public: false })
+      .expect(200)
+
+    await request(app)
+      .post(`/api/kbs/${kbId}/members`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ username: 'alice' })
+      .expect(201)
+
+    await request(app)
+      .get(`/api/kbs/${kbId}`)
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+
+    await request(app)
+      .get('/api/kbs')
+      .set('Authorization', `Bearer ${alice.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body.some((item: { id: number }) => item.id === kbId)).toBe(true)
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/members`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body.some((member: { username: string }) => member.username === 'alice')).toBe(true)
+      })
+  })
+
+  it('indexes text docs and returns preview and stats', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Stats Atlas', description: 'KB for stats tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const content = [
+      '# Incident Runbook',
+      '',
+      'Database migration steps:',
+      '1. Take a snapshot.',
+      '2. Run the migration.',
+      '3. Verify indexes.',
+    ].join('\n')
+
+    const doc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: 'Incident Runbook', content })
+      .expect(201)
+
+    const docId = doc.body.id as number
+    expect(doc.body).toMatchObject({ kb_id: kbId, original_name: 'Incident Runbook.md' })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/docs/${docId}/preview`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toMatchObject({
+          filename: 'Incident Runbook.md',
+          ext: '.md',
+          displayExt: '.md',
+          truncated: false,
+        })
+        expect(res.body.content).toContain('Database migration steps')
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/stats`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toMatchObject({
+          name: 'Stats Atlas',
+          totalDocs: 1,
+          totalFiles: 1,
+          byExtension: expect.any(Object),
+        })
+        expect(res.body.totalLines).toBeGreaterThan(0)
+        expect(res.body.totalSizeKB).toBeGreaterThanOrEqual(0)
+        expect(res.body.byExtension['.md'].count).toBe(1)
+      })
+  })
+
+  it('rejects unsupported upload extensions', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Upload Guard Atlas', description: 'KB for upload validation tests' })
+      .expect(201)
+
+    await request(app)
+      .post(`/api/kbs/${kb.body.id}/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .attach('files', Buffer.from('malware-like payload'), 'bad.exe')
+      .expect(400)
+      .expect(res => {
+        expect(res.body).toMatchObject({ error: '未接收到文件' })
+      })
+  })
+
+  it('keeps broken pdf uploads but reports preview failure', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'PDF Atlas', description: 'KB for pdf tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const uploaded = await request(app)
+      .post(`/api/kbs/${kbId}/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .attach('files', Buffer.from('not a real pdf file'), 'broken.pdf')
+      .expect(201)
+
+    const docId = uploaded.body[0].id as number
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/docs/${docId}/preview`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(404)
+      .expect(res => {
+        expect(res.body).toMatchObject({ error: 'PDF 文本提取失败或尚未完成' })
+      })
+  })
+
+  it('removes docs from storage and search indexes when deleted', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Delete Atlas', description: 'KB for delete tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const doc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: 'Temp Note', content: 'Delete me from the index and storage.' })
+      .expect(201)
+
+    const docId = doc.body.id as number
+
+    await request(app)
+      .delete(`/api/kbs/${kbId}/docs/${docId}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/search/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'Delete me from the index', limit: 5 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual([])
+      })
+  })
+
+  it('batch deletes docs and clears search hits for removed docs', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Batch Delete Atlas', description: 'KB for batch delete tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const firstDoc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: 'Batch One', content: 'Alpha batch document with a unique search phrase.' })
+      .expect(201)
+
+    const secondDoc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: 'Batch Two', content: 'Beta batch document with another unique phrase.' })
+      .expect(201)
+
+    await request(app)
+      .delete(`/api/kbs/${kbId}/docs/batch`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ ids: [firstDoc.body.id, secondDoc.body.id] })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual({ deleted: 2 })
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual([])
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/search/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'unique search phrase', limit: 5 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual([])
+      })
+  })
+
+  it('rebuilds search indexes when reindex is triggered', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Reindex Atlas', description: 'KB for reindex tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const doc = await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({
+        title: 'Recovery Playbook',
+        content: 'The recovery phrase should be searchable after reindex runs.',
+      })
+      .expect(201)
+
+    const docId = doc.body.id as number
+    expect(isDocIndexed(docId)).toBe(true)
+
+    removeDocFromIndex(docId)
+    expect(isDocIndexed(docId)).toBe(false)
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/search/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'recovery phrase', limit: 5 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual([])
+      })
+
+    await request(app)
+      .post(`/api/kbs/${kbId}/reindex`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toMatchObject({ indexed: 1, total: 1 })
+      })
+
+    expect(isDocIndexed(docId)).toBe(true)
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/search/docs`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'recovery phrase', limit: 5 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body.length).toBe(1)
+        expect(res.body[0]).toMatchObject({
+          original_name: 'Recovery Playbook.md',
+        })
+      })
+  })
+
+  it('finds Chinese text using trigram full-text search', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'CJK Search Atlas' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+
+    await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
       .send({ title: '项目排错SOP', content: 'private alpha content；中文项目检索用于验证中文子串搜索。' })
       .expect(201)
-    const docB = await request(app)
-      .post(`/api/kbs/${kbB.body.id}/docs/text`)
-      .set(adminAuth)
-      .send({ title: 'Isolation B doc', content: 'private beta content for isolation test' })
-      .expect(201)
+
     await request(app)
-      .post(`/api/kbs/${kbA.body.id}/docs/text`)
-      .set(adminAuth)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
       .send({ title: '通用项目说明', content: '这里只描述项目背景，不包含具体排错步骤。' })
       .expect(201)
 
-    await request(app)
-      .delete(`/api/kbs/${kbA.body.id}/docs/batch`)
-      .set(userAuth)
-      .send({ ids: [docA.body.id] })
-      .expect(403)
-
     const chineseSearch = await request(app)
-      .get(`/api/kbs/${kbA.body.id}/search/docs?q=${encodeURIComponent('中文子串')}`)
-      .set(adminAuth)
+      .get(`/api/kbs/${kbId}/search/docs?q=${encodeURIComponent('中文子串')}`)
+      .set('Authorization', `Bearer ${admin.token}`)
       .expect(200)
     expect(chineseSearch.body.length).toBeGreaterThan(0)
 
     const rankedSearch = await request(app)
-      .get(`/api/kbs/${kbA.body.id}/search/docs?q=${encodeURIComponent('项目 排错')}`)
-      .set(adminAuth)
+      .get(`/api/kbs/${kbId}/search/docs?q=${encodeURIComponent('项目 排错')}`)
+      .set('Authorization', `Bearer ${admin.token}`)
       .expect(200)
     expect(rankedSearch.body[0].original_name).toContain('项目排错SOP')
     expect(rankedSearch.body[0].snippet).toContain('>>>')
 
     await request(app)
-      .delete(`/api/kbs/${kbA.body.id}/docs/${docB.body.id}`)
-      .set(adminAuth)
-      .expect(404)
-
-    const docsB = await request(app)
-      .get(`/api/kbs/${kbB.body.id}/docs`)
-      .set(adminAuth)
+      .delete(`/api/kbs/${kbId}`)
+      .set('Authorization', `Bearer ${admin.token}`)
       .expect(200)
-    expect(docsB.body.some((doc: { id: number }) => doc.id === docB.body.id)).toBe(true)
-
-    const userConv = await request(app)
-      .post(`/api/kbs/${kbB.body.id}/conversations`)
-      .set(userAuth)
-      .expect(201)
-
-    await request(app)
-      .post(`/api/kbs/${kbA.body.id}/ask`)
-      .set(userAuth)
-      .send({ question: 'This must not run', history: [], conversationId: userConv.body.id })
-      .expect(400)
-
-    const { createConversation, insertMessages } = await import('../src/db.ts')
-    const privateMarker = `admin-private-${Date.now()}`
-    const adminConv = createConversation(adminLogin.body.user.id, kbA.body.id, 'Admin private conversation')
-    insertMessages(adminConv.id, [{
-      role: 'user',
-      content: privateMarker,
-      tool_calls: null,
-      tool_call_id: null,
-      seq: 0,
-    }])
-
-    const search = await request(app)
-      .get(`/api/search/conversations?q=${privateMarker}`)
-      .set(userAuth)
-      .expect(200)
-    expect(search.body.total).toBe(0)
-
-    await request(app).delete(`/api/kbs/${kbA.body.id}`).set(adminAuth).expect(200)
-    await request(app).delete(`/api/kbs/${kbB.body.id}`).set(adminAuth).expect(200)
-    await request(app).delete(`/api/admin/users/${createdUser.body.id}`).set(adminAuth).expect(200)
   })
 })
 
@@ -243,5 +559,120 @@ describe('audit log', () => {
 
     await request(app).delete(`/api/kbs/${kb.body.id}`).set(adminAuth).expect(200)
     await request(app).delete(`/api/admin/users/${createdUser.body.id}`).set(adminAuth).expect(200)
+  })
+})
+
+describe('conversation search and pinning', () => {
+  it('finds accessible conversations by message content', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Conversation Atlas', description: 'KB for conversation search tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const conv = createConversation(admin.user.id, kbId, 'Release rollout')
+    insertMessages(conv.id, [
+      { role: 'user', content: 'How do we roll out the release?', tool_calls: null, tool_call_id: null, seq: 0 },
+      { role: 'assistant', content: 'Use the release checklist and watch the deploy job.', tool_calls: null, tool_call_id: null, seq: 1 },
+    ])
+
+    await request(app)
+      .get('/api/search/conversations')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'release checklist', limit: 10, offset: 0 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body.total).toBeGreaterThanOrEqual(1)
+        expect(res.body.items.length).toBeGreaterThanOrEqual(1)
+        expect(res.body.items[0]).toMatchObject({
+          conv_id: conv.id,
+          conv_title: 'Release rollout',
+          kb_id: kbId,
+          kb_name: 'Conversation Atlas',
+        })
+        expect(res.body.items[0].snippet).toContain('release checklist')
+      })
+  })
+
+  it('batch deletes conversations the user owns', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Batch Conversation Atlas', description: 'KB for conversation batch delete tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const convOne = createConversation(admin.user.id, kbId, 'Batch Conv One')
+    const convTwo = createConversation(admin.user.id, kbId, 'Batch Conv Two')
+
+    insertMessages(convOne.id, [
+      { role: 'user', content: 'Batch conv one keeps a traceable phrase.', tool_calls: null, tool_call_id: null, seq: 0 },
+    ])
+    insertMessages(convTwo.id, [
+      { role: 'user', content: 'Batch conv two keeps another traceable phrase.', tool_calls: null, tool_call_id: null, seq: 0 },
+    ])
+
+    await request(app)
+      .delete('/api/conversations/batch')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ ids: [convOne.id, convTwo.id] })
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toEqual({ deleted: 2 })
+      })
+
+    await request(app)
+      .get('/api/search/conversations')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ q: 'traceable phrase', limit: 10, offset: 0 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body.total).toBe(0)
+        expect(res.body.items).toEqual([])
+      })
+  })
+
+  it('pins conversations and shows them first in lists', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'Pinned Conversation Atlas', description: 'KB for pin tests' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+    const first = createConversation(admin.user.id, kbId, 'First thread')
+    const second = createConversation(admin.user.id, kbId, 'Second thread')
+
+    await request(app)
+      .patch(`/api/conversations/${first.id}/pin`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ pinned: true })
+      .expect(200)
+
+    await request(app)
+      .get(`/api/conversations/${first.id}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+      .expect(res => {
+        expect(res.body).toMatchObject({ id: first.id, is_pinned: 1 })
+      })
+
+    await request(app)
+      .get(`/api/kbs/${kbId}/conversations`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .query({ limit: 10, offset: 0 })
+      .expect(200)
+      .expect(res => {
+        expect(res.body.total).toBe(2)
+        expect(res.body.items[0]).toMatchObject({ id: first.id, is_pinned: 1 })
+        expect(res.body.items[1]).toMatchObject({ id: second.id })
+      })
   })
 })

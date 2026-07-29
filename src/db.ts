@@ -217,6 +217,16 @@ export function initDb(dbPath: string): void {
     db.exec(`ALTER TABLE documents ADD COLUMN source_size INTEGER`)
   } catch { /* column already exists */ }
 
+  // Migration: unicode61 → trigram for CJK support (trigram handles 3+ char Chinese terms;
+  // 2-char terms continue to be served by the existing LIKE substring fallback)
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE name='doc_fts'").get() as { sql: string } | undefined
+    if (row && !row.sql.includes('trigram')) {
+      db.exec('DROP TABLE IF EXISTS doc_fts')
+      console.log('[DB] FTS5 tokenizer 已升级为 trigram，后台将重建全文索引')
+    }
+  } catch { /* ignore — table may not exist yet on first run */ }
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_docs_source
       ON documents(kb_id, source_type, source_path);
@@ -228,7 +238,7 @@ export function initDb(dbPath: string): void {
       kb_id         UNINDEXED,
       doc_id        UNINDEXED,
       chunk_line    UNINDEXED,
-      tokenize      = 'unicode61 remove_diacritics 1'
+      tokenize      = 'trigram'
     );
   `)
 }
@@ -647,7 +657,7 @@ export function getKbStats(kbId: number): KbStats {
 
 // ── FTS5 文档全文检索 ──────────────────────────────────
 
-export const DOC_INDEX_VERSION = 3
+export const DOC_INDEX_VERSION = 4
 
 export function indexDocContent(
   docId: number,
