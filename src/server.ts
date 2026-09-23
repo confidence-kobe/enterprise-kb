@@ -1093,14 +1093,21 @@ app.get('/api/kbs/:id/stats', requireAuth, (req: AuthRequest, res) => {
     }
   }
 
+  const vectoredDocs = docs.filter(d => getDocVectorCount(d.id) > 0).length
+  if (isEmbeddingEnabled()) {
+    lines.push(``, `向量覆盖：${vectoredDocs}/${docs.length} 个文档已向量化`)
+  }
+
   res.json({
     name: kb.name,
-    stats: lines.join('\n'),          // 格式化文本（给前端直接展示）
+    stats: lines.join('\n'),
     totalDocs: docs.length,
     totalFiles: fileStats.totalFiles,
     totalLines: fileStats.totalLines,
     totalSizeKB: Math.round(fileStats.totalSizeKB),
     byExtension: fileStats.byExtension,
+    vectoredDocs,
+    embeddingEnabled: isEmbeddingEnabled(),
   })
 })
 
@@ -1544,20 +1551,34 @@ async function checkLLM(): Promise<void> {
 
 async function reindexExistingDocs(): Promise<void> {
   const allKbs = getAllKbs()
-  let total = 0, queued = 0
+  let total = 0, queued = 0, embQueued = 0
   for (const kb of allKbs) {
     const docs = listDocs(kb.id)
     for (const doc of docs) {
       total++
-      if (isDocIndexed(doc.id)) continue
       const kbDir = path.join(STORAGE_PATH, `kb_${kb.id}`)
       const filePath = path.join(kbDir, doc.filename)
       if (!fs.existsSync(filePath)) continue
-      enqueueDocIndex({ docId: doc.id, kbId: kb.id, originalName: doc.original_name, filePath })
-      queued++
+
+      if (!isDocIndexed(doc.id)) {
+        enqueueDocIndex({ docId: doc.id, kbId: kb.id, originalName: doc.original_name, filePath })
+        queued++
+      } else if (isEmbeddingEnabled() && getDocVectorCount(doc.id) === 0) {
+        // FTS 已就绪但向量缺失 — 后台补生成
+        const txtPath = filePath.replace(/\.[^.]+$/i, '.txt')
+        const readPath = fs.existsSync(txtPath) ? txtPath : filePath
+        try {
+          const text = fs.readFileSync(readPath, 'utf-8')
+          void generateAndStoreEmbeddings(doc.id, kb.id, doc.original_name, readPath, text)
+          embQueued++
+        } catch { /* 跳过无法读取的文件 */ }
+      }
     }
   }
-  if (total > 0) console.log(`[FTS5] 已排队补建索引：${queued}/${total} 个文档`)
+  if (total > 0) {
+    console.log(`[index] 已排队补建 FTS 索引：${queued}/${total} 个文档`)
+    if (embQueued > 0) console.log(`[embedding] 已排队补生成向量：${embQueued} 个文档`)
+  }
 }
 
 // ── 启动 ──────────────────────────────────────────────
