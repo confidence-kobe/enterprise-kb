@@ -21,8 +21,11 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
          countConversations, pinConversation, getKbStats, searchConversations,
          indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
-         updateDocIndexStatus, createAuditEvent, listAuditEvents } from './db.js'
+         updateDocIndexStatus, createAuditEvent, listAuditEvents,
+         storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
+import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
+import { chunkDocument } from './documentChunker.js'
 import { requireAuth, requireAdmin, signToken, verifyPassword, hashPassword } from './auth.js'
 import type { AuthRequest } from './auth.js'
 import { LLMExecutor } from './executor.js'
@@ -38,6 +41,43 @@ async function extractPdfText(filePath: string): Promise<string> {
   const pdfParse: any = (await import('pdf-parse')).default
   const data = await pdfParse(buf)
   return data.text as string
+}
+
+async function extractDocxText(filePath: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mammoth: any = (await import('mammoth')).default
+  const result = await mammoth.extractRawText({ path: filePath })
+  return result.value as string
+}
+
+async function extractXlsxText(filePath: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ExcelJS: any = (await import('exceljs')).default
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.readFile(filePath)
+  const lines: string[] = []
+  workbook.eachSheet((sheet: any) => {
+    lines.push(`[工作表: ${sheet.name}]`)
+    sheet.eachRow((row: any) => {
+      const cells: string[] = []
+      row.eachCell({ includeEmpty: false }, (cell: any) => {
+        const v = cell.value
+        if (v === null || v === undefined) return
+        if (typeof v === 'object' && 'text' in v) cells.push(String(v.text))
+        else if (typeof v === 'object' && 'result' in v) cells.push(String(v.result ?? ''))
+        else if (typeof v === 'object' && v instanceof Date) cells.push(v.toISOString().slice(0, 10))
+        else cells.push(String(v))
+      })
+      if (cells.length) lines.push(cells.join('\t'))
+    })
+  })
+  return lines.join('\n')
+}
+
+async function extractPptxText(filePath: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const officeParser: any = (await import('officeparser')).default
+  return await officeParser.parseOfficeAsync(filePath) as string
 }
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
@@ -134,7 +174,10 @@ const ALLOWED_EXTS = new Set([
   '.ts', '.js', '.py', '.java', '.go', '.rs',
   '.json', '.yaml', '.yml', '.toml',
   '.csv', '.html', '.xml', '.sh',
+  '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt',
 ])
+
+const OFFICE_EXTS = new Set(['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt'])
 
 const SYNC_SKIP_DIRS = new Set([
   '.git', '.svn', '.hg',
@@ -367,9 +410,25 @@ let docIndexWorkerRunning = false
 
 async function extractIndexableText(job: DocIndexJob): Promise<{ text: string; indexPath: string }> {
   const ext = path.extname(job.originalName).toLowerCase()
+  const txtPath = job.filePath.replace(/\.[^.]+$/i, '.txt')
+
   if (ext === '.pdf') {
     const text = await extractPdfText(job.filePath)
-    const txtPath = job.filePath.replace(/\.pdf$/i, '.txt')
+    fs.writeFileSync(txtPath, text, 'utf-8')
+    return { text, indexPath: txtPath }
+  }
+  if (ext === '.docx' || ext === '.doc') {
+    const text = await extractDocxText(job.filePath)
+    fs.writeFileSync(txtPath, text, 'utf-8')
+    return { text, indexPath: txtPath }
+  }
+  if (ext === '.xlsx' || ext === '.xls') {
+    const text = await extractXlsxText(job.filePath)
+    fs.writeFileSync(txtPath, text, 'utf-8')
+    return { text, indexPath: txtPath }
+  }
+  if (ext === '.pptx' || ext === '.ppt') {
+    const text = await extractPptxText(job.filePath)
     fs.writeFileSync(txtPath, text, 'utf-8')
     return { text, indexPath: txtPath }
   }
@@ -384,11 +443,39 @@ async function processDocIndexJob(job: DocIndexJob): Promise<void> {
     const { text, indexPath } = await extractIndexableText(job)
     if (!text.trim()) throw new Error('文档没有可索引文本')
     indexDocContent(job.docId, job.kbId, job.originalName, indexPath, text)
+
+    if (isEmbeddingEnabled()) {
+      void generateAndStoreEmbeddings(job.docId, job.kbId, job.originalName, indexPath, text)
+    }
   } catch (err) {
     removeDocFromIndex(job.docId)
     const message = (err as Error).message || '索引失败'
     updateDocIndexStatus(job.docId, 'error', message.slice(0, 500))
     console.warn(`[index] 文档解析失败 ${job.originalName}: ${message}`)
+  }
+}
+
+async function generateAndStoreEmbeddings(
+  docId: number,
+  kbId: number,
+  originalName: string,
+  filePath: string,
+  text: string,
+): Promise<void> {
+  try {
+    const chunks = chunkDocument(text)
+    const vectors = await embedChunks(chunks)
+    if (vectors.length) {
+      storeChunkVectors(docId, kbId, vectors.map(v => ({
+        chunkLine:    v.chunkLine,
+        embedding:    v.embedding,
+        originalName,
+        filePath,
+      })))
+      console.log(`[embedding] ${originalName}: ${vectors.length} 个 chunk 向量化完成`)
+    }
+  } catch (err) {
+    console.warn(`[embedding] 向量生成失败 ${originalName}: ${(err as Error).message}`)
   }
 }
 
@@ -886,8 +973,8 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
   const kbDir   = path.join(STORAGE_PATH, `kb_${kbId}`)
   let readPath: string
   let displayExt: string
-  if (origExt === '.pdf') {
-    readPath   = path.join(kbDir, doc.filename.replace(/\.pdf$/i, '.txt'))
+  if (origExt === '.pdf' || OFFICE_EXTS.has(origExt)) {
+    readPath   = path.join(kbDir, doc.filename.replace(/\.[^.]+$/i, '.txt'))
     displayExt = '.txt'
   } else {
     readPath   = path.join(kbDir, doc.filename)
@@ -897,7 +984,10 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
     res.status(415).json({ error: '该文件类型不支持预览', type: origExt }); return
   }
   if (!fs.existsSync(readPath)) {
-    res.status(404).json({ error: origExt === '.pdf' ? 'PDF 文本提取失败或尚未完成' : '文件不存在' }); return
+    const notReadyMsg = (origExt === '.pdf' || OFFICE_EXTS.has(origExt))
+      ? '文档文本提取失败或尚未完成'
+      : '文件不存在'
+    res.status(404).json({ error: notReadyMsg }); return
   }
   const totalBytes = fs.statSync(readPath).size
   const fd  = fs.openSync(readPath, 'r')
@@ -913,6 +1003,19 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
       ? `内容过长，仅显示前 ${(content.length / 1024).toFixed(1)} KB（共 ${(totalBytes / 1024).toFixed(1)} KB）`
       : null,
   })
+})
+
+app.get('/api/kbs/:id/docs/:docId/related', requireAuth, (req: AuthRequest, res) => {
+  const kbId  = Number(req.params.id)
+  const docId = Number(req.params.docId)
+  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
+    res.status(403).json({ error: '无权限' }); return
+  }
+  const doc = getDocById(docId)
+  if (!doc || doc.kb_id !== kbId) { res.status(404).json({ error: '文档不存在' }); return }
+  const limit = Math.min(Number(req.query.limit ?? 5), 10)
+  const related = getRelatedDocs(kbId, docId, limit)
+  res.json({ items: related, vectorsAvailable: related.length > 0 })
 })
 
 app.delete('/api/kbs/:id/docs/batch', requireAuth, async (req: AuthRequest, res) => {
@@ -990,14 +1093,21 @@ app.get('/api/kbs/:id/stats', requireAuth, (req: AuthRequest, res) => {
     }
   }
 
+  const vectoredDocs = docs.filter(d => getDocVectorCount(d.id) > 0).length
+  if (isEmbeddingEnabled()) {
+    lines.push(``, `向量覆盖：${vectoredDocs}/${docs.length} 个文档已向量化`)
+  }
+
   res.json({
     name: kb.name,
-    stats: lines.join('\n'),          // 格式化文本（给前端直接展示）
+    stats: lines.join('\n'),
     totalDocs: docs.length,
     totalFiles: fileStats.totalFiles,
     totalLines: fileStats.totalLines,
     totalSizeKB: Math.round(fileStats.totalSizeKB),
     byExtension: fileStats.byExtension,
+    vectoredDocs,
+    embeddingEnabled: isEmbeddingEnabled(),
   })
 })
 
@@ -1377,7 +1487,14 @@ async function checkLlmOnline(): Promise<boolean> {
 
 app.get('/api/config', async (_req, res) => {
   const llmOnline = await checkLlmOnline()
-  res.json({ model: currentModel, provider: LLM_PROVIDER, llmOnline, ollamaOnline: llmOnline })
+  res.json({
+    model: currentModel,
+    provider: LLM_PROVIDER,
+    llmOnline,
+    ollamaOnline: llmOnline,
+    embeddingEnabled: isEmbeddingEnabled(),
+    embeddingModel: getEmbeddingModel() || null,
+  })
 })
 
 app.get('/api/config/models', requireAuth, async (_req, res) => {
@@ -1434,20 +1551,34 @@ async function checkLLM(): Promise<void> {
 
 async function reindexExistingDocs(): Promise<void> {
   const allKbs = getAllKbs()
-  let total = 0, queued = 0
+  let total = 0, queued = 0, embQueued = 0
   for (const kb of allKbs) {
     const docs = listDocs(kb.id)
     for (const doc of docs) {
       total++
-      if (isDocIndexed(doc.id)) continue
       const kbDir = path.join(STORAGE_PATH, `kb_${kb.id}`)
       const filePath = path.join(kbDir, doc.filename)
       if (!fs.existsSync(filePath)) continue
-      enqueueDocIndex({ docId: doc.id, kbId: kb.id, originalName: doc.original_name, filePath })
-      queued++
+
+      if (!isDocIndexed(doc.id)) {
+        enqueueDocIndex({ docId: doc.id, kbId: kb.id, originalName: doc.original_name, filePath })
+        queued++
+      } else if (isEmbeddingEnabled() && getDocVectorCount(doc.id) === 0) {
+        // FTS 已就绪但向量缺失 — 后台补生成
+        const txtPath = filePath.replace(/\.[^.]+$/i, '.txt')
+        const readPath = fs.existsSync(txtPath) ? txtPath : filePath
+        try {
+          const text = fs.readFileSync(readPath, 'utf-8')
+          void generateAndStoreEmbeddings(doc.id, kb.id, doc.original_name, readPath, text)
+          embQueued++
+        } catch { /* 跳过无法读取的文件 */ }
+      }
     }
   }
-  if (total > 0) console.log(`[FTS5] 已排队补建索引：${queued}/${total} 个文档`)
+  if (total > 0) {
+    console.log(`[index] 已排队补建 FTS 索引：${queued}/${total} 个文档`)
+    if (embQueued > 0) console.log(`[embedding] 已排队补生成向量：${embQueued} 个文档`)
+  }
 }
 
 // ── 启动 ──────────────────────────────────────────────

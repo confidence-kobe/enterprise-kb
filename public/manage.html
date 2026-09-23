@@ -121,9 +121,9 @@
         </div>
           <div class="upload-hint">
             <strong>点击选择文件</strong> 或拖放到此处<br>
-            支持：.txt .md .pdf .ts .js .py .json .csv 等（单文件最大 50MB）
+            支持：.pdf .docx .xlsx .pptx .txt .md .py .js .json .csv 等（单文件最大 50MB）
           </div>
-          <input type="file" id="file-input" multiple accept=".txt,.md,.markdown,.pdf,.ts,.js,.py,.java,.go,.rs,.json,.yaml,.yml,.csv,.html,.xml,.sh,.toml" style="display:none">
+          <input type="file" id="file-input" multiple accept=".txt,.md,.markdown,.pdf,.ts,.js,.py,.java,.go,.rs,.json,.yaml,.yml,.csv,.html,.xml,.sh,.toml,.docx,.doc,.xlsx,.xls,.pptx,.ppt" style="display:none">
         </div>
         <div id="upload-progress-wrap" class="hidden">
           <div class="upload-progress-label">
@@ -360,12 +360,22 @@
           </svg>
         </button>
       </div>
-      <div class="modal-body preview-modal-body">
-        <div id="preview-truncated-hint" class="preview-truncated-hint hidden"></div>
-        <pre id="preview-content" class="preview-content">加载中…</pre>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" id="preview-modal-close2">关闭</button>
+      <div class="preview-modal-layout">
+        <div class="preview-main-pane">
+          <div class="modal-body preview-modal-body">
+            <div id="preview-truncated-hint" class="preview-truncated-hint hidden"></div>
+            <pre id="preview-content" class="preview-content">加载中…</pre>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="preview-modal-close2">关闭</button>
+          </div>
+        </div>
+        <aside class="preview-related-pane" id="preview-related-pane">
+          <div class="related-header">相关文档</div>
+          <div id="related-docs-list" class="related-docs-list">
+            <div class="related-loading">加载中…</div>
+          </div>
+        </aside>
       </div>
     </div>
   </div>

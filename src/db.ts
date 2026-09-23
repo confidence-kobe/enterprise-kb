@@ -240,6 +240,18 @@ export function initDb(dbPath: string): void {
       chunk_line    UNINDEXED,
       tokenize      = 'trigram'
     );
+
+    CREATE TABLE IF NOT EXISTS doc_chunk_vectors (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id        INTEGER NOT NULL,
+      kb_id         INTEGER NOT NULL,
+      chunk_line    INTEGER NOT NULL,
+      original_name TEXT    NOT NULL,
+      file_path     TEXT    NOT NULL,
+      embedding     BLOB    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chunk_vectors_kb  ON doc_chunk_vectors(kb_id);
+    CREATE INDEX IF NOT EXISTS idx_chunk_vectors_doc ON doc_chunk_vectors(doc_id);
   `)
 }
 
@@ -758,6 +770,7 @@ export function searchDocContent(
   kbId: number,
   query: string,
   limit = 8,
+  queryEmbedding?: Float32Array,
 ): DocSearchResult[] {
   const terms = queryTerms(query)
   if (!terms.length) return []
@@ -809,10 +822,48 @@ export function searchDocContent(
   ) as Array<Omit<SearchCandidate, 'sources'>>
   addRows(substringRows, 'substring')
 
+  // 构建向量相似度查找表（如果提供了 queryEmbedding）
+  const vectorScoreMap = new Map<string, number>()
+  if (queryEmbedding) {
+    const vectorResults = searchByVector(kbId, queryEmbedding, candidateLimit)
+    for (const vr of vectorResults) {
+      const key = `${vr.doc_id}:${vr.chunk_line}`
+      vectorScoreMap.set(key, vr.similarity)
+      // 向量命中但 FTS 未命中的 chunk — 加入候选池（需要读取内容）
+      if (!candidates.has(key)) {
+        try {
+          const row = db.prepare(
+            'SELECT content FROM doc_fts WHERE doc_id = ? AND chunk_line = ? LIMIT 1',
+          ).get(vr.doc_id, vr.chunk_line) as { content: string } | undefined
+          if (row) {
+            candidates.set(key, {
+              doc_id:        vr.doc_id,
+              original_name: vr.original_name,
+              file_path:     vr.file_path,
+              content:       row.content,
+              chunk_line:    vr.chunk_line,
+              sources:       new Set(['relaxed']),
+            })
+          }
+        } catch { /* 忽略 */ }
+      }
+    }
+  }
+
   return Array.from(candidates.values())
-    .sort((a, b) => scoreCandidate(b, query, terms) - scoreCandidate(a, query, terms)
-      || (a.fts_rank ?? 999) - (b.fts_rank ?? 999)
-      || a.chunk_line - b.chunk_line)
+    .sort((a, b) => {
+      const keyA = `${a.doc_id}:${a.chunk_line}`
+      const keyB = `${b.doc_id}:${b.chunk_line}`
+      const ftsA = scoreCandidate(a, query, terms)
+      const ftsB = scoreCandidate(b, query, terms)
+      const vecA = (vectorScoreMap.get(keyA) ?? 0) * 100   // 向量相似度 0~1 映射到 0~100
+      const vecB = (vectorScoreMap.get(keyB) ?? 0) * 100
+      const hybridA = queryEmbedding ? ftsA * 0.5 + vecA * 0.5 : ftsA
+      const hybridB = queryEmbedding ? ftsB * 0.5 + vecB * 0.5 : ftsB
+      return hybridB - hybridA
+        || (a.fts_rank ?? 999) - (b.fts_rank ?? 999)
+        || a.chunk_line - b.chunk_line
+    })
     .slice(0, limit)
     .map(candidate => ({
       original_name: candidate.original_name,
@@ -824,6 +875,131 @@ export function searchDocContent(
 
 export function removeDocFromIndex(docId: number): void {
   db.prepare('DELETE FROM doc_fts WHERE doc_id = ?').run(docId)
+  db.prepare('DELETE FROM doc_chunk_vectors WHERE doc_id = ?').run(docId)
+}
+
+// ── 向量存储与检索 ─────────────────────────────────────
+
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  let dot = 0, normA = 0, normB = 0
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    dot   += a[i] * b[i]
+    normA += a[i] * a[i]
+    normB += b[i] * b[i]
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-8)
+}
+
+export function storeChunkVectors(
+  docId: number,
+  kbId: number,
+  vectors: Array<{ chunkLine: number; embedding: Float32Array; originalName: string; filePath: string }>,
+): void {
+  db.transaction(() => {
+    db.prepare('DELETE FROM doc_chunk_vectors WHERE doc_id = ?').run(docId)
+    const ins = db.prepare(
+      'INSERT INTO doc_chunk_vectors(doc_id, kb_id, chunk_line, original_name, file_path, embedding) VALUES (?,?,?,?,?,?)',
+    )
+    for (const v of vectors) {
+      ins.run(docId, kbId, v.chunkLine, v.originalName, v.filePath, Buffer.from(v.embedding.buffer))
+    }
+  })()
+}
+
+interface VectorRow {
+  doc_id: number
+  original_name: string
+  file_path: string
+  chunk_line: number
+  embedding: Buffer
+}
+
+export interface VectorSearchResult {
+  doc_id: number
+  original_name: string
+  file_path: string
+  chunk_line: number
+  similarity: number
+}
+
+export function searchByVector(
+  kbId: number,
+  queryEmbedding: Float32Array,
+  limit = 8,
+): VectorSearchResult[] {
+  const rows = db.prepare(
+    'SELECT doc_id, original_name, file_path, chunk_line, embedding FROM doc_chunk_vectors WHERE kb_id = ?',
+  ).all(kbId) as VectorRow[]
+
+  if (!rows.length) return []
+
+  return rows
+    .map(row => {
+      const emb = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)
+      return {
+        doc_id: row.doc_id,
+        original_name: row.original_name,
+        file_path: row.file_path,
+        chunk_line: row.chunk_line,
+        similarity: cosineSimilarity(queryEmbedding, emb),
+      }
+    })
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit)
+}
+
+export function hasVectors(kbId: number): boolean {
+  return !!db.prepare('SELECT 1 FROM doc_chunk_vectors WHERE kb_id = ? LIMIT 1').get(kbId)
+}
+
+export function getDocVectorCount(docId: number): number {
+  return (db.prepare('SELECT COUNT(*) as n FROM doc_chunk_vectors WHERE doc_id = ?').get(docId) as { n: number }).n
+}
+
+export interface RelatedDoc {
+  doc_id: number
+  original_name: string
+  similarity: number
+}
+
+export function getRelatedDocs(kbId: number, docId: number, limit = 5): RelatedDoc[] {
+  // 取目标文档所有 chunk 向量
+  const srcRows = db.prepare(
+    'SELECT embedding FROM doc_chunk_vectors WHERE doc_id = ?',
+  ).all(docId) as Array<{ embedding: Buffer }>
+  if (!srcRows.length) return []
+
+  const srcVecs = srcRows.map(r =>
+    new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4),
+  )
+
+  // 取同知识库其他文档所有 chunk 向量
+  const otherRows = db.prepare(
+    'SELECT doc_id, original_name, embedding FROM doc_chunk_vectors WHERE kb_id = ? AND doc_id != ?',
+  ).all(kbId, docId) as Array<{ doc_id: number; original_name: string; embedding: Buffer }>
+  if (!otherRows.length) return []
+
+  // 计算每个 chunk 对的最大相似度，按 doc 聚合取最高分
+  const docScores = new Map<number, { name: string; score: number }>()
+  for (const row of otherRows) {
+    const tgtVec = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)
+    // 对源文档所有 chunk 取最大相似度（最相关的块代表整体相关性）
+    let maxSim = 0
+    for (const src of srcVecs) {
+      const sim = cosineSimilarity(src, tgtVec)
+      if (sim > maxSim) maxSim = sim
+    }
+    const existing = docScores.get(row.doc_id)
+    if (!existing || maxSim > existing.score) {
+      docScores.set(row.doc_id, { name: row.original_name, score: maxSim })
+    }
+  }
+
+  return Array.from(docScores.entries())
+    .map(([id, { name, score }]) => ({ doc_id: id, original_name: name, similarity: score }))
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit)
 }
 
 export function isDocIndexed(docId: number): boolean {
