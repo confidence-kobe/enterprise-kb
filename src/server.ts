@@ -22,7 +22,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          countConversations, pinConversation, getKbStats, searchConversations,
          indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
          updateDocIndexStatus, createAuditEvent, listAuditEvents,
-         storeChunkVectors, hasVectors, getDocVectorCount } from './db.js'
+         storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
 import { chunkDocument } from './documentChunker.js'
@@ -1003,6 +1003,19 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
       ? `内容过长，仅显示前 ${(content.length / 1024).toFixed(1)} KB（共 ${(totalBytes / 1024).toFixed(1)} KB）`
       : null,
   })
+})
+
+app.get('/api/kbs/:id/docs/:docId/related', requireAuth, (req: AuthRequest, res) => {
+  const kbId  = Number(req.params.id)
+  const docId = Number(req.params.docId)
+  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
+    res.status(403).json({ error: '无权限' }); return
+  }
+  const doc = getDocById(docId)
+  if (!doc || doc.kb_id !== kbId) { res.status(404).json({ error: '文档不存在' }); return }
+  const limit = Math.min(Number(req.query.limit ?? 5), 10)
+  const related = getRelatedDocs(kbId, docId, limit)
+  res.json({ items: related, vectorsAvailable: related.length > 0 })
 })
 
 app.delete('/api/kbs/:id/docs/batch', requireAuth, async (req: AuthRequest, res) => {
