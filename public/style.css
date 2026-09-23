@@ -873,6 +873,15 @@ html[data-theme="dark"] .topbar-model {
   border-color: var(--border);
   color: var(--muted);
 }
+.embedding-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green, #22c55e);
+  flex-shrink: 0;
+  cursor: default;
+}
 
 .topbar-right { display: flex; align-items: center; gap: 2px; }
 
