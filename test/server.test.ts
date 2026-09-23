@@ -330,7 +330,7 @@ describe('knowledge base access control', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(404)
       .expect(res => {
-        expect(res.body).toMatchObject({ error: 'PDF 文本提取失败或尚未完成' })
+        expect(res.body).toMatchObject({ error: '文档文本提取失败或尚未完成' })
       })
   })
 
