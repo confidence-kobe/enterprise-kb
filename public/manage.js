@@ -654,36 +654,67 @@ async function previewDoc(docId, originalName) {
   const titleEl   = document.getElementById('preview-modal-title')
   const contentEl = document.getElementById('preview-content')
   const hintEl    = document.getElementById('preview-truncated-hint')
+  const relatedEl = document.getElementById('related-docs-list')
+  const relatedPane = document.getElementById('preview-related-pane')
 
   titleEl.textContent = `预览 — ${originalName}`
   contentEl.textContent = '加载中…'
   hintEl.classList.add('hidden')
+  relatedEl.innerHTML = '<div class="related-loading">加载中…</div>'
+  relatedPane.classList.remove('hidden')
   modal.classList.remove('hidden')
 
+  // 主内容与关联推荐并行加载
+  const [previewRes, relatedRes] = await Promise.allSettled([
+    fetch(`/api/kbs/${currentDocKbId}/docs/${docId}/preview`, { headers: auth() }),
+    fetch(`/api/kbs/${currentDocKbId}/docs/${docId}/related`, { headers: auth() }),
+  ])
+
+  // 渲染预览内容
   try {
-    const res = await fetch(
-      `/api/kbs/${currentDocKbId}/docs/${docId}/preview`,
-      { headers: auth() }
-    )
+    const res = previewRes.status === 'fulfilled' ? previewRes.value : null
+    if (!res) throw new Error('请求失败')
     if (res.status === 415) {
       const e = await res.json().catch(() => ({}))
       contentEl.textContent = `该文件类型（${e.type ?? ''}）不支持预览`
-      return
-    }
-    if (!res.ok) {
+    } else if (!res.ok) {
       const e = await res.json().catch(() => ({}))
       contentEl.textContent = `加载失败：${e.error ?? res.status}`
-      return
-    }
-    const data = await res.json()
-    contentEl.textContent = data.content
-    contentEl.className = `preview-content lang-${data.displayExt.replace('.', '')}`
-    if (data.truncated && data.truncatedHint) {
-      hintEl.textContent = data.truncatedHint
-      hintEl.classList.remove('hidden')
+    } else {
+      const data = await res.json()
+      contentEl.textContent = data.content
+      contentEl.className = `preview-content lang-${data.displayExt.replace('.', '')}`
+      if (data.truncated && data.truncatedHint) {
+        hintEl.textContent = data.truncatedHint
+        hintEl.classList.remove('hidden')
+      }
     }
   } catch (e) {
     contentEl.textContent = `网络错误：${e.message}`
+  }
+
+  // 渲染关联推荐
+  try {
+    const res = relatedRes.status === 'fulfilled' ? relatedRes.value : null
+    if (!res || !res.ok) throw new Error('unavailable')
+    const data = await res.json()
+    if (!data.items?.length) {
+      relatedPane.classList.add('hidden')
+    } else {
+      relatedEl.innerHTML = data.items.map(item => `
+        <div class="related-doc-item" data-doc-id="${item.doc_id}" title="${item.original_name}">
+          <span class="related-doc-name">${item.original_name}</span>
+          <span class="related-doc-score">${Math.round(item.similarity * 100)}%</span>
+        </div>
+      `).join('')
+      relatedEl.querySelectorAll('.related-doc-item').forEach(el => {
+        el.addEventListener('click', () => {
+          previewDoc(Number(el.dataset.docId), el.querySelector('.related-doc-name').textContent)
+        })
+      })
+    }
+  } catch {
+    relatedPane.classList.add('hidden')
   }
 }
 

@@ -1760,7 +1760,74 @@ html[data-theme="dark"] .modal-close:hover { background: #21262d; }
 .pwd-modal-box       { max-width: 360px; }
 .src-modal-box       { max-width: 740px; width: 92vw; max-height: 80vh; display: flex; flex-direction: column; }
 .src-modal-box .preview-content { flex: 1; overflow: auto; max-height: none; }
-.preview-modal-box   { max-width: 840px; width: 95vw; max-height: 88vh; display: flex; flex-direction: column; }
+.preview-modal-box   { max-width: 1100px; width: 96vw; max-height: 88vh; display: flex; flex-direction: column; }
+
+/* Preview modal two-pane layout */
+.preview-modal-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.preview-main-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.preview-related-pane {
+  width: 220px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+.preview-related-pane.hidden { display: none; }
+.related-header {
+  padding: 12px 14px 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  border-bottom: 1px solid var(--border);
+}
+.related-docs-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.related-loading {
+  padding: 12px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.related-doc-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background .12s;
+}
+.related-doc-item:hover { background: var(--hover); }
+.related-doc-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.related-doc-score {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+html[data-theme="dark"] .preview-related-pane { background: var(--surface); }
 .text-doc-modal-box  { max-width: 760px; width: 96vw; max-height: 90vh; display: flex; flex-direction: column; }
 
 /* Stats content */
