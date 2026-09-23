@@ -140,6 +140,13 @@ fetch('/api/config', { headers: auth() })
     } else if (d.provider) {
       topbarModel.title = `模型供应商：${d.provider}`
     }
+    if (d.embeddingEnabled && d.embeddingModel) {
+      topbarModel.title += `\n向量搜索：${d.embeddingModel}`
+      const dot = document.createElement('span')
+      dot.className = 'embedding-dot'
+      dot.title = `语义向量搜索已启用（${d.embeddingModel}）`
+      topbarModel.after(dot)
+    }
   })
 
 loadKbs()
