@@ -21,8 +21,11 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
          countConversations, pinConversation, getKbStats, searchConversations,
          indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
-         updateDocIndexStatus, createAuditEvent, listAuditEvents } from './db.js'
+         updateDocIndexStatus, createAuditEvent, listAuditEvents,
+         storeChunkVectors, hasVectors, getDocVectorCount } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
+import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
+import { chunkDocument } from './documentChunker.js'
 import { requireAuth, requireAdmin, signToken, verifyPassword, hashPassword } from './auth.js'
 import type { AuthRequest } from './auth.js'
 import { LLMExecutor } from './executor.js'
@@ -440,11 +443,39 @@ async function processDocIndexJob(job: DocIndexJob): Promise<void> {
     const { text, indexPath } = await extractIndexableText(job)
     if (!text.trim()) throw new Error('文档没有可索引文本')
     indexDocContent(job.docId, job.kbId, job.originalName, indexPath, text)
+
+    if (isEmbeddingEnabled()) {
+      void generateAndStoreEmbeddings(job.docId, job.kbId, job.originalName, indexPath, text)
+    }
   } catch (err) {
     removeDocFromIndex(job.docId)
     const message = (err as Error).message || '索引失败'
     updateDocIndexStatus(job.docId, 'error', message.slice(0, 500))
     console.warn(`[index] 文档解析失败 ${job.originalName}: ${message}`)
+  }
+}
+
+async function generateAndStoreEmbeddings(
+  docId: number,
+  kbId: number,
+  originalName: string,
+  filePath: string,
+  text: string,
+): Promise<void> {
+  try {
+    const chunks = chunkDocument(text)
+    const vectors = await embedChunks(chunks)
+    if (vectors.length) {
+      storeChunkVectors(docId, kbId, vectors.map(v => ({
+        chunkLine:    v.chunkLine,
+        embedding:    v.embedding,
+        originalName,
+        filePath,
+      })))
+      console.log(`[embedding] ${originalName}: ${vectors.length} 个 chunk 向量化完成`)
+    }
+  } catch (err) {
+    console.warn(`[embedding] 向量生成失败 ${originalName}: ${(err as Error).message}`)
   }
 }
 
@@ -1436,7 +1467,14 @@ async function checkLlmOnline(): Promise<boolean> {
 
 app.get('/api/config', async (_req, res) => {
   const llmOnline = await checkLlmOnline()
-  res.json({ model: currentModel, provider: LLM_PROVIDER, llmOnline, ollamaOnline: llmOnline })
+  res.json({
+    model: currentModel,
+    provider: LLM_PROVIDER,
+    llmOnline,
+    ollamaOnline: llmOnline,
+    embeddingEnabled: isEmbeddingEnabled(),
+    embeddingModel: getEmbeddingModel() || null,
+  })
 })
 
 app.get('/api/config/models', requireAuth, async (_req, res) => {

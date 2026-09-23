@@ -15,6 +15,7 @@ import * as path from 'node:path'
 import { READ_ONLY_TOOLS } from '../packages/claude-tools-kit/dist/index.js'
 import { adaptTools }      from './toolAdapter.js'
 import { searchDocContent } from './db.js'
+import { isEmbeddingEnabled, generateEmbedding } from './embedding.js'
 import type OpenAI         from 'openai'
 
 // ── 类型定义 ──────────────────────────────────────────
@@ -151,11 +152,17 @@ const SearchDocsTool: LLMTool = {
   },
 
   async execute({ query, limit }, kbPath) {
-    // 从路径提取 kbId：storage/kb_<id>
     const kbId = Number(path.basename(kbPath).replace('kb_', ''))
     if (!kbId) return '无法识别知识库 ID'
 
-    const results = searchDocContent(kbId, String(query), Math.min(Number(limit ?? 8), 20))
+    const queryStr = String(query)
+    let queryEmbedding: Float32Array | undefined
+    if (isEmbeddingEnabled()) {
+      const emb = await generateEmbedding(queryStr)
+      if (emb) queryEmbedding = emb
+    }
+
+    const results = searchDocContent(kbId, queryStr, Math.min(Number(limit ?? 8), 20), queryEmbedding)
     if (!results.length) return '未找到匹配内容，请尝试换用其他关键词或使用 Grep 工具'
 
     return results
