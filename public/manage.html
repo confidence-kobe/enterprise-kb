@@ -360,12 +360,22 @@
           </svg>
         </button>
       </div>
-      <div class="modal-body preview-modal-body">
-        <div id="preview-truncated-hint" class="preview-truncated-hint hidden"></div>
-        <pre id="preview-content" class="preview-content">加载中…</pre>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" id="preview-modal-close2">关闭</button>
+      <div class="preview-modal-layout">
+        <div class="preview-main-pane">
+          <div class="modal-body preview-modal-body">
+            <div id="preview-truncated-hint" class="preview-truncated-hint hidden"></div>
+            <pre id="preview-content" class="preview-content">加载中…</pre>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="preview-modal-close2">关闭</button>
+          </div>
+        </div>
+        <aside class="preview-related-pane" id="preview-related-pane">
+          <div class="related-header">相关文档</div>
+          <div id="related-docs-list" class="related-docs-list">
+            <div class="related-loading">加载中…</div>
+          </div>
+        </aside>
       </div>
     </div>
   </div>

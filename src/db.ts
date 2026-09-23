@@ -957,6 +957,51 @@ export function getDocVectorCount(docId: number): number {
   return (db.prepare('SELECT COUNT(*) as n FROM doc_chunk_vectors WHERE doc_id = ?').get(docId) as { n: number }).n
 }
 
+export interface RelatedDoc {
+  doc_id: number
+  original_name: string
+  similarity: number
+}
+
+export function getRelatedDocs(kbId: number, docId: number, limit = 5): RelatedDoc[] {
+  // 取目标文档所有 chunk 向量
+  const srcRows = db.prepare(
+    'SELECT embedding FROM doc_chunk_vectors WHERE doc_id = ?',
+  ).all(docId) as Array<{ embedding: Buffer }>
+  if (!srcRows.length) return []
+
+  const srcVecs = srcRows.map(r =>
+    new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4),
+  )
+
+  // 取同知识库其他文档所有 chunk 向量
+  const otherRows = db.prepare(
+    'SELECT doc_id, original_name, embedding FROM doc_chunk_vectors WHERE kb_id = ? AND doc_id != ?',
+  ).all(kbId, docId) as Array<{ doc_id: number; original_name: string; embedding: Buffer }>
+  if (!otherRows.length) return []
+
+  // 计算每个 chunk 对的最大相似度，按 doc 聚合取最高分
+  const docScores = new Map<number, { name: string; score: number }>()
+  for (const row of otherRows) {
+    const tgtVec = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)
+    // 对源文档所有 chunk 取最大相似度（最相关的块代表整体相关性）
+    let maxSim = 0
+    for (const src of srcVecs) {
+      const sim = cosineSimilarity(src, tgtVec)
+      if (sim > maxSim) maxSim = sim
+    }
+    const existing = docScores.get(row.doc_id)
+    if (!existing || maxSim > existing.score) {
+      docScores.set(row.doc_id, { name: row.original_name, score: maxSim })
+    }
+  }
+
+  return Array.from(docScores.entries())
+    .map(([id, { name, score }]) => ({ doc_id: id, original_name: name, similarity: score }))
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit)
+}
+
 export function isDocIndexed(docId: number): boolean {
   const doc = getDocById(docId)
   return doc?.index_version === DOC_INDEX_VERSION
