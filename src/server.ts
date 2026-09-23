@@ -40,6 +40,43 @@ async function extractPdfText(filePath: string): Promise<string> {
   return data.text as string
 }
 
+async function extractDocxText(filePath: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mammoth: any = (await import('mammoth')).default
+  const result = await mammoth.extractRawText({ path: filePath })
+  return result.value as string
+}
+
+async function extractXlsxText(filePath: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ExcelJS: any = (await import('exceljs')).default
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.readFile(filePath)
+  const lines: string[] = []
+  workbook.eachSheet((sheet: any) => {
+    lines.push(`[工作表: ${sheet.name}]`)
+    sheet.eachRow((row: any) => {
+      const cells: string[] = []
+      row.eachCell({ includeEmpty: false }, (cell: any) => {
+        const v = cell.value
+        if (v === null || v === undefined) return
+        if (typeof v === 'object' && 'text' in v) cells.push(String(v.text))
+        else if (typeof v === 'object' && 'result' in v) cells.push(String(v.result ?? ''))
+        else if (typeof v === 'object' && v instanceof Date) cells.push(v.toISOString().slice(0, 10))
+        else cells.push(String(v))
+      })
+      if (cells.length) lines.push(cells.join('\t'))
+    })
+  })
+  return lines.join('\n')
+}
+
+async function extractPptxText(filePath: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const officeParser: any = (await import('officeparser')).default
+  return await officeParser.parseOfficeAsync(filePath) as string
+}
+
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
 
 // ── 配置 ──────────────────────────────────────────────
@@ -134,7 +171,10 @@ const ALLOWED_EXTS = new Set([
   '.ts', '.js', '.py', '.java', '.go', '.rs',
   '.json', '.yaml', '.yml', '.toml',
   '.csv', '.html', '.xml', '.sh',
+  '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt',
 ])
+
+const OFFICE_EXTS = new Set(['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt'])
 
 const SYNC_SKIP_DIRS = new Set([
   '.git', '.svn', '.hg',
@@ -367,9 +407,25 @@ let docIndexWorkerRunning = false
 
 async function extractIndexableText(job: DocIndexJob): Promise<{ text: string; indexPath: string }> {
   const ext = path.extname(job.originalName).toLowerCase()
+  const txtPath = job.filePath.replace(/\.[^.]+$/i, '.txt')
+
   if (ext === '.pdf') {
     const text = await extractPdfText(job.filePath)
-    const txtPath = job.filePath.replace(/\.pdf$/i, '.txt')
+    fs.writeFileSync(txtPath, text, 'utf-8')
+    return { text, indexPath: txtPath }
+  }
+  if (ext === '.docx' || ext === '.doc') {
+    const text = await extractDocxText(job.filePath)
+    fs.writeFileSync(txtPath, text, 'utf-8')
+    return { text, indexPath: txtPath }
+  }
+  if (ext === '.xlsx' || ext === '.xls') {
+    const text = await extractXlsxText(job.filePath)
+    fs.writeFileSync(txtPath, text, 'utf-8')
+    return { text, indexPath: txtPath }
+  }
+  if (ext === '.pptx' || ext === '.ppt') {
+    const text = await extractPptxText(job.filePath)
     fs.writeFileSync(txtPath, text, 'utf-8')
     return { text, indexPath: txtPath }
   }
@@ -886,8 +942,8 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
   const kbDir   = path.join(STORAGE_PATH, `kb_${kbId}`)
   let readPath: string
   let displayExt: string
-  if (origExt === '.pdf') {
-    readPath   = path.join(kbDir, doc.filename.replace(/\.pdf$/i, '.txt'))
+  if (origExt === '.pdf' || OFFICE_EXTS.has(origExt)) {
+    readPath   = path.join(kbDir, doc.filename.replace(/\.[^.]+$/i, '.txt'))
     displayExt = '.txt'
   } else {
     readPath   = path.join(kbDir, doc.filename)
@@ -897,7 +953,10 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
     res.status(415).json({ error: '该文件类型不支持预览', type: origExt }); return
   }
   if (!fs.existsSync(readPath)) {
-    res.status(404).json({ error: origExt === '.pdf' ? 'PDF 文本提取失败或尚未完成' : '文件不存在' }); return
+    const notReadyMsg = (origExt === '.pdf' || OFFICE_EXTS.has(origExt))
+      ? '文档文本提取失败或尚未完成'
+      : '文件不存在'
+    res.status(404).json({ error: notReadyMsg }); return
   }
   const totalBytes = fs.statSync(readPath).size
   const fd  = fs.openSync(readPath, 'r')
