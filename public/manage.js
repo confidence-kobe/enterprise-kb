@@ -150,49 +150,101 @@ function applyInitialManageRoute() {
 
 function renderKbList() {
   kbList.innerHTML = ''
+
+  // Stats dashboard row
+  const totalDocs  = allKbs.reduce((s, k) => s + (k.doc_count  ?? 0), 0)
+  const totalConvs = allKbs.reduce((s, k) => s + (k.conv_count ?? 0), 0)
+  const statsRow = document.createElement('div')
+  statsRow.className = 'manage-stats-row'
+  statsRow.innerHTML = `
+    <div class="manage-stat-card accent">
+      <div class="manage-stat-value">${allKbs.length}</div>
+      <div class="manage-stat-label">知识库总数</div>
+    </div>
+    <div class="manage-stat-card">
+      <div class="manage-stat-value">${totalDocs.toLocaleString()}</div>
+      <div class="manage-stat-label">文档总数</div>
+    </div>
+    <div class="manage-stat-card">
+      <div class="manage-stat-value">${totalConvs.toLocaleString()}</div>
+      <div class="manage-stat-label">历史对话</div>
+    </div>
+  `
+  kbList.appendChild(statsRow)
+
   if (!allKbs.length) {
-    kbList.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">暂无知识库，点击「新建」创建第一个</div></div>'
+    const empty = document.createElement('div')
+    empty.className = 'empty-state'
+    empty.innerHTML = '<div class="empty-state-icon">📭</div><div class="empty-state-text">暂无知识库，点击「新建知识库」创建第一个</div>'
+    kbList.appendChild(empty)
     return
   }
 
+  const grid = document.createElement('div')
+  grid.className = 'kb-card-grid'
+  kbList.appendChild(grid)
+
+  // Accent color palette cycling by kb.id
+  const palette = [
+    { bar: '#1e40af', icon: '#1e40af', bg: 'rgba(30,64,175,.08)', border: 'rgba(30,64,175,.2)' },
+    { bar: '#7c3aed', icon: '#7c3aed', bg: 'rgba(124,58,237,.08)', border: 'rgba(124,58,237,.2)' },
+    { bar: '#0891b2', icon: '#0891b2', bg: 'rgba(8,145,178,.08)',  border: 'rgba(8,145,178,.2)'  },
+    { bar: '#059669', icon: '#059669', bg: 'rgba(5,150,105,.08)',  border: 'rgba(5,150,105,.2)'  },
+    { bar: '#d97706', icon: '#d97706', bg: 'rgba(217,119,6,.08)',  border: 'rgba(217,119,6,.2)'  },
+    { bar: '#db2777', icon: '#db2777', bg: 'rgba(219,39,119,.08)', border: 'rgba(219,39,119,.2)' },
+  ]
+
   for (const kb of allKbs) {
+    const c = palette[kb.id % palette.length]
+    const isOwner = kb.owner_id === user.id || isAdmin
+
     const card = document.createElement('div')
     card.className = 'kb-card'
-    const isOwner = kb.owner_id === user.id || isAdmin
     card.innerHTML = `
-      <div class="kb-card-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18">
-          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-        </svg>
-      </div>
-      <div class="kb-card-body">
-        <div class="kb-card-name">
-          ${escHtml(kb.name)}
-          ${kb.is_public ? '<span class="badge badge-public">公开</span>' : ''}
+      <div class="kb-card-accent-bar" style="background:${c.bar}"></div>
+      <div class="kb-card-inner">
+        <div class="kb-card-header">
+          <div class="kb-card-icon" style="color:${c.icon};background:${c.bg};border-color:${c.border}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            </svg>
+          </div>
+          <div class="kb-card-title-area">
+            <div class="kb-card-name">
+              ${escHtml(kb.name)}
+              ${kb.is_public ? '<span class="badge badge-public">公开</span>' : ''}
+            </div>
+            ${kb.description ? `<div class="kb-card-desc">${escHtml(kb.description)}</div>` : '<div class="kb-card-desc" style="color:var(--light)">暂无描述</div>'}
+          </div>
         </div>
-        ${kb.description ? `<div class="kb-card-desc">${escHtml(kb.description)}</div>` : ''}
-        <div class="kb-card-meta">
-          ID: ${kb.id} · 创建于 ${fmtTime(kb.created_at)}
-          <span class="kb-stat-chip">文档 ${kb.doc_count ?? 0}</span>
-          <span class="kb-stat-chip">对话 ${kb.conv_count ?? 0}</span>
-          ${kb.last_active ? `<span class="kb-stat-chip">活跃 ${fmtTime(kb.last_active)}</span>` : ''}
+        <div class="kb-card-stats">
+          <span class="kb-stat-pill">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="11" height="11"><path d="M9 1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5L9 1z"/><polyline points="9 1 9 5 13 5"/></svg>
+            ${kb.doc_count ?? 0} 文档
+          </span>
+          <span class="kb-stat-pill">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="11" height="11"><path d="M14 1H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l3 3 3-3h3a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1z"/></svg>
+            ${kb.conv_count ?? 0} 对话
+          </span>
+          ${kb.last_active ? `<span class="kb-stat-pill">活跃 ${fmtTime(kb.last_active)}</span>` : ''}
+          <span class="kb-stat-pill" style="margin-left:auto;color:var(--light);font-size:10.5px">ID ${kb.id} · ${fmtTime(kb.created_at)}</span>
         </div>
-      </div>
-      <div class="kb-card-actions">
-        <button class="btn btn-primary btn-sm" data-action="open-chat" data-id="${kb.id}">进入问答</button>
-        ${isOwner ? `
-          <button class="btn btn-secondary btn-sm" data-action="edit" data-id="${kb.id}">编辑</button>
-          <button class="btn btn-secondary btn-sm" data-action="members" data-id="${kb.id}">成员</button>
-          <button class="btn btn-secondary btn-sm" data-action="toggle-public" data-id="${kb.id}" data-public="${kb.is_public ? '1' : '0'}">
-            ${kb.is_public ? '设为私有' : '设为公开'}
-          </button>
-          <button class="btn btn-danger btn-sm" data-action="delete-kb" data-id="${kb.id}">删除</button>
-        ` : ''}
+        <div class="kb-card-actions">
+          <button class="btn btn-primary btn-sm" data-action="open-chat" data-id="${kb.id}">进入问答</button>
+          ${isOwner ? `
+            <button class="btn btn-secondary btn-sm" data-action="edit" data-id="${kb.id}">编辑</button>
+            <button class="btn btn-secondary btn-sm" data-action="members" data-id="${kb.id}">成员</button>
+            <button class="btn btn-secondary btn-sm" data-action="toggle-public" data-id="${kb.id}" data-public="${kb.is_public ? '1' : '0'}">
+              ${kb.is_public ? '设为私有' : '设为公开'}
+            </button>
+            <button class="btn btn-danger btn-sm" data-action="delete-kb" data-id="${kb.id}">删除</button>
+          ` : ''}
+        </div>
       </div>
     `
-    kbList.appendChild(card)
+    grid.appendChild(card)
   }
-
 }
 
 function openKbChat(id) {
@@ -372,6 +424,16 @@ function docSourceBadge(doc) {
   return `<span class="doc-source doc-source-sync"${title}>同步</span>`
 }
 
+function vectorBadge(doc) {
+  // Show vector coverage if the doc object exposes chunk/vec counts
+  const chunks = doc.chunk_count ?? doc.chunks ?? 0
+  const vecs   = doc.vec_count  ?? doc.vecs   ?? 0
+  if (!chunks) return ''
+  const pct = Math.round((vecs / chunks) * 100)
+  const cls  = pct >= 90 ? 'vec-badge-full' : pct >= 40 ? 'vec-badge-partial' : 'vec-badge-low'
+  return `<span class="doc-vec-badge ${cls}" title="向量覆盖率 ${pct}%（${vecs}/${chunks} 块）">⚡ ${pct}%</span>`
+}
+
 async function loadDocs(append = false) {
   if (!currentDocKbId) return
   if (docRefreshTimer) {
@@ -395,6 +457,10 @@ async function loadDocs(append = false) {
     docTotal = data.total ?? docs.length
   }
 
+  // Show / hide table header
+  const tableHeader = document.getElementById('doc-table-header')
+  if (tableHeader) tableHeader.style.display = !docs.length && !append ? 'none' : ''
+
   if (!docs.length && !append) {
     docList.innerHTML = '<div class="empty-state" style="padding:24px"><div class="empty-state-icon">📄</div><div class="empty-state-text">暂无文档，请上传</div></div>'
     document.getElementById('doc-bulk-bar').classList.add('hidden')
@@ -404,16 +470,18 @@ async function loadDocs(append = false) {
 
   for (const doc of docs) {
     const item = document.createElement('div')
-    item.className = 'doc-item'
+    item.className = 'doc-row'
+    const vecBadge = vectorBadge(doc)
     item.innerHTML = `
       <input type="checkbox" class="doc-cb" data-cb-id="${doc.id}">
-      <span style="color:var(--light);flex-shrink:0"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M9 1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5L9 1z"/><polyline points="9 1 9 5 13 5"/></svg></span>
-      <span class="doc-name" title="${escHtml(doc.original_name)}">${escHtml(doc.original_name)}</span>
-      ${docSourceBadge(doc)}
+      <span class="doc-name" title="${escHtml(doc.original_name)}">${escHtml(doc.original_name)}${doc.source_type === 'sync' ? ' <span class="doc-source" title="本地同步">同步</span>' : ''}</span>
       ${docStatusBadge(doc)}
       <span class="doc-size">${fmtSize(doc.size)}</span>
-      <button class="btn btn-secondary btn-sm" data-preview-id="${doc.id}">预览</button>
-      <button class="btn btn-danger btn-sm" data-doc-id="${doc.id}">删除</button>
+      <span>${vecBadge}</span>
+      <div class="doc-row-actions">
+        <button class="btn btn-secondary btn-sm" data-preview-id="${doc.id}" title="预览文档内容">预览</button>
+        <button class="btn btn-danger btn-sm" data-doc-id="${doc.id}" title="删除文档">删除</button>
+      </div>
     `
     const cb = item.querySelector('.doc-cb')
     cb.checked = selectedDocIds.has(doc.id)
@@ -443,6 +511,7 @@ async function loadDocs(append = false) {
   }
 
   document.getElementById('doc-bulk-bar').classList.remove('hidden')
+  if (tableHeader) tableHeader.style.display = ''
   if (!append) { selectedDocIds.clear(); updateBulkBar(); syncSelectAllCheckbox() }
   updateBulkBar()
   const hasActiveIndexJobs = docs.some(doc => ['pending', 'processing'].includes(doc.index_status))
@@ -492,7 +561,7 @@ function initDocBulk() {
       const data = await res.json()
       showToast(`已删除 ${data.deleted} 个文档`, 'success')
       selectedDocIds.clear()
-      loadDocs(currentDocKbId)
+      loadDocs()
     } catch { showToast('网络错误', 'error') }
   })
 }

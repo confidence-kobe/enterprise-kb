@@ -288,7 +288,7 @@ async function selectKb(kb) {
   sendBtn.title = llmOnline ? '发送' : '模型服务连接失败，无法发送'
   statsBtn.disabled = false
   exportBtn.disabled = history.length === 0
-  inputEl.placeholder = `在「${kb.name}」中提问…`
+  inputEl.placeholder = `在「${kb.name}」中提问，Enter 发送`
 
   // 欢迎屏
   welcomeEl.classList.remove('hidden')
@@ -310,6 +310,7 @@ async function selectKb(kb) {
   convSection.classList.remove('hidden')
   convSearchWrap.classList.remove('hidden')
   sidebarConvs.classList.remove('hidden')
+  document.getElementById('new-conv-btn').classList.remove('hidden')
   convSearchEl.value = ''
   await loadConversations(kb.id)
 }
@@ -447,6 +448,7 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
   const decoder = new TextDecoder()
   let buf = ''
   let lastToolBody = null
+  let lastToolStatus = null
 
   while (true) {
     const { done, value } = await reader.read()
@@ -464,8 +466,9 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
 
       switch (ev.type) {
         case 'tool_call': {
-          const { el, body } = addToolCall(toolsLog, ev.name, ev.input)
+          const { el, body, statusSpan } = addToolCall(toolsLog, ev.name, ev.input)
           lastToolBody = body
+          lastToolStatus = statusSpan
           scrollBottom()
           break
         }
@@ -474,6 +477,10 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
             const preview = ev.output?.split('\n').slice(0, 5).join('\n') ?? ''
             lastToolBody.textContent = preview || '（空结果）'
             lastToolBody.className = `tool-call-body ${ev.isError ? 'tool-err' : 'tool-ok'}`
+          }
+          if (lastToolStatus) {
+            lastToolStatus.textContent = ev.isError ? '失败' : '完成'
+            lastToolStatus.className = `tool-call-status ${ev.isError ? 'tool-status-err' : 'tool-status-ok'}`
           }
           break
         }
@@ -520,8 +527,7 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
 function appendUserMessage(text) {
   const row = document.createElement('div')
   row.className = 'msg-user'
-  const initials = (user?.username || 'U').slice(0, 1).toUpperCase()
-  row.innerHTML = `<div class="msg-user-avatar">${initials}</div><div class="msg-user-text">${escHtml(text).replace(/\n/g, '<br>')}</div>`
+  row.innerHTML = `<div class="msg-user-bubble">${escHtml(text).replace(/\n/g, '<br>')}</div>`
   messagesEl.appendChild(row)
   scrollBottom()
 }
@@ -529,6 +535,15 @@ function appendUserMessage(text) {
 function appendAssistantSkeleton() {
   const row = document.createElement('div')
   row.className = 'msg-assistant'
+
+  // Avatar
+  const avatar = document.createElement('div')
+  avatar.className = 'msg-ai-avatar'
+  avatar.textContent = 'AI'
+
+  // Content card
+  const content = document.createElement('div')
+  content.className = 'msg-ai-content'
 
   const toolsLog = document.createElement('div')
   toolsLog.className = 'tools-log'
@@ -559,7 +574,8 @@ function appendAssistantSkeleton() {
   })
   meta.appendChild(copyBtn)
 
-  row.append(toolsLog, responseText, meta)
+  content.append(toolsLog, responseText, meta)
+  row.append(avatar, content)
   messagesEl.appendChild(row)
   scrollBottom()
 
@@ -571,7 +587,11 @@ function addToolCall(container, name, input) {
   el.className = 'tool-call'
 
   const summary = document.createElement('summary')
-  summary.innerHTML = `<span class="tool-toggle">▶</span>🔍 <strong>${escHtml(name)}</strong> ${summarizeInput(name, input)}`
+  const statusSpan = document.createElement('span')
+  statusSpan.className = 'tool-call-status tool-status-wait'
+  statusSpan.textContent = '执行中'
+  summary.innerHTML = `<span class="tool-toggle">▶</span><span class="tool-call-label">🔍 ${escHtml(name)} ${summarizeInput(name, input)}</span>`
+  summary.appendChild(statusSpan)
 
   const body = document.createElement('div')
   body.className = 'tool-call-body tool-wait'
@@ -579,7 +599,7 @@ function addToolCall(container, name, input) {
 
   el.append(summary, body)
   container.appendChild(el)
-  return { el, body }
+  return { el, body, statusSpan }
 }
 
 function shortenPath(p) {
@@ -653,6 +673,8 @@ function renderMd(el, raw, streaming) {
     if (docId) {
       c.dataset.docId = docId
       c.addEventListener('click', () => openSrcPreview(docId, m[1], line))
+    } else {
+      c.addEventListener('click', () => showToast(`文档 "${m[1]}" 暂无预览`, 'error'))
     }
   })
 }
@@ -808,34 +830,82 @@ async function loadConversations(kbId, reset = true) {
   }
 }
 
+function convDateGroup(ts) {
+  const d = new Date(typeof ts === 'number' && ts < 1e12 ? ts * 1000 : ts)
+  const now = new Date()
+  const diffDays = Math.floor((now - d) / 86400000)
+  if (diffDays < 1) return '今天'
+  if (diffDays < 2) return '昨天'
+  if (diffDays < 7) return '最近 7 天'
+  if (diffDays < 30) return '最近 30 天'
+  return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`
+}
+
 function renderConversations() {
   sidebarConvs.innerHTML = ''
   if (!conversations.length) {
     sidebarConvs.innerHTML = `
-      <div class="no-kb-hint" style="font-size:12px;text-align:center;padding:12px 8px">
-        暂无对话<br>
-        <button onclick="document.getElementById('new-conv-btn').click()"
-                style="margin-top:6px;font-size:11.5px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0">
-          点击 ＋ 开始第一个对话
-        </button>
+      <div class="no-kb-hint" style="font-size:12px;text-align:center;padding:16px 8px;color:var(--sb-muted)">
+        暂无对话记录<br>
+        <span style="font-size:11px;opacity:.6">点击上方按钮开始第一个对话</span>
       </div>`
     return
   }
-  for (const conv of conversations) {
-    const btn = document.createElement('button')
-    btn.className = 'conv-item'
-    btn.dataset.id = conv.id
-    const isPinned = Boolean(conv.is_pinned)
-    const isChecked = selectedConvIds.has(conv.id)
-    btn.innerHTML = `
-      <input type="checkbox" class="conv-item-cb ${convBulkMode ? 'visible' : ''}"
-             data-id="${conv.id}" ${isChecked ? 'checked' : ''} title="选择">
-      <span class="conv-item-icon">${isPinned ? '⭐' : '💬'}</span>
-      <span class="conv-item-title">${escHtml(conv.title)}</span>
-      <button class="conv-item-pin ${isPinned ? 'pinned' : ''}" data-id="${conv.id}"
-              title="${isPinned ? '取消收藏' : '收藏对话'}">★</button>
-      <button class="conv-item-del" data-id="${conv.id}" title="删除对话">×</button>
-    `
+
+  // 分组：收藏 + 按日期
+  const pinned = conversations.filter(c => c.is_pinned)
+  const unpinned = conversations.filter(c => !c.is_pinned)
+
+  let lastGroup = null
+  const renderGroup = (label) => {
+    const el = document.createElement('div')
+    el.className = 'conv-date-group'
+    el.textContent = label
+    sidebarConvs.appendChild(el)
+  }
+
+  if (pinned.length) {
+    renderGroup('收藏')
+    pinned.forEach(conv => appendConvItem(conv))
+  }
+
+  for (const conv of unpinned) {
+    const group = convDateGroup(conv.updated_at ?? conv.created_at)
+    if (group !== lastGroup) { renderGroup(group); lastGroup = group }
+    appendConvItem(conv)
+  }
+
+  if (convHasMore) {
+    const loadMoreBtn = document.createElement('button')
+    loadMoreBtn.className = 'conv-load-more'
+    loadMoreBtn.textContent = '加载更多…'
+    loadMoreBtn.addEventListener('click', () => {
+      if (!currentKb || convLoading) return
+      loadConversations(currentKb.id, false)
+    })
+    sidebarConvs.appendChild(loadMoreBtn)
+  }
+  updateConvHighlight()
+}
+
+function appendConvItem(conv) {
+  const btn = document.createElement('button')
+  btn.className = 'conv-item'
+  btn.dataset.id = conv.id
+  const isPinned = Boolean(conv.is_pinned)
+  const isChecked = selectedConvIds.has(conv.id)
+  btn.innerHTML = `
+    <input type="checkbox" class="conv-item-cb ${convBulkMode ? 'visible' : ''}"
+           data-id="${conv.id}" ${isChecked ? 'checked' : ''} title="选择">
+    <span class="conv-item-icon">${isPinned
+      ? `<svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11" style="color:#fbbf24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="11" height="11"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`
+    }</span>
+    <span class="conv-item-title">${escHtml(conv.title)}</span>
+    <button class="conv-item-pin ${isPinned ? 'pinned' : ''}" data-id="${conv.id}"
+            title="${isPinned ? '取消收藏' : '收藏对话'}">★</button>
+    <button class="conv-item-del" data-id="${conv.id}" title="删除对话">×</button>
+  `
     btn.addEventListener('click', e => {
       if (e.target.closest('.conv-item-del') || e.target.closest('.conv-item-pin')) return
       if (convBulkMode) {
@@ -885,19 +955,7 @@ function renderConversations() {
       e.stopPropagation()
       startEditConvTitle(btn, conv)
     })
-    sidebarConvs.appendChild(btn)
-  }
-  if (convHasMore) {
-    const loadMoreBtn = document.createElement('button')
-    loadMoreBtn.className = 'conv-load-more'
-    loadMoreBtn.textContent = '加载更多…'
-    loadMoreBtn.addEventListener('click', () => {
-      if (!currentKb || convLoading) return
-      loadConversations(currentKb.id, false)
-    })
-    sidebarConvs.appendChild(loadMoreBtn)
-  }
-  updateConvHighlight()
+  sidebarConvs.appendChild(btn)
 }
 
 function updateConvHighlight() {
@@ -1157,10 +1215,18 @@ sendBtn.addEventListener('click', () => {
 })
 
 inputEl.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendQuestion() }
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault()
+    sendQuestion()
+  }
 })
 
 inputEl.addEventListener('input', resizeTextarea)
+
+// Also allow Ctrl+Enter as a secondary shortcut (in case user is used to it)
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendQuestion() }
+}, true)
 
 clearBtn.addEventListener('click', () => {
   if (!confirm('新开一轮对话？（历史记录不会删除）')) return

@@ -15,7 +15,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          listKbsForUser, getAllKbs, getKbById, createKb, deleteKb, updateKbPublic, updateKbStoragePath, updateKbMeta,
          updateKbSyncSource, updateKbSyncResult,
          canUserAccessKb, grantKbAccess, revokeKbAccess, listKbMembers,
-         listDocs, listDocsBySourceType, createDoc, updateDocFromSync, deleteDoc, getDocById,
+         listDocs, listDocsWithCounts, listDocsBySourceType, createDoc, updateDocFromSync, deleteDoc, getDocById,
          updateUserPassword, updateUserRole,
          listConversations, createConversation, updateConversationTitle, touchConversation,
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
@@ -882,7 +882,9 @@ app.get('/api/kbs/:id/docs', requireAuth, (req: AuthRequest, res) => {
   const limit  = req.query.limit  ? Math.min(Number(req.query.limit),  200) : undefined
   const offset = req.query.offset ? Number(req.query.offset) : undefined
   const total  = countDocs(kbId)
-  const items  = listDocs(kbId, limit, offset).map(doc => publicDoc(doc, kb, req.user))
+  const items  = limit != null
+    ? listDocsWithCounts(kbId, limit, offset ?? 0).map(doc => publicDoc(doc, kb, req.user))
+    : listDocs(kbId).map(doc => publicDoc(doc, kb, req.user))
   if (limit != null) {
     res.json({ items, total, hasMore: (offset ?? 0) + items.length < total })
   } else {
