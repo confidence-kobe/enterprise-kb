@@ -49,6 +49,8 @@ export interface Document {
   index_status: 'pending' | 'processing' | 'ready' | 'error'
   index_error: string | null
   indexed_at: number | null
+  chunk_count?: number
+  vec_count?: number
 }
 
 export interface Conversation {
@@ -471,6 +473,18 @@ export function listDocs(kbId: number, limit?: number, offset?: number): Documen
       .all(kbId, limit, offset ?? 0) as Document[]
   }
   return db.prepare('SELECT * FROM documents WHERE kb_id = ? ORDER BY uploaded_at DESC').all(kbId) as Document[]
+}
+
+export function listDocsWithCounts(kbId: number, limit: number, offset: number): Document[] {
+  return db.prepare(`
+    SELECT d.*,
+      (SELECT COUNT(*) FROM doc_fts WHERE doc_id = d.id) as chunk_count,
+      (SELECT COUNT(*) FROM doc_chunk_vectors WHERE doc_id = d.id) as vec_count
+    FROM documents d
+    WHERE d.kb_id = ?
+    ORDER BY d.uploaded_at DESC
+    LIMIT ? OFFSET ?
+  `).all(kbId, limit, offset) as Document[]
 }
 
 export function countDocs(kbId: number): number {

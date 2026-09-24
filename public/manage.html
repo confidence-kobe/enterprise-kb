@@ -11,8 +11,8 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=21">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=25">
 </head>
 <body class="manage-layout">
 
@@ -62,10 +62,14 @@
     <!-- 知识库标签 -->
     <div class="tab-panel active" id="tab-kbs">
       <div class="section-header">
-        <div class="section-title">知识库列表</div>
-        <button class="btn btn-primary btn-sm" id="create-kb-btn">+ 新建知识库</button>
+        <div class="section-title">知识库</div>
+        <button class="btn btn-primary" id="create-kb-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新建知识库
+        </button>
       </div>
-      <div class="item-grid" id="kb-list">
+      <!-- stats + card grid rendered by manage.js into #kb-list -->
+      <div id="kb-list">
         <div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">加载中…</div></div>
       </div>
     </div>
@@ -80,13 +84,13 @@
       </div>
 
       <div style="margin-bottom:16px">
-        <select class="input" id="doc-kb-select" style="max-width:320px">
+        <select class="input" id="doc-kb-select" style="max-width:340px">
           <option value="">— 选择知识库 —</option>
         </select>
       </div>
 
       <div id="upload-area" class="hidden">
-        <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div style="margin-bottom:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn btn-primary btn-sm" id="new-text-doc-btn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             新建文档
@@ -97,6 +101,7 @@
           <button class="btn btn-secondary btn-sm" id="reindex-btn" title="重新为所有文档建立全文检索索引">重建索引</button>
           <span id="reindex-status" style="font-size:12px;color:var(--muted)"></span>
         </div>
+
         <div class="sync-source-panel hidden" id="sync-source-panel">
           <div class="sync-source-label">本地同步</div>
           <input class="input sync-source-input" id="sync-path-input" placeholder="D:\Knowledge 或 ./docs">
@@ -104,6 +109,7 @@
           <button class="btn btn-primary btn-sm" id="sync-run-btn">立即同步</button>
           <span class="sync-source-status" id="sync-status"></span>
         </div>
+
         <div id="doc-bulk-bar" class="doc-bulk-bar hidden">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
             <input type="checkbox" id="doc-select-all">
@@ -111,20 +117,23 @@
           </label>
           <button class="btn btn-danger btn-sm" id="doc-bulk-delete-btn" disabled>批量删除</button>
         </div>
+
+        <!-- Drag & drop upload zone -->
         <div class="upload-zone" id="upload-zone">
           <div class="upload-icon">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--light)">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="17 8 12 3 7 8"/>
-            <line x1="12" y1="3" x2="12" y2="15"/>
-          </svg>
-        </div>
-          <div class="upload-hint">
-            <strong>点击选择文件</strong> 或拖放到此处<br>
-            支持：.pdf .docx .xlsx .pptx .txt .md .py .js .json .csv 等（单文件最大 50MB）
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
           </div>
+          <div class="upload-hint">
+            <strong>点击选择文件</strong> 或将文件拖放到此处
+          </div>
+          <div class="upload-hint-sub">支持 PDF · DOCX · XLSX · PPTX · TXT · MD · PY · JS · JSON · CSV 等 · 单文件最大 50 MB</div>
           <input type="file" id="file-input" multiple accept=".txt,.md,.markdown,.pdf,.ts,.js,.py,.java,.go,.rs,.json,.yaml,.yml,.csv,.html,.xml,.sh,.toml,.docx,.doc,.xlsx,.xls,.pptx,.ppt" style="display:none">
         </div>
+
         <div id="upload-progress-wrap" class="hidden">
           <div class="upload-progress-label">
             <span id="upload-progress-text">上传中…</span>
@@ -134,15 +143,28 @@
             <div class="upload-progress-bar" id="upload-progress-bar" style="width:0%"></div>
           </div>
         </div>
+
+        <!-- Doc table header -->
+        <div class="doc-table-header" id="doc-table-header" style="display:none">
+          <span></span>
+          <span>文档名称</span>
+          <span>状态</span>
+          <span>大小</span>
+          <span>向量</span>
+          <span style="text-align:right">操作</span>
+        </div>
         <div class="item-grid" id="doc-list"></div>
       </div>
     </div>
 
-    <!-- 用户管理标签（仅 admin） -->
+    <!-- 用户管理标签 -->
     <div class="tab-panel" id="tab-users">
       <div class="section-header">
         <div class="section-title">用户管理</div>
-        <button class="btn btn-primary btn-sm" id="create-user-btn">+ 新建用户</button>
+        <button class="btn btn-primary btn-sm" id="create-user-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新建用户
+        </button>
       </div>
       <div class="card" style="padding:0;overflow:hidden">
         <table class="user-table">
@@ -159,7 +181,7 @@
       </div>
     </div>
 
-    <!-- 审计日志标签（仅 admin） -->
+    <!-- 审计日志标签 -->
     <div class="tab-panel" id="tab-audit">
       <div class="section-header">
         <div class="section-title">审计日志</div>
@@ -187,7 +209,7 @@
       </div>
     </div>
 
-    <!-- 系统设置标签（仅 admin） -->
+    <!-- 系统设置标签 -->
     <div class="tab-panel" id="tab-settings">
       <div class="section-header">
         <div class="section-title">系统设置</div>
@@ -272,7 +294,7 @@
     <div class="modal-box" style="max-width:500px">
       <div class="modal-header">
         <span id="members-modal-title">成员管理</span>
-          <button class="modal-close" id="members-modal-close" aria-label="关闭">
+        <button class="modal-close" id="members-modal-close" aria-label="关闭">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
@@ -419,9 +441,7 @@
     </div>
   </div>
 
-  <!-- Toast -->
   <div id="toast" class="hidden"></div>
-
-<script src="manage.js?v=21"></script>
+  <script src="manage.js?v=22"></script>
 </body>
 </html>
