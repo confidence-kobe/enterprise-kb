@@ -249,6 +249,10 @@
           <label class="form-label">描述（可选）</label>
           <input class="input" id="kb-desc" placeholder="简短描述知识库内容">
         </div>
+        <div class="form-group" id="kb-system-prompt-group" style="display:none">
+          <label class="form-label">专属系统提示词（可选）</label>
+          <textarea class="input" id="kb-system-prompt" rows="4" placeholder="为本知识库补充自定义指令，例如回答风格、格式要求、领域背景等。留空则使用默认提示词。" style="resize:vertical;font-family:inherit;font-size:13px"></textarea>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="kb-modal-cancel">取消</button>
@@ -387,6 +391,7 @@
       <div class="preview-modal-layout">
         <div class="preview-main-pane">
           <div class="modal-body preview-modal-body">
+            <div id="preview-doc-summary" class="preview-doc-summary hidden"></div>
             <div id="preview-truncated-hint" class="preview-truncated-hint hidden"></div>
             <pre id="preview-content" class="preview-content">加载中…</pre>
           </div>
