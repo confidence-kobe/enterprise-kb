@@ -571,6 +571,10 @@ export function updateDocFromSync(data: {
   )
 }
 
+export function updateDocMeta(id: number, originalName: string, size: number): void {
+  db.prepare('UPDATE documents SET original_name = ?, size = ? WHERE id = ?').run(originalName, size, id)
+}
+
 export function updateDocIndexStatus(
   id: number,
   status: Document['index_status'],
