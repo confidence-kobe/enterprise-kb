@@ -12,7 +12,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=28">
+  <link rel="stylesheet" href="style.css?v=29">
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
 </head>
 <body class="login-page">
   <div id="tsparticles"></div>
@@ -78,58 +79,48 @@
   <script>
     if (localStorage.getItem('kb_token')) location.href = '/index.html'
 
-    ;(function () {
-      const wrap = document.getElementById('tsparticles')
-      const canvas = document.createElement('canvas')
-      canvas.style.cssText = 'display:block'
-      wrap.appendChild(canvas)
-      const ctx = canvas.getContext('2d')
+    // p5.js flow field — Perlin noise vector field
+    new p5(function (p) {
+      const N = 1400
+      const pts = []
+      let zoff = 0
 
-      // Mix of binary, hex, code symbols and katakana for sci-fi feel
-      const CHARS = '01001101010011100111001101001111ABCDEFabcdef{}[]<>/\\@#%=+-;:アイウエカキクコサシスセタチツ'
-      const FONT  = 14
-      let cols, drops, speeds
-
-      function resize () {
-        canvas.width  = window.innerWidth
-        canvas.height = window.innerHeight
-        cols   = Math.floor(canvas.width / FONT)
-        drops  = Array.from({ length: cols }, () => Math.random() * -(canvas.height / FONT) * 1.5)
-        speeds = Array.from({ length: cols }, () => 0.15 + Math.random() * 0.25)
-      }
-      resize()
-      window.addEventListener('resize', resize)
-
-      function tick () {
-        // Semi-transparent fill creates the glowing trail fade
-        ctx.fillStyle = 'rgba(4, 8, 18, 0.04)'
-        ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-        ctx.font = FONT + 'px "Courier New", monospace'
-
-        for (let i = 0; i < cols; i++) {
-          const y = Math.floor(drops[i]) * FONT
-          if (y < 0) { drops[i] += speeds[i]; continue }
-
-          const char = CHARS[Math.floor(Math.random() * CHARS.length)]
-
-          // Lead character — white/light blue glow
-          ctx.fillStyle = '#c8e6ff'
-          ctx.fillText(char, i * FONT, y)
-
-          // One step back — near-white fading in
-          if (drops[i] > 1) {
-            ctx.fillStyle = 'rgba(96,165,250,0.85)'
-            ctx.fillText(CHARS[Math.floor(Math.random() * CHARS.length)], i * FONT, y - FONT)
-          }
-
-          if (y > canvas.height && Math.random() > 0.97) drops[i] = 0
-          drops[i] += speeds[i]
+      p.setup = function () {
+        p.createCanvas(p.windowWidth, p.windowHeight).parent('tsparticles')
+        p.background(4, 8, 18)
+        for (let i = 0; i < N; i++) {
+          pts.push(p.createVector(p.random(p.width), p.random(p.height)))
         }
-        requestAnimationFrame(tick)
       }
-      tick()
-    }())
+
+      p.draw = function () {
+        // Low alpha overlay creates long glowing silk trails
+        p.fill(4, 8, 18, 7)
+        p.noStroke()
+        p.rect(0, 0, p.width, p.height)
+
+        for (const v of pts) {
+          const angle = p.noise(v.x * 0.0022, v.y * 0.0022, zoff) * p.TWO_PI * 4
+          const vel   = p5.Vector.fromAngle(angle)
+          vel.mult(1.6)
+
+          p.stroke(96, 165, 250, 65)
+          p.strokeWeight(1.1)
+          p.point(v.x, v.y)
+
+          v.add(vel)
+          if (v.x < 0 || v.x > p.width || v.y < 0 || v.y > p.height) {
+            v.set(p.random(p.width), p.random(p.height))
+          }
+        }
+        zoff += 0.00028
+      }
+
+      p.windowResized = function () {
+        p.resizeCanvas(p.windowWidth, p.windowHeight)
+        p.background(4, 8, 18)
+      }
+    })
 
     document.getElementById('login-form').addEventListener('submit', async e => {
       e.preventDefault()
