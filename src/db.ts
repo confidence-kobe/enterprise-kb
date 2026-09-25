@@ -29,6 +29,7 @@ export interface KnowledgeBase {
   sync_source_path: string | null
   sync_last_at: number | null
   sync_last_result: string | null
+  system_prompt: string | null
   created_at: number
 }
 
@@ -49,6 +50,7 @@ export interface Document {
   index_status: 'pending' | 'processing' | 'ready' | 'error'
   index_error: string | null
   indexed_at: number | null
+  summary: string | null
   chunk_count?: number
   vec_count?: number
 }
@@ -218,6 +220,26 @@ export function initDb(dbPath: string): void {
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN source_size INTEGER`)
   } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE knowledge_bases ADD COLUMN system_prompt TEXT`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN summary TEXT`)
+  } catch { /* column already exists */ }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS response_feedback (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      user_id     INTEGER NOT NULL,
+      rating      INTEGER NOT NULL CHECK(rating IN (1, -1)),
+      created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    )
+  `)
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_conv_user
+    ON response_feedback(conversation_id, user_id)
+  `)
 
   // Migration: unicode61 → trigram for CJK support (trigram handles 3+ char Chinese terms;
   // 2-char terms continue to be served by the existing LIKE substring fallback)
@@ -359,6 +381,10 @@ export function updateKbSyncResult(id: number, result: string): void {
         sync_last_result = ?
     WHERE id = ?
   `).run(result.slice(0, 1000), id)
+}
+
+export function updateKbSystemPrompt(id: number, systemPrompt: string | null): void {
+  db.prepare('UPDATE knowledge_bases SET system_prompt = ? WHERE id = ?').run(systemPrompt ?? null, id)
 }
 
 export function deleteKb(id: number): void {
@@ -573,6 +599,30 @@ export function updateDocFromSync(data: {
 
 export function updateDocMeta(id: number, originalName: string, size: number): void {
   db.prepare('UPDATE documents SET original_name = ?, size = ? WHERE id = ?').run(originalName, size, id)
+}
+
+export function updateDocSummary(id: number, summary: string): void {
+  db.prepare('UPDATE documents SET summary = ? WHERE id = ?').run(summary.slice(0, 300), id)
+}
+
+export function upsertFeedback(conversationId: number, userId: number, rating: 1 | -1): void {
+  db.prepare(`
+    INSERT INTO response_feedback(conversation_id, user_id, rating)
+    VALUES(?,?,?)
+    ON CONFLICT(conversation_id, user_id) DO UPDATE SET rating = excluded.rating
+  `).run(conversationId, userId, rating)
+}
+
+export function getFeedbackStats(kbId: number): { positive: number; negative: number } {
+  const row = db.prepare(`
+    SELECT
+      SUM(CASE WHEN f.rating = 1 THEN 1 ELSE 0 END) as positive,
+      SUM(CASE WHEN f.rating = -1 THEN 1 ELSE 0 END) as negative
+    FROM response_feedback f
+    JOIN conversations c ON c.id = f.conversation_id
+    WHERE c.kb_id = ?
+  `).get(kbId) as { positive: number | null; negative: number | null }
+  return { positive: row.positive ?? 0, negative: row.negative ?? 0 }
 }
 
 export function updateDocIndexStatus(
