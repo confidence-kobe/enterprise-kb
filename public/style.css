@@ -228,6 +228,7 @@ kbd {
   position: fixed;
   inset: 0;
   z-index: 0;
+  background: #060a14;
 }
 
 .login-page {

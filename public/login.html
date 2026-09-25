@@ -12,8 +12,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=26">
-  <script src="https://cdn.jsdelivr.net/npm/tsparticles-slim@2/tsparticles.slim.bundle.min.js"></script>
+  <link rel="stylesheet" href="style.css?v=27">
+  <script src="https://cdn.jsdelivr.net/npm/three@0.134/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vanta@0.5.24/dist/vanta.halo.min.js"></script>
 </head>
 <body class="login-page">
   <div id="tsparticles"></div>
@@ -79,34 +80,18 @@
   <script>
     if (localStorage.getItem('kb_token')) location.href = '/index.html'
 
-    if (typeof tsParticles !== 'undefined') {
-      tsParticles.load('tsparticles', {
-        background: { color: { value: '#080d1a' } },
-        fpsLimit: 60,
-        particles: {
-          number: { value: 110, density: { enable: true, area: 800 } },
-          color: { value: ['#3b82f6', '#60a5fa', '#818cf8', '#38bdf8'] },
-          links: {
-            enable: true, color: '#3b82f6', distance: 130,
-            opacity: 0.45, width: 1.2,
-            triangles: { enable: false }
-          },
-          move: { enable: true, speed: 0.7, outModes: { default: 'bounce' } },
-          opacity: { value: { min: 0.4, max: 0.9 }, animation: { enable: true, speed: 0.6, minimumValue: 0.3 } },
-          shape: { type: 'circle' },
-          size: { value: { min: 1.5, max: 3.5 } }
-        },
-        interactivity: {
-          events: {
-            onHover: { enable: true, mode: ['repulse', 'grab'] },
-            resize: true
-          },
-          modes: {
-            repulse: { distance: 120, duration: 0.5 },
-            grab: { distance: 160, links: { opacity: 0.8 } }
-          }
-        },
-        detectRetina: true
+    if (typeof VANTA !== 'undefined') {
+      VANTA.HALO({
+        el: '#tsparticles',
+        mouseControls: true,
+        touchControls: true,
+        gyroControls: false,
+        backgroundColor: 0x060a14,
+        baseColor: 0x1a4fd8,
+        amplitudeFactor: 2.2,
+        size: 1.6,
+        xOffset: 0.15,
+        yOffset: 0.04
       })
     }
 
