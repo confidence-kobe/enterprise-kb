@@ -23,7 +23,8 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
          updateDocMeta, updateDocSummary, updateDocIndexStatus, createAuditEvent, listAuditEvents,
          updateKbSystemPrompt, storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs,
-         upsertFeedback, getFeedbackStats } from './db.js'
+         upsertFeedback, getFeedbackStats, getAllFeedbackStats,
+         getConfig, setConfig } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
 import { chunkDocument } from './documentChunker.js'
@@ -167,6 +168,7 @@ validateRuntimeConfig()
 if (!fs.existsSync(STORAGE_PATH)) fs.mkdirSync(STORAGE_PATH, { recursive: true })
 initDb(DB_PATH)
 ensureAdmin(ADMIN_USER, ADMIN_PASS)
+currentModel = getConfig('model') ?? currentModel
 
 // ── Multer（文件上传） ─────────────────────────────────
 
@@ -666,6 +668,26 @@ function loginRateLimit(req: Request, res: Response, next: NextFunction): void {
   if (state.count >= LOGIN_MAX_ATTEMPTS) {
     res.status(429).json({ error: 'Too many login attempts. Please try again later.' })
     return
+  }
+  state.count++
+  next()
+}
+
+const QA_WINDOW_MS  = parsePositiveInt(envValue('QA_RATE_WINDOW_MS'), 60_000, 'QA_RATE_WINDOW_MS')
+const QA_MAX        = parsePositiveInt(envValue('QA_RATE_MAX'), 20, 'QA_RATE_MAX')
+const qaAttempts    = new Map<number, { count: number; resetAt: number }>()
+
+function qaRateLimit(req: AuthRequest, res: Response, next: NextFunction): void {
+  const userId = req.user?.userId
+  if (!userId) { next(); return }
+  const now = Date.now()
+  const state = qaAttempts.get(userId)
+  if (!state || state.resetAt <= now) {
+    qaAttempts.set(userId, { count: 1, resetAt: now + QA_WINDOW_MS })
+    next(); return
+  }
+  if (state.count >= QA_MAX) {
+    res.status(429).json({ error: '请求过于频繁，请稍后再试' }); return
   }
   state.count++
   next()
@@ -1311,7 +1333,7 @@ function generateTitle(question: string): string {
   return firstLine.slice(0, 30) + (firstLine.length > 30 ? '…' : '')
 }
 
-app.post('/api/kbs/:id/ask', requireAuth, async (req: AuthRequest, res) => {
+app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => {
   const kbId = Number(req.params.id)
   if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
     res.status(403).json({ error: '无权限' }); return
@@ -1417,7 +1439,7 @@ app.post('/api/kbs/:id/ask', requireAuth, async (req: AuthRequest, res) => {
 })
 
 // ── 跨知识库联合问答（无对话历史，一次性） ──────────────────
-app.post('/api/ask', requireAuth, async (req: AuthRequest, res) => {
+app.post('/api/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => {
   const userId = req.user!.userId
   const { question } = req.body as { question: string }
   if (!question?.trim()) { res.status(400).json({ error: '问题不能为空' }); return }
@@ -1533,6 +1555,10 @@ app.get('/api/search/conversations', requireAuth, (req: AuthRequest, res) => {
 })
 
 // ── 管理员路由 ────────────────────────────────────────
+
+app.get('/api/admin/feedback', requireAdmin, (_req, res) => {
+  res.json(getAllFeedbackStats())
+})
 
 app.get('/api/admin/audit', requireAdmin, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200)
@@ -1671,6 +1697,7 @@ app.patch('/api/config/model', requireAdmin, (req: AuthRequest, res) => {
   const model = (req.body?.model as string | undefined)?.trim()
   if (!model) { res.status(400).json({ error: '模型名不能为空' }); return }
   currentModel = model
+  setConfig('model', model)
   console.log(`模型已切换为：${currentModel}`)
   audit(req, 'config.model_update', 'config', { detail: { model: currentModel } })
   res.json({ ok: true, model: currentModel })

@@ -117,6 +117,7 @@ function initTabs() {
 
 /* ── 知识库列表 ────────────────────────────────────── */
 let allKbs = []
+let feedbackMap = {}   // kb_id → { positive, negative }
 let initialRouteApplied = false
 
 async function loadKbs() {
@@ -124,6 +125,18 @@ async function loadKbs() {
     const res = await fetch('/api/kbs', { headers: auth() })
     if (res.status === 401) { location.href = '/login.html'; return }
     allKbs = await res.json()
+
+    if (isAdmin) {
+      try {
+        const fr = await fetch('/api/admin/feedback', { headers: auth() })
+        if (fr.ok) {
+          const stats = await fr.json()
+          feedbackMap = {}
+          for (const s of stats) feedbackMap[s.kb_id] = s
+        }
+      } catch { /* 反馈统计不影响主流程 */ }
+    }
+
     renderKbList()
     renderDocKbSelect()
     applyInitialManageRoute()
@@ -228,6 +241,7 @@ function renderKbList() {
             ${kb.conv_count ?? 0} 对话
           </span>
           ${kb.last_active ? `<span class="kb-stat-pill">活跃 ${fmtTime(kb.last_active)}</span>` : ''}
+          ${(() => { const fb = feedbackMap[kb.id]; return (fb && (fb.positive || fb.negative)) ? `<span class="kb-stat-pill" title="用户反馈">👍 ${fb.positive} 👎 ${fb.negative}</span>` : '' })()}
           <span class="kb-stat-pill" style="margin-left:auto;color:var(--light);font-size:10.5px">ID ${kb.id} · ${fmtTime(kb.created_at)}</span>
         </div>
         <div class="kb-card-actions">

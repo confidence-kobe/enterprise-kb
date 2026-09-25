@@ -186,6 +186,14 @@ export function initDb(dbPath: string): void {
     db.exec(`ALTER TABLE conversations ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0`)
   } catch { /* 列已存在 */ }
 
+  // 系统配置表（键值对，用于持久化运行时设置）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS system_config (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `)
+
   // FTS5 全文检索索引（幂等）
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN index_version INTEGER NOT NULL DEFAULT 0`)
@@ -1126,4 +1134,42 @@ export function searchConversations(
   `).get(like, userId) as { cnt: number }
 
   return { items, total: row.cnt }
+}
+
+// ── 系统配置 ──────────────────────────────────────────
+
+export function getConfig(key: string): string | null {
+  const row = db.prepare('SELECT value FROM system_config WHERE key = ?').get(key) as { value: string } | undefined
+  return row?.value ?? null
+}
+
+export function setConfig(key: string, value: string): void {
+  db.prepare(`
+    INSERT INTO system_config (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, value)
+}
+
+// ── 反馈统计（跨全部 KB）─────────────────────────────
+
+export interface KbFeedbackStats {
+  kb_id: number
+  kb_name: string
+  positive: number
+  negative: number
+}
+
+export function getAllFeedbackStats(): KbFeedbackStats[] {
+  return db.prepare(`
+    SELECT
+      kb.id   AS kb_id,
+      kb.name AS kb_name,
+      SUM(CASE WHEN f.rating =  1 THEN 1 ELSE 0 END) AS positive,
+      SUM(CASE WHEN f.rating = -1 THEN 1 ELSE 0 END) AS negative
+    FROM response_feedback f
+    JOIN conversations c ON c.id = f.conversation_id
+    JOIN knowledge_bases kb ON kb.id = c.kb_id
+    GROUP BY kb.id
+    ORDER BY (positive + negative) DESC
+  `).all() as KbFeedbackStats[]
 }
