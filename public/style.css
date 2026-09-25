@@ -352,13 +352,13 @@ kbd {
 .login-box {
   width: 100%;
   max-width: 400px;
-  background: rgba(13, 17, 30, 0.85);
-  border: 1px solid rgba(59, 130, 246, 0.22);
+  background: rgba(10, 14, 28, 0.72);
+  border: 1px solid rgba(59, 130, 246, 0.25);
   border-radius: var(--r-lg);
   padding: 32px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(59, 130, 246, 0.08) inset;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 .login-form-header { margin-bottom: 28px; }
 .login-form-title {
@@ -399,20 +399,38 @@ kbd {
   justify-content: center;
 }
 .login-box .input { height: 42px; border-radius: var(--r-sm); }
-html[data-theme="dark"] .login-box { background: rgba(13, 17, 30, 0.85); border-color: rgba(59, 130, 246, 0.22); }
+html[data-theme="dark"] .login-box { background: rgba(10, 14, 28, 0.88); border-color: rgba(59, 130, 246, 0.25); }
 
-/* Force dark text inside login box since particles background is always dark */
+/* Login page always uses dark style — particles background is always dark */
 .login-form-title  { color: #e6edf3; }
 .login-form-sub    { color: #8b949e; }
 .login-page .form-label { color: #c9d1d9; }
+
+/* Use !important to beat html[data-theme="dark"] .input specificity */
 .login-box .input  {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(59, 130, 246, 0.25);
-  color: #e6edf3;
+  background: rgba(255, 255, 255, 0.07) !important;
+  border-color: rgba(59, 130, 246, 0.3) !important;
+  color: #e6edf3 !important;
 }
-.login-box .input::placeholder { color: #6e7681; }
-.login-box .input:focus { border-color: rgba(59, 130, 246, 0.6); background: rgba(255, 255, 255, 0.08); }
-.login-error { background: rgba(220, 38, 38, 0.12); border-color: rgba(220, 38, 38, 0.3); }
+.login-box .input::placeholder { color: #4b5563; }
+.login-box .input:focus {
+  border-color: rgba(59, 130, 246, 0.65) !important;
+  background: rgba(59, 130, 246, 0.08) !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+.login-page .login-error {
+  background: rgba(220, 38, 38, 0.14);
+  border-color: rgba(220, 38, 38, 0.35);
+  color: #fca5a5;
+}
+
+/* Subtle entrance animation for login panels */
+@keyframes login-fade-up {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.login-brand-panel { animation: login-fade-up .6s ease both; }
+.login-form-panel  { animation: login-fade-up .6s .15s ease both; }
 
 @media (max-width: 720px) {
   .login-page { flex-direction: column; }
