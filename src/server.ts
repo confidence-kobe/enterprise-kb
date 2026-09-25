@@ -21,7 +21,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
          countConversations, pinConversation, getKbStats, searchConversations,
          indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
-         updateDocIndexStatus, createAuditEvent, listAuditEvents,
+         updateDocMeta, updateDocIndexStatus, createAuditEvent, listAuditEvents,
          storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
@@ -953,6 +953,48 @@ app.post('/api/kbs/:id/docs/text', requireAuth, async (req: AuthRequest, res) =>
     detail: { title: origName, size },
   })
   res.status(201).json(doc)
+})
+
+// ── 编辑现有文本文档 ─────────────────────────────────────
+app.patch('/api/kbs/:id/docs/:docId/text', requireAuth, async (req: AuthRequest, res) => {
+  const kbId  = Number(req.params.id)
+  const docId = Number(req.params.docId)
+  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
+    res.status(403).json({ error: '无权限' }); return
+  }
+  const doc = getDocById(docId)
+  if (!doc || doc.kb_id !== kbId) { res.status(404).json({ error: '文档不存在' }); return }
+  if (doc.source_type !== 'text') { res.status(400).json({ error: '只能编辑文本文档' }); return }
+
+  const kb = getKbById(kbId)
+  if (!kb) { res.status(404).json({ error: '知识库不存在' }); return }
+
+  const { title, content } = req.body as { title?: string; content?: string }
+  if (!content?.trim()) { res.status(400).json({ error: '内容不能为空' }); return }
+
+  const kbDir    = kb.storage_path || path.join(STORAGE_PATH, `kb_${kb.id}`)
+  const filePath = path.join(kbDir, doc.filename)
+
+  let origName = doc.original_name
+  if (title?.trim()) {
+    const safeName = title.trim().replace(/[\\/:*?"<>|]/g, '_').slice(0, 80)
+    origName = safeName.endsWith('.md') ? safeName : `${safeName}.md`
+  }
+
+  fs.writeFileSync(filePath, content, 'utf-8')
+  const size = Buffer.byteLength(content, 'utf-8')
+  updateDocMeta(docId, origName, size)
+  updateDocIndexStatus(docId, 'processing')
+
+  try {
+    indexDocContent(docId, kbId, origName, filePath, content)
+  } catch (e) {
+    updateDocIndexStatus(docId, 'error', (e as Error).message.slice(0, 500))
+    console.warn('[FTS5] 索引失败:', (e as Error).message)
+  }
+
+  audit(req, 'doc.update_text', 'doc', { entityId: docId, kbId, detail: { title: origName, size } })
+  res.json({ ok: true })
 })
 
 const PREVIEW_MAX_CHARS = 10_000

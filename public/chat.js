@@ -53,6 +53,8 @@ if (!token || !user) { location.href = '/login.html' }
 let currentKb             = null
 let history               = []
 let isLoading             = false
+let abortController       = null
+let lastQuestion          = ''
 let currentConversationId = null
 let conversations         = []
 let llmOnline             = true
@@ -409,23 +411,28 @@ async function openStats() {
 }
 
 /* ── 发送问题 ──────────────────────────────────────── */
-async function sendQuestion(question) {
+async function sendQuestion(question, { skipUserMsg = false } = {}) {
   question = question || inputEl.value.trim()
   if (!question || isLoading || !currentKb) return
 
+  lastQuestion = question
   setLoading(true)
-  inputEl.value = ''
-  resizeTextarea()
-  welcomeEl.classList.add('hidden')
-
-  appendUserMessage(question)
+  if (!skipUserMsg) {
+    inputEl.value = ''
+    resizeTextarea()
+    welcomeEl.classList.add('hidden')
+    appendUserMessage(question)
+  }
   const { row, toolsLog, responseText, cursorEl, copyBtn } = appendAssistantSkeleton()
+
+  abortController = new AbortController()
 
   try {
     const res = await fetch(`/api/kbs/${currentKb.id}/ask`, {
       method: 'POST',
       headers: { ...auth(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ question, conversationId: currentConversationId }),
+      signal: abortController.signal,
     })
 
     if (res.status === 401) { location.href = '/login.html'; return }
@@ -434,16 +441,37 @@ async function sendQuestion(question) {
       throw new Error(e.error ?? `HTTP ${res.status}`)
     }
 
-    await readSSE(res, { toolsLog, responseText, cursorEl, row, copyBtn })
+    await readSSE(res, { toolsLog, responseText, cursorEl, row, copyBtn, question })
   } catch (err) {
     cursorEl.remove()
-    responseText.textContent = `⚠️ ${err.message}`
-    responseText.style.color = 'var(--red)'
+    if (err.name === 'AbortError') {
+      const raw = responseText.dataset.raw ?? ''
+      if (raw) {
+        renderMd(responseText, raw, false)
+        responseText.insertAdjacentHTML('beforeend', '<p style="color:var(--muted);font-size:12px;margin-top:8px">（已停止）</p>')
+      } else {
+        responseText.innerHTML = '<span style="color:var(--muted)">（已停止）</span>'
+      }
+    } else {
+      responseText.innerHTML = `<span style="color:var(--red)">⚠️ ${escHtml(err.message)}</span>`
+      appendRetryBtn(row, question)
+    }
     setLoading(false)
   }
 }
 
-async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBtn }) {
+function appendRetryBtn(row, question) {
+  const btn = document.createElement('button')
+  btn.className = 'msg-retry-btn'
+  btn.textContent = '↻ 重试'
+  btn.addEventListener('click', () => {
+    row.remove()
+    sendQuestion(question, { skipUserMsg: true })
+  })
+  row.querySelector('.msg-ai-body')?.appendChild(btn)
+}
+
+async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBtn, question }) {
   const reader  = response.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
@@ -512,8 +540,8 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
         }
         case 'error': {
           cursorEl.remove()
-          responseText.textContent = `⚠️ ${ev.message}`
-          responseText.style.color = 'var(--red)'
+          responseText.innerHTML = `<span style="color:var(--red)">⚠️ ${escHtml(ev.message ?? '未知错误')}</span>`
+          appendRetryBtn(row, question)
           setLoading(false)
           break
         }
@@ -681,15 +709,23 @@ function renderMd(el, raw, streaming) {
 
 /* ── 辅助 ─────────────────────────────────────────── */
 
+const SEND_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`
+const STOP_ICON = `<svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>`
+
 function setLoading(val) {
   isLoading = val
-  sendBtn.disabled = val || !currentKb || !llmOnline
   inputEl.disabled = val
   thinkingEl.classList.toggle('hidden', !val)
-  if (!val && currentKb && !llmOnline) {
-    sendBtn.title = '模型服务连接失败，无法发送'
-  } else if (!val) {
-    sendBtn.title = '发送'
+  if (val) {
+    sendBtn.disabled = false
+    sendBtn.classList.add('stop-mode')
+    sendBtn.title = '停止生成'
+    sendBtn.innerHTML = STOP_ICON
+  } else {
+    sendBtn.classList.remove('stop-mode')
+    sendBtn.disabled = !currentKb || !llmOnline
+    sendBtn.title = (currentKb && !llmOnline) ? '模型服务连接失败，无法发送' : '发送'
+    sendBtn.innerHTML = SEND_ICON
   }
 }
 
@@ -1210,6 +1246,7 @@ function startEditConvTitle(btn, conv) {
 /* ── 事件绑定 ──────────────────────────────────────── */
 
 sendBtn.addEventListener('click', () => {
+  if (isLoading) { abortController?.abort(); return }
   if (!currentKb) { showToast('请先从左侧选择一个知识库', 'error'); return }
   sendQuestion()
 })
