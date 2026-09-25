@@ -117,7 +117,8 @@ function initTabs() {
 
 /* ── 知识库列表 ────────────────────────────────────── */
 let allKbs = []
-let feedbackMap = {}   // kb_id → { positive, negative }
+let feedbackMap = {}     // kb_id → { positive, negative }
+let feedbackTotals = {}  // { positive, negative, satisfaction }
 let initialRouteApplied = false
 
 async function loadKbs() {
@@ -130,9 +131,10 @@ async function loadKbs() {
       try {
         const fr = await fetch('/api/admin/feedback', { headers: auth() })
         if (fr.ok) {
-          const stats = await fr.json()
+          const data = await fr.json()
           feedbackMap = {}
-          for (const s of stats) feedbackMap[s.kb_id] = s
+          for (const s of data.items) feedbackMap[s.kb_id] = s
+          feedbackTotals = { positive: data.total_positive, negative: data.total_negative, satisfaction: data.satisfaction }
         }
       } catch { /* 反馈统计不影响主流程 */ }
     }
@@ -169,6 +171,12 @@ function renderKbList() {
   const totalConvs = allKbs.reduce((s, k) => s + (k.conv_count ?? 0), 0)
   const statsRow = document.createElement('div')
   statsRow.className = 'manage-stats-row'
+  const satisfactionHtml = isAdmin && feedbackTotals.satisfaction != null
+    ? `<div class="manage-stat-card">
+         <div class="manage-stat-value">${feedbackTotals.satisfaction}%</div>
+         <div class="manage-stat-label">回答满意度 👍${feedbackTotals.positive} 👎${feedbackTotals.negative}</div>
+       </div>`
+    : ''
   statsRow.innerHTML = `
     <div class="manage-stat-card accent">
       <div class="manage-stat-value">${allKbs.length}</div>
@@ -182,6 +190,7 @@ function renderKbList() {
       <div class="manage-stat-value">${totalConvs.toLocaleString()}</div>
       <div class="manage-stat-label">历史对话</div>
     </div>
+    ${satisfactionHtml}
   `
   kbList.appendChild(statsRow)
 
@@ -493,7 +502,7 @@ async function loadDocs(append = false) {
     const vecBadge = vectorBadge(doc)
     item.innerHTML = `
       <input type="checkbox" class="doc-cb" data-cb-id="${doc.id}">
-      <span class="doc-name" title="${escHtml(doc.original_name)}">${escHtml(doc.original_name)}${doc.source_type === 'sync' ? ' <span class="doc-source" title="本地同步">同步</span>' : ''}</span>
+      <span class="doc-name" title="${escHtml(doc.original_name)}">${escHtml(doc.original_name)}${doc.source_type === 'sync' ? ' <span class="doc-source doc-source-sync" title="本地同步">同步</span>' : doc.source_type === 'text' ? ' <span class="doc-source doc-source-text" title="内联文本文档">文本</span>' : ''}</span>
       ${docStatusBadge(doc)}
       <span class="doc-size">${fmtSize(doc.size)}</span>
       <span>${vecBadge}</span>
