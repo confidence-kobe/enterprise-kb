@@ -479,6 +479,7 @@ async function loadDocs(append = false) {
       <span class="doc-size">${fmtSize(doc.size)}</span>
       <span>${vecBadge}</span>
       <div class="doc-row-actions">
+        ${doc.source_type === 'text' ? `<button class="btn btn-secondary btn-sm" data-edit-id="${doc.id}" data-edit-name="${escHtml(doc.original_name)}" title="编辑文档">编辑</button>` : ''}
         <button class="btn btn-secondary btn-sm" data-preview-id="${doc.id}" title="预览文档内容">预览</button>
         <button class="btn btn-danger btn-sm" data-doc-id="${doc.id}" title="删除文档">删除</button>
       </div>
@@ -493,6 +494,16 @@ async function loadDocs(append = false) {
     })
     item.querySelector('[data-preview-id]').addEventListener('click', () => previewDoc(doc.id, doc.original_name))
     item.querySelector('[data-doc-id]').addEventListener('click', () => deleteDoc(doc.id, doc.original_name))
+    if (doc.source_type === 'text') {
+      item.querySelector('[data-edit-id]')?.addEventListener('click', async () => {
+        try {
+          const r = await fetch(`/api/kbs/${currentDocKbId}/docs/${doc.id}/preview`, { headers: auth() })
+          const d = await r.json()
+          const titleWithoutExt = doc.original_name.replace(/\.md$/i, '')
+          window._openTextDocModal?.({ docId: doc.id, title: titleWithoutExt, content: d.content ?? '' })
+        } catch { showToast('加载文档失败', 'error') }
+      })
+    }
     docList.appendChild(item)
   }
 
@@ -1270,34 +1281,56 @@ function fmtSize(bytes) {
   return (bytes / 1024 / 1024).toFixed(1) + ' MB'
 }
 
-/* ── 新建文本文档 ─────────────────────────────────────── */
+/* ── 新建/编辑文本文档 ────────────────────────────────── */
 function initTextDocModal() {
   const modal      = document.getElementById('text-doc-modal')
+  const modalTitle = document.getElementById('text-doc-modal-title')
   const titleInput = document.getElementById('text-doc-title')
   const editor     = document.getElementById('text-doc-content')
+  const previewPane = document.getElementById('text-doc-preview')
   const charCount  = document.getElementById('text-doc-char-count')
   const saveBtn    = document.getElementById('text-doc-save')
   const cancelBtn  = document.getElementById('text-doc-cancel')
   const closeBtn   = document.getElementById('text-doc-modal-close')
   const openBtn    = document.getElementById('new-text-doc-btn')
 
-  function open() {
+  let editingDocId = null  // null = create mode, number = edit mode
+
+  function renderPreview(md) {
+    if (!md.trim()) {
+      previewPane.innerHTML = '<div class="text-doc-preview-empty">预览将在右侧实时显示…</div>'
+      return
+    }
+    try {
+      const html = typeof DOMPurify !== 'undefined'
+        ? DOMPurify.sanitize(marked.parse(md))
+        : marked.parse(md)
+      previewPane.innerHTML = `<div class="md-preview">${html}</div>`
+    } catch { previewPane.innerHTML = '<div class="text-doc-preview-empty">预览渲染失败</div>' }
+  }
+
+  function open(opts = {}) {
     if (!currentDocKbId) { showToast('请先选择知识库', 'error'); return }
-    titleInput.value = ''
-    editor.value = ''
-    charCount.textContent = '0 字'
+    editingDocId = opts.docId ?? null
+    modalTitle.textContent = editingDocId ? '编辑文档' : '新建文档'
+    titleInput.value = opts.title ?? ''
+    editor.value = opts.content ?? ''
+    updateCount()
+    renderPreview(editor.value)
     modal.classList.remove('hidden')
-    setTimeout(() => titleInput.focus(), 60)
+    setTimeout(() => (editingDocId ? editor.focus() : titleInput.focus()), 60)
   }
 
   function close() {
     modal.classList.add('hidden')
+    editingDocId = null
   }
 
   function updateCount() {
     const len = editor.value.length
     charCount.textContent = len.toLocaleString() + ' 字'
     charCount.style.color = len > 100000 ? 'var(--red)' : 'var(--light)'
+    renderPreview(editor.value)
   }
 
   async function save() {
@@ -1309,8 +1342,13 @@ function initTextDocModal() {
     saveBtn.textContent = '保存中…'
 
     try {
-      const res = await fetch(`/api/kbs/${currentDocKbId}/docs/text`, {
-        method:  'POST',
+      const url    = editingDocId
+        ? `/api/kbs/${currentDocKbId}/docs/${editingDocId}/text`
+        : `/api/kbs/${currentDocKbId}/docs/text`
+      const method = editingDocId ? 'PATCH' : 'POST'
+
+      const res = await fetch(url, {
+        method,
         headers: { ...auth(), 'Content-Type': 'application/json' },
         body:    JSON.stringify({ title, content }),
       })
@@ -1329,7 +1367,8 @@ function initTextDocModal() {
     }
   }
 
-  openBtn.addEventListener('click', open)
+  // 全局入口：新建
+  openBtn.addEventListener('click', () => open())
   closeBtn.addEventListener('click', close)
   cancelBtn.addEventListener('click', close)
   saveBtn.addEventListener('click', save)
@@ -1345,10 +1384,11 @@ function initTextDocModal() {
       editor.selectionStart = editor.selectionEnd = s + 2
       updateCount()
     }
-    // Ctrl/Cmd+Enter 保存
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save()
   })
 
-  // 点遮罩关闭
   modal.addEventListener('click', e => { if (e.target === modal) close() })
+
+  // 对外暴露 open，供编辑按钮调用
+  window._openTextDocModal = open
 }
