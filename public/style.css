@@ -224,21 +224,30 @@ kbd {
 }
 
 /* ── 6. Login page ──────────────────────────────────────── */
+#tsparticles {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+
 .login-page {
   min-height: 100dvh;
   display: flex;
-  background: var(--bg);
+  background: transparent;
 }
 
 .login-brand-panel {
   width: min(44vw, 520px);
   flex-shrink: 0;
-  background: #0f172a;
+  background: rgba(10, 15, 30, 0.78);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   display: flex;
   flex-direction: column;
   justify-content: center;
   padding: 64px;
   position: relative;
+  z-index: 1;
   overflow: hidden;
 }
 .login-brand-panel::before {
@@ -337,15 +346,19 @@ kbd {
   align-items: center;
   justify-content: center;
   padding: 40px 32px;
+  position: relative;
+  z-index: 1;
 }
 .login-box {
   width: 100%;
   max-width: 400px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: rgba(13, 17, 30, 0.85);
+  border: 1px solid rgba(59, 130, 246, 0.22);
   border-radius: var(--r-lg);
   padding: 32px;
-  box-shadow: var(--sh-lg);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 .login-form-header { margin-bottom: 28px; }
 .login-form-title {
@@ -386,7 +399,20 @@ kbd {
   justify-content: center;
 }
 .login-box .input { height: 42px; border-radius: var(--r-sm); }
-html[data-theme="dark"] .login-box { background: var(--surface); border-color: var(--border); }
+html[data-theme="dark"] .login-box { background: rgba(13, 17, 30, 0.85); border-color: rgba(59, 130, 246, 0.22); }
+
+/* Force dark text inside login box since particles background is always dark */
+.login-form-title  { color: #e6edf3; }
+.login-form-sub    { color: #8b949e; }
+.login-page .form-label { color: #c9d1d9; }
+.login-box .input  {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(59, 130, 246, 0.25);
+  color: #e6edf3;
+}
+.login-box .input::placeholder { color: #6e7681; }
+.login-box .input:focus { border-color: rgba(59, 130, 246, 0.6); background: rgba(255, 255, 255, 0.08); }
+.login-error { background: rgba(220, 38, 38, 0.12); border-color: rgba(220, 38, 38, 0.3); }
 
 @media (max-width: 720px) {
   .login-page { flex-direction: column; }
