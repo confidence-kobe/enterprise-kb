@@ -12,9 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=27">
-  <script src="https://cdn.jsdelivr.net/npm/three@0.134/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/vanta@0.5.24/dist/vanta.halo.min.js"></script>
+  <link rel="stylesheet" href="style.css?v=28">
 </head>
 <body class="login-page">
   <div id="tsparticles"></div>
@@ -80,20 +78,58 @@
   <script>
     if (localStorage.getItem('kb_token')) location.href = '/index.html'
 
-    if (typeof VANTA !== 'undefined') {
-      VANTA.HALO({
-        el: '#tsparticles',
-        mouseControls: true,
-        touchControls: true,
-        gyroControls: false,
-        backgroundColor: 0x060a14,
-        baseColor: 0x1a4fd8,
-        amplitudeFactor: 2.2,
-        size: 1.6,
-        xOffset: 0.15,
-        yOffset: 0.04
-      })
-    }
+    ;(function () {
+      const wrap = document.getElementById('tsparticles')
+      const canvas = document.createElement('canvas')
+      canvas.style.cssText = 'display:block'
+      wrap.appendChild(canvas)
+      const ctx = canvas.getContext('2d')
+
+      // Mix of binary, hex, code symbols and katakana for sci-fi feel
+      const CHARS = '01001101010011100111001101001111ABCDEFabcdef{}[]<>/\\@#%=+-;:アイウエカキクコサシスセタチツ'
+      const FONT  = 14
+      let cols, drops, speeds
+
+      function resize () {
+        canvas.width  = window.innerWidth
+        canvas.height = window.innerHeight
+        cols   = Math.floor(canvas.width / FONT)
+        drops  = Array.from({ length: cols }, () => Math.random() * -(canvas.height / FONT) * 1.5)
+        speeds = Array.from({ length: cols }, () => 0.5 + Math.random() * 1.2)
+      }
+      resize()
+      window.addEventListener('resize', resize)
+
+      function tick () {
+        // Semi-transparent fill creates the glowing trail fade
+        ctx.fillStyle = 'rgba(4, 8, 18, 0.07)'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+        ctx.font = FONT + 'px "Courier New", monospace'
+
+        for (let i = 0; i < cols; i++) {
+          const y = Math.floor(drops[i]) * FONT
+          if (y < 0) { drops[i] += speeds[i]; continue }
+
+          const char = CHARS[Math.floor(Math.random() * CHARS.length)]
+
+          // Lead character — white/light blue glow
+          ctx.fillStyle = '#c8e6ff'
+          ctx.fillText(char, i * FONT, y)
+
+          // One step back — near-white fading in
+          if (drops[i] > 1) {
+            ctx.fillStyle = 'rgba(96,165,250,0.85)'
+            ctx.fillText(CHARS[Math.floor(Math.random() * CHARS.length)], i * FONT, y - FONT)
+          }
+
+          if (y > canvas.height && Math.random() > 0.97) drops[i] = 0
+          drops[i] += speeds[i]
+        }
+        requestAnimationFrame(tick)
+      }
+      tick()
+    }())
 
     document.getElementById('login-form').addEventListener('submit', async e => {
       e.preventDefault()
