@@ -294,6 +294,8 @@ function initKbModal() {
     editIdEl.value = ''
     document.getElementById('kb-name').value = ''
     document.getElementById('kb-desc').value = ''
+    document.getElementById('kb-system-prompt').value = ''
+    document.getElementById('kb-system-prompt-group').style.display = 'none'
     modal.classList.remove('hidden')
     document.getElementById('kb-name').focus()
   }
@@ -309,13 +311,14 @@ function initKbModal() {
     if (!name) { alert('请输入知识库名称'); return }
 
     const editId = editIdEl.value
+    const systemPrompt = document.getElementById('kb-system-prompt').value.trim()
     let res
     if (editId) {
       // 编辑模式
       res = await fetch(`/api/kbs/${editId}`, {
         method: 'PATCH',
         headers: { ...auth(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description: desc }),
+        body: JSON.stringify({ name, description: desc, system_prompt: systemPrompt || null }),
       })
     } else {
       // 创建模式
@@ -342,6 +345,8 @@ function openKbEditModal(kb) {
   document.getElementById('kb-edit-id').value = kb.id
   document.getElementById('kb-name').value = kb.name
   document.getElementById('kb-desc').value = kb.description ?? ''
+  document.getElementById('kb-system-prompt').value = kb.system_prompt ?? ''
+  document.getElementById('kb-system-prompt-group').style.display = ''
   document.getElementById('kb-modal').classList.remove('hidden')
   document.getElementById('kb-name').focus()
 }
@@ -492,7 +497,7 @@ async function loadDocs(append = false) {
       updateBulkBar()
       syncSelectAllCheckbox()
     })
-    item.querySelector('[data-preview-id]').addEventListener('click', () => previewDoc(doc.id, doc.original_name))
+    item.querySelector('[data-preview-id]').addEventListener('click', () => previewDoc(doc.id, doc.original_name, doc.summary))
     item.querySelector('[data-doc-id]').addEventListener('click', () => deleteDoc(doc.id, doc.original_name))
     if (doc.source_type === 'text') {
       item.querySelector('[data-edit-id]')?.addEventListener('click', async () => {
@@ -729,17 +734,24 @@ function initPreviewModal() {
   modal.addEventListener('click', e => { if (e.target === modal) close() })
 }
 
-async function previewDoc(docId, originalName) {
+async function previewDoc(docId, originalName, summary) {
   const modal     = document.getElementById('preview-modal')
   const titleEl   = document.getElementById('preview-modal-title')
   const contentEl = document.getElementById('preview-content')
   const hintEl    = document.getElementById('preview-truncated-hint')
+  const summaryEl = document.getElementById('preview-doc-summary')
   const relatedEl = document.getElementById('related-docs-list')
   const relatedPane = document.getElementById('preview-related-pane')
 
   titleEl.textContent = `预览 — ${originalName}`
   contentEl.textContent = '加载中…'
   hintEl.classList.add('hidden')
+  if (summary) {
+    summaryEl.textContent = `💡 AI 摘要：${summary}`
+    summaryEl.classList.remove('hidden')
+  } else {
+    summaryEl.classList.add('hidden')
+  }
   relatedEl.innerHTML = '<div class="related-loading">加载中…</div>'
   relatedPane.classList.remove('hidden')
   modal.classList.remove('hidden')

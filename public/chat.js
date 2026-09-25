@@ -56,6 +56,7 @@ let isLoading             = false
 let abortController       = null
 let lastQuestion          = ''
 let currentConversationId = null
+const ALL_KBS_VIRTUAL     = { id: 'all', name: '全部知识库', is_public: 0, doc_count: 0 }
 let conversations         = []
 let llmOnline             = true
 let convOffset            = 0
@@ -213,6 +214,19 @@ async function loadKbs() {
       return
     }
 
+    // 全部知识库虚拟选项
+    if (kbs.length > 1) {
+      const allBtn = document.createElement('button')
+      allBtn.className = 'kb-item kb-item-all'
+      allBtn.dataset.id = 'all'
+      allBtn.innerHTML = `
+        <span class="kb-item-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="1.5" x2="8" y2="14.5"/><path d="M1.5 8h13"/><path d="M2.5 4.5C4 6 6 7 8 7s4-1 5.5-2.5M2.5 11.5C4 10 6 9 8 9s4 1 5.5 2.5"/></svg></span>
+        <span class="kb-item-name">全部知识库</span>
+      `
+      allBtn.addEventListener('click', () => selectKb(ALL_KBS_VIRTUAL))
+      sidebarKbs.appendChild(allBtn)
+    }
+
     for (const kb of kbs) {
       const btn = document.createElement('button')
       btn.className = 'kb-item'
@@ -279,21 +293,37 @@ async function selectKb(kb) {
     el.classList.toggle('active', el.dataset.id == kb.id)
   })
 
+  const isAll = kb.id === 'all'
+
   topbarKb.textContent = kb.name
-  if (welcomeKbName) welcomeKbName.textContent = kb.is_public ? '公开知识库' : '私有知识库'
   if (welcomeTitle) welcomeTitle.textContent = kb.name
+  sendBtn.disabled = !llmOnline
+  sendBtn.title = llmOnline ? '发送' : '模型服务连接失败，无法发送'
+  statsBtn.disabled = isAll
+  exportBtn.disabled = history.length === 0
+  inputEl.placeholder = isAll ? '跨所有知识库提问，Enter 发送' : `在「${kb.name}」中提问，Enter 发送`
+
+  if (isAll) {
+    if (welcomeKbName) welcomeKbName.textContent = '跨库搜索'
+    if (welcomeDocCount) welcomeDocCount.textContent = '—'
+    if (welcomeConvCount) welcomeConvCount.textContent = '—'
+    if (welcomeAccessCount) welcomeAccessCount.textContent = '—'
+    welcomeSub.textContent = '将同时搜索你可访问的全部知识库'
+    welcomeEl.classList.remove('hidden')
+    convSection.classList.add('hidden')
+    convSearchWrap.classList.add('hidden')
+    sidebarConvs.classList.add('hidden')
+    document.getElementById('new-conv-btn')?.classList.add('hidden')
+    kbDocMap.clear()
+    return
+  }
+
+  if (welcomeKbName) welcomeKbName.textContent = kb.is_public ? '公开知识库' : '私有知识库'
   if (welcomeDocCount) welcomeDocCount.textContent = kb.doc_count ?? 0
   if (welcomeConvCount) welcomeConvCount.textContent = kb.conv_count ?? 0
   if (welcomeAccessCount) welcomeAccessCount.textContent = kb.is_public ? '公开' : '受限'
   welcomeEl.classList.remove('hidden')
-  sendBtn.disabled = !llmOnline
-  sendBtn.title = llmOnline ? '发送' : '模型服务连接失败，无法发送'
-  statsBtn.disabled = false
-  exportBtn.disabled = history.length === 0
-  inputEl.placeholder = `在「${kb.name}」中提问，Enter 发送`
 
-  // 欢迎屏
-  welcomeEl.classList.remove('hidden')
   const descPart = kb.description ? `${kb.description}` : ''
   const statPart = kb.doc_count != null ? `${kb.doc_count} 份文档` : ''
   const accessPart = kb.is_public ? '公开可访问' : '成员权限控制'
@@ -423,15 +453,20 @@ async function sendQuestion(question, { skipUserMsg = false } = {}) {
     welcomeEl.classList.add('hidden')
     appendUserMessage(question)
   }
-  const { row, toolsLog, responseText, cursorEl, copyBtn } = appendAssistantSkeleton()
+  const { row, toolsLog, responseText, cursorEl, copyBtn, thumbUp, thumbDown } = appendAssistantSkeleton()
 
   abortController = new AbortController()
 
   try {
-    const res = await fetch(`/api/kbs/${currentKb.id}/ask`, {
+    const isAllKbs = currentKb.id === 'all'
+    const askUrl = isAllKbs ? '/api/ask' : `/api/kbs/${currentKb.id}/ask`
+    const askBody = isAllKbs
+      ? { question }
+      : { question, conversationId: currentConversationId }
+    const res = await fetch(askUrl, {
       method: 'POST',
       headers: { ...auth(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, conversationId: currentConversationId }),
+      body: JSON.stringify(askBody),
       signal: abortController.signal,
     })
 
@@ -441,7 +476,7 @@ async function sendQuestion(question, { skipUserMsg = false } = {}) {
       throw new Error(e.error ?? `HTTP ${res.status}`)
     }
 
-    await readSSE(res, { toolsLog, responseText, cursorEl, row, copyBtn, question })
+    await readSSE(res, { toolsLog, responseText, cursorEl, row, copyBtn, thumbUp, thumbDown, question })
   } catch (err) {
     cursorEl.remove()
     if (err.name === 'AbortError') {
@@ -471,7 +506,7 @@ function appendRetryBtn(row, question) {
   row.querySelector('.msg-ai-body')?.appendChild(btn)
 }
 
-async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBtn, question }) {
+async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBtn, thumbUp, thumbDown, question }) {
   const reader  = response.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
@@ -531,9 +566,12 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
           setLoading(false)
           scrollBottom()
           if (ev.conversationId) {
+            row.dataset.conversationId = ev.conversationId
+            if (thumbUp) thumbUp.classList.remove('hidden')
+            if (thumbDown) thumbDown.classList.remove('hidden')
             const isNew = currentConversationId === null
             currentConversationId = ev.conversationId
-            if (isNew) await loadConversations(currentKb.id)
+            if (isNew && currentKb?.id !== 'all') await loadConversations(currentKb.id)
             updateConvHighlight()
           }
           break
@@ -600,14 +638,38 @@ function appendAssistantSkeleton() {
       }, 1500)
     })
   })
-  meta.appendChild(copyBtn)
+  const thumbUp = document.createElement('button')
+  thumbUp.className = 'msg-feedback-btn hidden'
+  thumbUp.title = '有帮助'
+  thumbUp.textContent = '👍'
+
+  const thumbDown = document.createElement('button')
+  thumbDown.className = 'msg-feedback-btn hidden'
+  thumbDown.title = '没帮助'
+  thumbDown.textContent = '👎'
+
+  function submitFeedback(rating) {
+    const convId = row.dataset.conversationId
+    if (!convId) return
+    thumbUp.classList.toggle('active', rating === 1)
+    thumbDown.classList.toggle('active', rating === -1)
+    fetch(`/api/conversations/${convId}/feedback`, {
+      method: 'POST',
+      headers: { ...auth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating }),
+    }).catch(() => {})
+  }
+  thumbUp.addEventListener('click', () => submitFeedback(1))
+  thumbDown.addEventListener('click', () => submitFeedback(-1))
+
+  meta.append(copyBtn, thumbUp, thumbDown)
 
   content.append(toolsLog, responseText, meta)
   row.append(avatar, content)
   messagesEl.appendChild(row)
   scrollBottom()
 
-  return { row, toolsLog, responseText, cursorEl, copyBtn }
+  return { row, toolsLog, responseText, cursorEl, copyBtn, thumbUp, thumbDown }
 }
 
 function addToolCall(container, name, input) {

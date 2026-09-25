@@ -21,8 +21,9 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
          countConversations, pinConversation, getKbStats, searchConversations,
          indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
-         updateDocMeta, updateDocIndexStatus, createAuditEvent, listAuditEvents,
-         storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs } from './db.js'
+         updateDocMeta, updateDocSummary, updateDocIndexStatus, createAuditEvent, listAuditEvents,
+         updateKbSystemPrompt, storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs,
+         upsertFeedback, getFeedbackStats } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
 import { chunkDocument } from './documentChunker.js'
@@ -447,6 +448,7 @@ async function processDocIndexJob(job: DocIndexJob): Promise<void> {
     if (isEmbeddingEnabled()) {
       void generateAndStoreEmbeddings(job.docId, job.kbId, job.originalName, indexPath, text)
     }
+    void generateDocSummary(job.docId, job.originalName, text)
   } catch (err) {
     removeDocFromIndex(job.docId)
     const message = (err as Error).message || '索引失败'
@@ -476,6 +478,36 @@ async function generateAndStoreEmbeddings(
     }
   } catch (err) {
     console.warn(`[embedding] 向量生成失败 ${originalName}: ${(err as Error).message}`)
+  }
+}
+
+async function generateDocSummary(docId: number, originalName: string, text: string): Promise<void> {
+  try {
+    const excerpt = text.slice(0, 3000).trim()
+    if (!excerpt) return
+    const resp = await fetch(`${LLM_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${LLM_API_KEY}` },
+      body: JSON.stringify({
+        model: currentModel,
+        messages: [
+          { role: 'system', content: '你是文档摘要助手。用1-2句话（不超过100字）概括文档的核心内容，不加引导语，直接输出摘要。' },
+          { role: 'user', content: `文档名：${originalName}\n\n内容：\n${excerpt}` },
+        ],
+        max_tokens: 150,
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!resp.ok) return
+    const data = await resp.json() as { choices?: { message?: { content?: string } }[] }
+    const summary = data.choices?.[0]?.message?.content?.trim()
+    if (summary) {
+      updateDocSummary(docId, summary)
+      console.log(`[summary] ${originalName}: 摘要已生成`)
+    }
+  } catch {
+    // 摘要生成失败不影响正常索引流程
   }
 }
 
@@ -745,9 +777,10 @@ app.patch('/api/kbs/:id', requireAuth, (req: AuthRequest, res) => {
   if (kb.owner_id !== req.user!.userId && req.user!.role !== 'admin') {
     res.status(403).json({ error: '无权限修改' }); return
   }
-  const { name, description } = req.body as { name?: string; description?: string }
+  const { name, description, system_prompt } = req.body as { name?: string; description?: string; system_prompt?: string }
   if (!name?.trim()) { res.status(400).json({ error: '名称不能为空' }); return }
   updateKbMeta(kbId, name.trim(), description?.trim() ?? null)
+  if (system_prompt !== undefined) updateKbSystemPrompt(kbId, system_prompt?.trim() || null)
   audit(req, 'kb.update', 'kb', { entityId: kbId, kbId, detail: { name: name.trim() } })
   res.json({ ok: true })
 })
@@ -1338,7 +1371,7 @@ app.post('/api/kbs/:id/ask', requireAuth, async (req: AuthRequest, res) => {
     apiKey:       LLM_API_KEY,
     model:        currentModel,
     kbPath,
-    systemPrompt: buildSystemPrompt(kb.name, kbPath),
+    systemPrompt: buildSystemPrompt(kb.name, kbPath, kb.system_prompt),
     maxTurns:     MAX_TURNS,
     onEvent:      (e: QAEvent) => {
       if (!abortCtrl.signal.aborted) send(e)
@@ -1381,6 +1414,73 @@ app.post('/api/kbs/:id/ask', requireAuth, async (req: AuthRequest, res) => {
   }
 
   res.end()
+})
+
+// ── 跨知识库联合问答（无对话历史，一次性） ──────────────────
+app.post('/api/ask', requireAuth, async (req: AuthRequest, res) => {
+  const userId = req.user!.userId
+  const { question } = req.body as { question: string }
+  if (!question?.trim()) { res.status(400).json({ error: '问题不能为空' }); return }
+
+  const allKbs = listKbsForUser(userId)
+  if (!allKbs.length) { res.status(400).json({ error: '没有可访问的知识库' }); return }
+
+  const RESULTS_PER_KB = 5
+  const allResults = (await Promise.all(
+    allKbs.map(kb => {
+      try { return searchDocContent(kb.id, question, RESULTS_PER_KB) }
+      catch { return [] }
+    })
+  )).flat()
+
+  const kbPaths = allKbs.map(kb => `· ${kb.name}: ${kb.storage_path || path.join(STORAGE_PATH, `kb_${kb.id}`)}`).join('\n')
+  const systemPrompt = `你是企业全局知识库的问答助手，可访问以下知识库：\n${kbPaths}\n\n回答时必须标注来源文件和行号。知识库中无相关内容时，明确说明"知识库中未找到相关内容"，不要猜测。`
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  res.flushHeaders()
+
+  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`)
+  const keepalive = setInterval(() => { try { res.write(': keepalive\n\n') } catch { clearInterval(keepalive) } }, 15_000)
+  const abortCtrl = new AbortController()
+  res.on('close', () => { abortCtrl.abort(); clearInterval(keepalive) })
+
+  const kbPath = allKbs[0]?.storage_path || STORAGE_PATH
+  const executor = new LLMExecutor({
+    baseUrl: LLM_BASE_URL, apiKey: LLM_API_KEY, model: currentModel,
+    kbPath, systemPrompt, maxTurns: MAX_TURNS,
+    onEvent: (e: QAEvent) => { if (!abortCtrl.signal.aborted) send(e) },
+  })
+
+  try {
+    const prefillContext = allResults.length
+      ? `[跨库检索结果]\n${allResults.slice(0, 15).map(r => `[${r.original_name}:${r.chunk_line}] ${r.snippet}`).join('\n\n')}\n\n---\n`
+      : ''
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await executor.run(prefillContext + question, ALL_TOOLS, [] as any, abortCtrl.signal)
+    if (!abortCtrl.signal.aborted) {
+      send({ type: 'done', turns: result.turns, messages: result.messages, conversationId: null, context: { truncated: false } })
+    }
+  } catch (err) {
+    if (!abortCtrl.signal.aborted) send({ type: 'error', message: (err as Error).message })
+  } finally {
+    clearInterval(keepalive)
+    res.end()
+  }
+})
+
+// ── 回答质量反馈 ──────────────────────────────────────
+app.post('/api/conversations/:id/feedback', requireAuth, (req: AuthRequest, res) => {
+  const convId = Number(req.params.id)
+  const conv = getConversationById(convId)
+  if (!conv) { res.status(404).json({ error: '对话不存在' }); return }
+  if (conv.user_id !== req.user!.userId) { res.status(403).json({ error: '无权限' }); return }
+  const { rating } = req.body as { rating: 1 | -1 }
+  if (rating !== 1 && rating !== -1) { res.status(400).json({ error: 'rating 必须为 1 或 -1' }); return }
+  upsertFeedback(convId, req.user!.userId, rating)
+  res.json({ ok: true })
 })
 
 // ── 搜索路由 ──────────────────────────────────────────

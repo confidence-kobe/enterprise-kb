@@ -2,8 +2,8 @@
  * 系统提示词构建器
  */
 
-export function buildSystemPrompt(kbName: string, kbPath: string): string {
-  return `你是企业知识库「${kbName}」的专属问答助手。
+export function buildSystemPrompt(kbName: string, kbPath: string, customPrompt?: string | null): string {
+  const base = `你是企业知识库「${kbName}」的专属问答助手。
 在以下本地文档目录中精确检索信息，回答用户问题。
 
 知识库目录：${kbPath}
@@ -43,4 +43,5 @@ export function buildSystemPrompt(kbName: string, kbPath: string): string {
 
 - 只能读取文件，不能修改或创建
 - 只在知识库目录内检索，不访问外部网络`
+  return customPrompt?.trim() ? `${base}\n\n## 补充指令\n\n${customPrompt.trim()}` : base
 }
