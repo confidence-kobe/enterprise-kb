@@ -1426,6 +1426,12 @@ app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, async (req: AuthRequest, 
           truncated: trustedHistory.truncated,
         },
       })
+
+      audit(req, 'qa.ask', 'kb', {
+        entityId: kbId,
+        kbId,
+        detail: { question: question.slice(0, 200), turns: result.turns, convId: conv.id },
+      })
     }
   } catch (err) {
     if (!abortCtrl.signal.aborted) {
@@ -1484,6 +1490,9 @@ app.post('/api/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => 
     const result = await executor.run(prefillContext + question, ALL_TOOLS, [] as any, abortCtrl.signal)
     if (!abortCtrl.signal.aborted) {
       send({ type: 'done', turns: result.turns, messages: result.messages, conversationId: null, context: { truncated: false } })
+      audit(req, 'qa.ask_global', 'global', {
+        detail: { question: question.slice(0, 200), turns: result.turns, kbCount: allKbs.length },
+      })
     }
   } catch (err) {
     if (!abortCtrl.signal.aborted) send({ type: 'error', message: (err as Error).message })
@@ -1557,7 +1566,12 @@ app.get('/api/search/conversations', requireAuth, (req: AuthRequest, res) => {
 // ── 管理员路由 ────────────────────────────────────────
 
 app.get('/api/admin/feedback', requireAdmin, (_req, res) => {
-  res.json(getAllFeedbackStats())
+  const items = getAllFeedbackStats()
+  const total_positive = items.reduce((s, i) => s + i.positive, 0)
+  const total_negative = items.reduce((s, i) => s + i.negative, 0)
+  const total = total_positive + total_negative
+  const satisfaction = total > 0 ? Math.round((total_positive / total) * 100) : null
+  res.json({ items, total_positive, total_negative, satisfaction })
 })
 
 app.get('/api/admin/audit', requireAdmin, (req, res) => {
