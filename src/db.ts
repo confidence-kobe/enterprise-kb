@@ -476,15 +476,16 @@ export function listDocs(kbId: number, limit?: number, offset?: number): Documen
 }
 
 export function listDocsWithCounts(kbId: number, limit: number, offset: number): Document[] {
-  return db.prepare(`
-    SELECT d.*,
-      (SELECT COUNT(*) FROM doc_fts WHERE doc_id = d.id) as chunk_count,
-      (SELECT COUNT(*) FROM doc_chunk_vectors WHERE doc_id = d.id) as vec_count
-    FROM documents d
-    WHERE d.kb_id = ?
-    ORDER BY d.uploaded_at DESC
-    LIMIT ? OFFSET ?
-  `).all(kbId, limit, offset) as Document[]
+  const docs = db.prepare(
+    'SELECT * FROM documents WHERE kb_id = ? ORDER BY uploaded_at DESC LIMIT ? OFFSET ?',
+  ).all(kbId, limit, offset) as Document[]
+  const ftsCount = db.prepare('SELECT COUNT(*) as n FROM doc_fts WHERE doc_id = ?')
+  const vecCount = db.prepare('SELECT COUNT(*) as n FROM doc_chunk_vectors WHERE doc_id = ?')
+  for (const doc of docs) {
+    doc.chunk_count = (ftsCount.get(doc.id) as { n: number }).n
+    doc.vec_count   = (vecCount.get(doc.id) as { n: number }).n
+  }
+  return docs
 }
 
 export function countDocs(kbId: number): number {
