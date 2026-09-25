@@ -99,10 +99,24 @@
         p.noStroke()
         p.rect(0, 0, p.width, p.height)
 
+        const mx = p.mouseX, my = p.mouseY
+        const hasMouse = mx > 0 && mx < p.width && my > 0 && my < p.height
+
         for (const v of pts) {
           const angle = p.noise(v.x * 0.0022, v.y * 0.0022, zoff) * p.TWO_PI * 4
           const vel   = p5.Vector.fromAngle(angle)
           vel.mult(1.6)
+
+          // Mouse attraction — radius 220px, smooth falloff
+          if (hasMouse) {
+            const dx = mx - v.x, dy = my - v.y
+            const dist = Math.sqrt(dx * dx + dy * dy)
+            if (dist < 220) {
+              const pull = (1 - dist / 220) * 3.0
+              vel.x += dx * 0.004 * pull
+              vel.y += dy * 0.004 * pull
+            }
+          }
 
           p.stroke(96, 165, 250, 65)
           p.strokeWeight(1.1)
