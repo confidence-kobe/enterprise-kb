@@ -7,6 +7,7 @@ import Database from 'better-sqlite3'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import bcrypt from 'bcryptjs'
+import { chunkDocument } from './documentChunker.js'
 
 // ── 类型定义 ──────────────────────────────────────────
 
@@ -25,8 +26,14 @@ export interface KnowledgeBase {
   storage_path: string
   owner_id: number
   is_public: number   // 0 | 1
+  sync_source_path: string | null
+  sync_last_at: number | null
+  sync_last_result: string | null
+  system_prompt: string | null
   created_at: number
 }
+
+export type DocumentSourceType = 'upload' | 'text' | 'sync'
 
 export interface Document {
   id: number
@@ -35,6 +42,17 @@ export interface Document {
   original_name: string
   size: number
   uploaded_at: number
+  source_type: DocumentSourceType
+  source_path: string | null
+  source_mtime: number | null
+  source_size: number | null
+  index_version: number
+  index_status: 'pending' | 'processing' | 'ready' | 'error'
+  index_error: string | null
+  indexed_at: number | null
+  summary: string | null
+  chunk_count?: number
+  vec_count?: number
 }
 
 export interface Conversation {
@@ -55,6 +73,19 @@ export interface MessageRow {
   tool_calls: string | null
   tool_call_id: string | null
   seq: number
+  created_at: number
+}
+
+export interface AuditEvent {
+  id: number
+  user_id: number | null
+  username: string | null
+  action: string
+  entity_type: string
+  entity_id: number | null
+  kb_id: number | null
+  detail: string | null
+  ip: string | null
   created_at: number
 }
 
@@ -129,6 +160,25 @@ export function initDb(dbPath: string): void {
 
     CREATE INDEX IF NOT EXISTS idx_msg_conv_seq
       ON messages(conversation_id, seq);
+
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id     INTEGER,
+      username    TEXT,
+      action      TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id   INTEGER,
+      kb_id       INTEGER,
+      detail      TEXT,
+      ip          TEXT,
+      created_at  INTEGER DEFAULT (strftime('%s','now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_created
+      ON audit_events(created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_audit_kb
+      ON audit_events(kb_id, created_at DESC);
   `)
 
   // 幂等迁移：添加 is_pinned 列（已存在则忽略）
@@ -136,8 +186,83 @@ export function initDb(dbPath: string): void {
     db.exec(`ALTER TABLE conversations ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0`)
   } catch { /* 列已存在 */ }
 
-  // FTS5 全文检索索引（幂等）
+  // 系统配置表（键值对，用于持久化运行时设置）
   db.exec(`
+    CREATE TABLE IF NOT EXISTS system_config (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `)
+
+  // FTS5 全文检索索引（幂等）
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN index_version INTEGER NOT NULL DEFAULT 0`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN index_status TEXT NOT NULL DEFAULT 'ready'`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN index_error TEXT`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN indexed_at INTEGER`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE knowledge_bases ADD COLUMN sync_source_path TEXT`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE knowledge_bases ADD COLUMN sync_last_at INTEGER`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE knowledge_bases ADD COLUMN sync_last_result TEXT`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload'`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN source_path TEXT`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN source_mtime INTEGER`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN source_size INTEGER`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE knowledge_bases ADD COLUMN system_prompt TEXT`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE documents ADD COLUMN summary TEXT`)
+  } catch { /* column already exists */ }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS response_feedback (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      user_id     INTEGER NOT NULL,
+      rating      INTEGER NOT NULL CHECK(rating IN (1, -1)),
+      created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    )
+  `)
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_conv_user
+    ON response_feedback(conversation_id, user_id)
+  `)
+
+  // Migration: unicode61 → trigram for CJK support (trigram handles 3+ char Chinese terms;
+  // 2-char terms continue to be served by the existing LIKE substring fallback)
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE name='doc_fts'").get() as { sql: string } | undefined
+    if (row && !row.sql.includes('trigram')) {
+      db.exec('DROP TABLE IF EXISTS doc_fts')
+      console.log('[DB] FTS5 tokenizer 已升级为 trigram，后台将重建全文索引')
+    }
+  } catch { /* ignore — table may not exist yet on first run */ }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_docs_source
+      ON documents(kb_id, source_type, source_path);
+
     CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
       content,
       original_name UNINDEXED,
@@ -145,8 +270,20 @@ export function initDb(dbPath: string): void {
       kb_id         UNINDEXED,
       doc_id        UNINDEXED,
       chunk_line    UNINDEXED,
-      tokenize      = 'unicode61 remove_diacritics 1'
+      tokenize      = 'trigram'
     );
+
+    CREATE TABLE IF NOT EXISTS doc_chunk_vectors (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id        INTEGER NOT NULL,
+      kb_id         INTEGER NOT NULL,
+      chunk_line    INTEGER NOT NULL,
+      original_name TEXT    NOT NULL,
+      file_path     TEXT    NOT NULL,
+      embedding     BLOB    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chunk_vectors_kb  ON doc_chunk_vectors(kb_id);
+    CREATE INDEX IF NOT EXISTS idx_chunk_vectors_doc ON doc_chunk_vectors(doc_id);
   `)
 }
 
@@ -241,6 +378,23 @@ export function updateKbPublic(id: number, isPublic: boolean): void {
   db.prepare('UPDATE knowledge_bases SET is_public = ? WHERE id = ?').run(isPublic ? 1 : 0, id)
 }
 
+export function updateKbSyncSource(id: number, syncSourcePath: string | null): void {
+  db.prepare('UPDATE knowledge_bases SET sync_source_path = ? WHERE id = ?').run(syncSourcePath, id)
+}
+
+export function updateKbSyncResult(id: number, result: string): void {
+  db.prepare(`
+    UPDATE knowledge_bases
+    SET sync_last_at = strftime('%s','now'),
+        sync_last_result = ?
+    WHERE id = ?
+  `).run(result.slice(0, 1000), id)
+}
+
+export function updateKbSystemPrompt(id: number, systemPrompt: string | null): void {
+  db.prepare('UPDATE knowledge_bases SET system_prompt = ? WHERE id = ?').run(systemPrompt ?? null, id)
+}
+
 export function deleteKb(id: number): void {
   db.prepare('DELETE FROM knowledge_bases WHERE id = ?').run(id)
 }
@@ -275,6 +429,76 @@ export function updateUserPassword(id: number, newHash: string): void {
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newHash, id)
 }
 
+// ── 审计日志 ──────────────────────────────────────────
+
+export function createAuditEvent(data: {
+  userId?: number | null
+  username?: string | null
+  action: string
+  entityType: string
+  entityId?: number | null
+  kbId?: number | null
+  detail?: unknown
+  ip?: string | null
+}): void {
+  const detail = data.detail === undefined
+    ? null
+    : typeof data.detail === 'string'
+      ? data.detail
+      : JSON.stringify(data.detail)
+  db.prepare(`
+    INSERT INTO audit_events (
+      user_id, username, action, entity_type, entity_id, kb_id, detail, ip
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    data.userId ?? null,
+    data.username ?? null,
+    data.action,
+    data.entityType,
+    data.entityId ?? null,
+    data.kbId ?? null,
+    detail ? detail.slice(0, 4000) : null,
+    data.ip ?? null,
+  )
+}
+
+export function listAuditEvents(data: {
+  limit?: number
+  offset?: number
+  action?: string
+  username?: string
+  kbId?: number
+} = {}): { items: AuditEvent[]; total: number } {
+  const where: string[] = []
+  const params: Array<string | number> = []
+  if (data.action) {
+    where.push('action LIKE ?')
+    params.push(`%${data.action}%`)
+  }
+  if (data.username) {
+    where.push('username LIKE ?')
+    params.push(`%${data.username}%`)
+  }
+  if (data.kbId != null) {
+    where.push('kb_id = ?')
+    params.push(data.kbId)
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+  const limit = data.limit ?? 50
+  const offset = data.offset ?? 0
+  const items = db.prepare(`
+    SELECT * FROM audit_events
+    ${whereSql}
+    ORDER BY created_at DESC, id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset) as AuditEvent[]
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) AS cnt FROM audit_events
+    ${whereSql}
+  `).get(...params) as { cnt: number }
+  return { items, total: totalRow.cnt }
+}
+
 // ── 文档操作 ──────────────────────────────────────────
 
 export function listDocs(kbId: number, limit?: number, offset?: number): Document[] {
@@ -283,6 +507,19 @@ export function listDocs(kbId: number, limit?: number, offset?: number): Documen
       .all(kbId, limit, offset ?? 0) as Document[]
   }
   return db.prepare('SELECT * FROM documents WHERE kb_id = ? ORDER BY uploaded_at DESC').all(kbId) as Document[]
+}
+
+export function listDocsWithCounts(kbId: number, limit: number, offset: number): Document[] {
+  const docs = db.prepare(
+    'SELECT * FROM documents WHERE kb_id = ? ORDER BY uploaded_at DESC LIMIT ? OFFSET ?',
+  ).all(kbId, limit, offset) as Document[]
+  const ftsCount = db.prepare('SELECT COUNT(*) as n FROM doc_fts WHERE doc_id = ?')
+  const vecCount = db.prepare('SELECT COUNT(*) as n FROM doc_chunk_vectors WHERE doc_id = ?')
+  for (const doc of docs) {
+    doc.chunk_count = (ftsCount.get(doc.id) as { n: number }).n
+    doc.vec_count   = (vecCount.get(doc.id) as { n: number }).n
+  }
+  return docs
 }
 
 export function countDocs(kbId: number): number {
@@ -294,17 +531,120 @@ export function getDocById(id: number): Document | undefined {
   return db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as Document | undefined
 }
 
+export function listDocsBySourceType(kbId: number, sourceType: DocumentSourceType): Document[] {
+  return db.prepare(`
+    SELECT * FROM documents
+    WHERE kb_id = ? AND source_type = ?
+    ORDER BY uploaded_at DESC
+  `).all(kbId, sourceType) as Document[]
+}
+
 export function createDoc(data: {
   kbId: number
   filename: string
   originalName: string
   size: number
+  indexStatus?: Document['index_status']
+  sourceType?: DocumentSourceType
+  sourcePath?: string | null
+  sourceMtime?: number | null
+  sourceSize?: number | null
 }): Document {
   const result = db.prepare(`
-    INSERT INTO documents (kb_id, filename, original_name, size)
-    VALUES (?, ?, ?, ?)
-  `).run(data.kbId, data.filename, data.originalName, data.size)
+    INSERT INTO documents (
+      kb_id, filename, original_name, size, index_status,
+      source_type, source_path, source_mtime, source_size
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    data.kbId,
+    data.filename,
+    data.originalName,
+    data.size,
+    data.indexStatus ?? 'pending',
+    data.sourceType ?? 'upload',
+    data.sourcePath ?? null,
+    data.sourceMtime ?? null,
+    data.sourceSize ?? null,
+  )
   return getDocById(result.lastInsertRowid as number)!
+}
+
+export function updateDocFromSync(data: {
+  id: number
+  filename: string
+  originalName: string
+  size: number
+  sourcePath: string
+  sourceMtime: number
+  sourceSize: number
+}): void {
+  db.prepare(`
+    UPDATE documents
+    SET filename = ?,
+        original_name = ?,
+        size = ?,
+        uploaded_at = strftime('%s','now'),
+        source_type = 'sync',
+        source_path = ?,
+        source_mtime = ?,
+        source_size = ?,
+        index_version = 0,
+        index_status = 'pending',
+        index_error = NULL,
+        indexed_at = NULL
+    WHERE id = ?
+  `).run(
+    data.filename,
+    data.originalName,
+    data.size,
+    data.sourcePath,
+    data.sourceMtime,
+    data.sourceSize,
+    data.id,
+  )
+}
+
+export function updateDocMeta(id: number, originalName: string, size: number): void {
+  db.prepare('UPDATE documents SET original_name = ?, size = ? WHERE id = ?').run(originalName, size, id)
+}
+
+export function updateDocSummary(id: number, summary: string): void {
+  db.prepare('UPDATE documents SET summary = ? WHERE id = ?').run(summary.slice(0, 300), id)
+}
+
+export function upsertFeedback(conversationId: number, userId: number, rating: 1 | -1): void {
+  db.prepare(`
+    INSERT INTO response_feedback(conversation_id, user_id, rating)
+    VALUES(?,?,?)
+    ON CONFLICT(conversation_id, user_id) DO UPDATE SET rating = excluded.rating
+  `).run(conversationId, userId, rating)
+}
+
+export function getFeedbackStats(kbId: number): { positive: number; negative: number } {
+  const row = db.prepare(`
+    SELECT
+      SUM(CASE WHEN f.rating = 1 THEN 1 ELSE 0 END) as positive,
+      SUM(CASE WHEN f.rating = -1 THEN 1 ELSE 0 END) as negative
+    FROM response_feedback f
+    JOIN conversations c ON c.id = f.conversation_id
+    WHERE c.kb_id = ?
+  `).get(kbId) as { positive: number | null; negative: number | null }
+  return { positive: row.positive ?? 0, negative: row.negative ?? 0 }
+}
+
+export function updateDocIndexStatus(
+  id: number,
+  status: Document['index_status'],
+  error: string | null = null,
+): void {
+  db.prepare(`
+    UPDATE documents
+    SET index_status = ?,
+        index_error = ?,
+        indexed_at = CASE WHEN ? = 'ready' THEN strftime('%s','now') ELSE indexed_at END
+    WHERE id = ?
+  `).run(status, error, status, id)
 }
 
 export function deleteDoc(id: number): void {
@@ -406,8 +746,7 @@ export function getKbStats(kbId: number): KbStats {
 
 // ── FTS5 文档全文检索 ──────────────────────────────────
 
-const CHUNK_SIZE    = 800   // 每块约 800 字符
-const CHUNK_OVERLAP = 80    // 块间重叠，保留上下文连贯性
+export const DOC_INDEX_VERSION = 4
 
 export function indexDocContent(
   docId: number,
@@ -417,29 +756,24 @@ export function indexDocContent(
   text: string,
 ): void {
   // 收集所有块，一次性事务写入
-  const chunks: Array<[string, string, string, number, number, number]> = []
-  const lines  = text.split('\n')
-  let charBuf  = ''
-  let chunkStart = 0
-
-  for (let i = 0; i < lines.length; i++) {
-    charBuf += lines[i] + '\n'
-    if (charBuf.length >= CHUNK_SIZE) {
-      if (charBuf.trim().length >= 10)
-        chunks.push([charBuf, originalName, filePath, kbId, docId, chunkStart])
-      charBuf    = charBuf.slice(-CHUNK_OVERLAP)
-      chunkStart = i + 1
-    }
-  }
-  if (charBuf.trim().length >= 10)
-    chunks.push([charBuf, originalName, filePath, kbId, docId, chunkStart])
+  const chunks = chunkDocument(text)
 
   db.transaction(() => {
     db.prepare('DELETE FROM doc_fts WHERE doc_id = ?').run(docId)
     const ins = db.prepare(
       'INSERT INTO doc_fts(content, original_name, file_path, kb_id, doc_id, chunk_line) VALUES (?,?,?,?,?,?)',
     )
-    for (const chunk of chunks) ins.run(...chunk)
+    for (const chunk of chunks) {
+      ins.run(chunk.content, originalName, filePath, kbId, docId, chunk.startLine)
+    }
+    db.prepare(`
+      UPDATE documents
+      SET index_version = ?,
+          index_status = 'ready',
+          index_error = NULL,
+          indexed_at = strftime('%s','now')
+      WHERE id = ?
+    `).run(DOC_INDEX_VERSION, docId)
   })()
 }
 
@@ -450,47 +784,306 @@ export interface DocSearchResult {
   chunk_line:    number
 }
 
-/** FTS5 特殊字符转义，防止查询语法错误 */
-function sanitizeFts5(query: string): string {
-  // 去掉 FTS5 运算符/特殊符号，每个词加引号做精确词匹配
-  const words = query
+interface SearchCandidate {
+  doc_id: number
+  original_name: string
+  file_path: string
+  content: string
+  chunk_line: number
+  fts_rank?: number
+  sources: Set<'strict' | 'relaxed' | 'substring'>
+}
+
+function queryTerms(query: string): string[] {
+  return query
     .replace(/["\*\^\(\)\\<>]/g, ' ')
     .trim()
     .split(/\s+/)
-    .filter(w => w.length > 0)
-  if (!words.length) return '""'
-  return words.map(w => `"${w}"`).join(' ')
+    .filter(Boolean)
+}
+
+function ftsQuery(terms: string[], operator: 'AND' | 'OR'): string {
+  return terms.map(term => `"${term.replace(/"/g, '""')}"`).join(` ${operator} `)
+}
+
+function makeSnippet(content: string, query: string, terms: string[]): string {
+  const normalized = content.toLocaleLowerCase()
+  const match = [query, ...terms]
+    .map(value => value.toLocaleLowerCase())
+    .filter(Boolean)
+    .map(value => ({ value, index: normalized.indexOf(value) }))
+    .filter(item => item.index >= 0)
+    .sort((a, b) => a.index - b.index || b.value.length - a.value.length)[0]
+
+  if (!match) return content.slice(0, 360)
+  const start = Math.max(0, match.index - 120)
+  const end = Math.min(content.length, match.index + match.value.length + 240)
+  return `${start > 0 ? '…' : ''}${content.slice(start, match.index)}>>>${content.slice(match.index, match.index + match.value.length)}<<<${content.slice(match.index + match.value.length, end)}${end < content.length ? '…' : ''}`
+}
+
+function scoreCandidate(candidate: SearchCandidate, query: string, terms: string[]): number {
+  const name = candidate.original_name.toLocaleLowerCase()
+  const content = candidate.content.toLocaleLowerCase()
+  const phrase = query.toLocaleLowerCase()
+  let score = 0
+
+  if (candidate.sources.has('strict')) score += 80
+  if (candidate.sources.has('relaxed')) score += 35
+  if (candidate.sources.has('substring')) score += 20
+  if (name === phrase) score += 240
+  else if (name.includes(phrase)) score += 160
+  if (content.includes(phrase)) score += 120
+
+  for (const term of terms.map(value => value.toLocaleLowerCase())) {
+    if (name.includes(term)) score += 45
+    if (content.includes(term)) score += 12
+  }
+
+  if (candidate.fts_rank != null) score += Math.max(0, 15 - Math.abs(candidate.fts_rank))
+  return score
 }
 
 export function searchDocContent(
   kbId: number,
   query: string,
   limit = 8,
+  queryEmbedding?: Float32Array,
 ): DocSearchResult[] {
-  const safe = sanitizeFts5(query)
-  try {
-    return db.prepare(`
-      SELECT
-        original_name,
-        file_path,
-        snippet(doc_fts, 0, '>>>', '<<<', '…', 24) AS snippet,
-        chunk_line
-      FROM doc_fts
-      WHERE kb_id = ? AND doc_fts MATCH ?
-      ORDER BY rank
-      LIMIT ?
-    `).all(kbId, safe, limit) as DocSearchResult[]
-  } catch {
-    return []
+  const terms = queryTerms(query)
+  if (!terms.length) return []
+
+  const candidateLimit = Math.max(limit * 6, 30)
+  const candidates = new Map<string, SearchCandidate>()
+  const addRows = (
+    rows: Array<Omit<SearchCandidate, 'sources'>>,
+    source: 'strict' | 'relaxed' | 'substring',
+  ) => {
+    for (const row of rows) {
+      const key = `${row.doc_id}:${row.chunk_line}`
+      const existing = candidates.get(key)
+      if (existing) {
+        existing.sources.add(source)
+        if (row.fts_rank != null) existing.fts_rank = Math.min(existing.fts_rank ?? row.fts_rank, row.fts_rank)
+      } else {
+        candidates.set(key, { ...row, sources: new Set([source]) })
+      }
+    }
   }
+
+  const runFts = (expression: string, source: 'strict' | 'relaxed') => {
+    try {
+      const rows = db.prepare(`
+        SELECT doc_id, original_name, file_path, content, chunk_line, bm25(doc_fts) AS fts_rank
+        FROM doc_fts
+        WHERE kb_id = ? AND doc_fts MATCH ?
+        ORDER BY bm25(doc_fts)
+        LIMIT ?
+      `).all(kbId, expression, candidateLimit) as Array<Omit<SearchCandidate, 'sources'>>
+      addRows(rows, source)
+    } catch { /* fall through to substring candidates */ }
+  }
+
+  runFts(ftsQuery(terms, 'AND'), 'strict')
+  if (terms.length > 1) runFts(ftsQuery(terms, 'OR'), 'relaxed')
+
+  const conditions = terms.map(() => '(content LIKE ? OR original_name LIKE ?)').join(' OR ')
+  const substringRows = db.prepare(`
+    SELECT doc_id, original_name, file_path, content, chunk_line
+    FROM doc_fts
+    WHERE kb_id = ? AND (${conditions})
+    LIMIT ?
+  `).all(
+    kbId,
+    ...terms.flatMap(term => [`%${term}%`, `%${term}%`]),
+    candidateLimit,
+  ) as Array<Omit<SearchCandidate, 'sources'>>
+  addRows(substringRows, 'substring')
+
+  // 构建向量相似度查找表（如果提供了 queryEmbedding）
+  const vectorScoreMap = new Map<string, number>()
+  if (queryEmbedding) {
+    const vectorResults = searchByVector(kbId, queryEmbedding, candidateLimit)
+    for (const vr of vectorResults) {
+      const key = `${vr.doc_id}:${vr.chunk_line}`
+      vectorScoreMap.set(key, vr.similarity)
+      // 向量命中但 FTS 未命中的 chunk — 加入候选池（需要读取内容）
+      if (!candidates.has(key)) {
+        try {
+          const row = db.prepare(
+            'SELECT content FROM doc_fts WHERE doc_id = ? AND chunk_line = ? LIMIT 1',
+          ).get(vr.doc_id, vr.chunk_line) as { content: string } | undefined
+          if (row) {
+            candidates.set(key, {
+              doc_id:        vr.doc_id,
+              original_name: vr.original_name,
+              file_path:     vr.file_path,
+              content:       row.content,
+              chunk_line:    vr.chunk_line,
+              sources:       new Set(['relaxed']),
+            })
+          }
+        } catch { /* 忽略 */ }
+      }
+    }
+  }
+
+  return Array.from(candidates.values())
+    .sort((a, b) => {
+      const keyA = `${a.doc_id}:${a.chunk_line}`
+      const keyB = `${b.doc_id}:${b.chunk_line}`
+      const ftsA = scoreCandidate(a, query, terms)
+      const ftsB = scoreCandidate(b, query, terms)
+      const vecA = (vectorScoreMap.get(keyA) ?? 0) * 100   // 向量相似度 0~1 映射到 0~100
+      const vecB = (vectorScoreMap.get(keyB) ?? 0) * 100
+      const hybridA = queryEmbedding ? ftsA * 0.5 + vecA * 0.5 : ftsA
+      const hybridB = queryEmbedding ? ftsB * 0.5 + vecB * 0.5 : ftsB
+      return hybridB - hybridA
+        || (a.fts_rank ?? 999) - (b.fts_rank ?? 999)
+        || a.chunk_line - b.chunk_line
+    })
+    .slice(0, limit)
+    .map(candidate => ({
+      original_name: candidate.original_name,
+      file_path: candidate.file_path,
+      snippet: makeSnippet(candidate.content, query, terms),
+      chunk_line: candidate.chunk_line,
+    }))
 }
 
 export function removeDocFromIndex(docId: number): void {
   db.prepare('DELETE FROM doc_fts WHERE doc_id = ?').run(docId)
+  db.prepare('DELETE FROM doc_chunk_vectors WHERE doc_id = ?').run(docId)
+}
+
+// ── 向量存储与检索 ─────────────────────────────────────
+
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  let dot = 0, normA = 0, normB = 0
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    dot   += a[i] * b[i]
+    normA += a[i] * a[i]
+    normB += b[i] * b[i]
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-8)
+}
+
+export function storeChunkVectors(
+  docId: number,
+  kbId: number,
+  vectors: Array<{ chunkLine: number; embedding: Float32Array; originalName: string; filePath: string }>,
+): void {
+  db.transaction(() => {
+    db.prepare('DELETE FROM doc_chunk_vectors WHERE doc_id = ?').run(docId)
+    const ins = db.prepare(
+      'INSERT INTO doc_chunk_vectors(doc_id, kb_id, chunk_line, original_name, file_path, embedding) VALUES (?,?,?,?,?,?)',
+    )
+    for (const v of vectors) {
+      ins.run(docId, kbId, v.chunkLine, v.originalName, v.filePath, Buffer.from(v.embedding.buffer))
+    }
+  })()
+}
+
+interface VectorRow {
+  doc_id: number
+  original_name: string
+  file_path: string
+  chunk_line: number
+  embedding: Buffer
+}
+
+export interface VectorSearchResult {
+  doc_id: number
+  original_name: string
+  file_path: string
+  chunk_line: number
+  similarity: number
+}
+
+export function searchByVector(
+  kbId: number,
+  queryEmbedding: Float32Array,
+  limit = 8,
+): VectorSearchResult[] {
+  const rows = db.prepare(
+    'SELECT doc_id, original_name, file_path, chunk_line, embedding FROM doc_chunk_vectors WHERE kb_id = ?',
+  ).all(kbId) as VectorRow[]
+
+  if (!rows.length) return []
+
+  return rows
+    .map(row => {
+      const emb = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)
+      return {
+        doc_id: row.doc_id,
+        original_name: row.original_name,
+        file_path: row.file_path,
+        chunk_line: row.chunk_line,
+        similarity: cosineSimilarity(queryEmbedding, emb),
+      }
+    })
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit)
+}
+
+export function hasVectors(kbId: number): boolean {
+  return !!db.prepare('SELECT 1 FROM doc_chunk_vectors WHERE kb_id = ? LIMIT 1').get(kbId)
+}
+
+export function getDocVectorCount(docId: number): number {
+  return (db.prepare('SELECT COUNT(*) as n FROM doc_chunk_vectors WHERE doc_id = ?').get(docId) as { n: number }).n
+}
+
+export interface RelatedDoc {
+  doc_id: number
+  original_name: string
+  similarity: number
+}
+
+export function getRelatedDocs(kbId: number, docId: number, limit = 5): RelatedDoc[] {
+  // 取目标文档所有 chunk 向量
+  const srcRows = db.prepare(
+    'SELECT embedding FROM doc_chunk_vectors WHERE doc_id = ?',
+  ).all(docId) as Array<{ embedding: Buffer }>
+  if (!srcRows.length) return []
+
+  const srcVecs = srcRows.map(r =>
+    new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4),
+  )
+
+  // 取同知识库其他文档所有 chunk 向量
+  const otherRows = db.prepare(
+    'SELECT doc_id, original_name, embedding FROM doc_chunk_vectors WHERE kb_id = ? AND doc_id != ?',
+  ).all(kbId, docId) as Array<{ doc_id: number; original_name: string; embedding: Buffer }>
+  if (!otherRows.length) return []
+
+  // 计算每个 chunk 对的最大相似度，按 doc 聚合取最高分
+  const docScores = new Map<number, { name: string; score: number }>()
+  for (const row of otherRows) {
+    const tgtVec = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)
+    // 对源文档所有 chunk 取最大相似度（最相关的块代表整体相关性）
+    let maxSim = 0
+    for (const src of srcVecs) {
+      const sim = cosineSimilarity(src, tgtVec)
+      if (sim > maxSim) maxSim = sim
+    }
+    const existing = docScores.get(row.doc_id)
+    if (!existing || maxSim > existing.score) {
+      docScores.set(row.doc_id, { name: row.original_name, score: maxSim })
+    }
+  }
+
+  return Array.from(docScores.entries())
+    .map(([id, { name, score }]) => ({ doc_id: id, original_name: name, similarity: score }))
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit)
 }
 
 export function isDocIndexed(docId: number): boolean {
-  return !!db.prepare('SELECT 1 FROM doc_fts WHERE doc_id = ? LIMIT 1').get(docId)
+  const doc = getDocById(docId)
+  return doc?.index_version === DOC_INDEX_VERSION
+    && doc.index_status === 'ready'
+    && !!db.prepare('SELECT 1 FROM doc_fts WHERE doc_id = ? LIMIT 1').get(docId)
 }
 
 export interface ConvSearchResult {
@@ -523,15 +1116,11 @@ export function searchConversations(
     WHERE m.role IN ('user', 'assistant')
       AND m.content IS NOT NULL
       AND m.content LIKE ?
-      AND (
-        c.user_id = ?
-        OR kb.is_public = 1
-        OR EXISTS (SELECT 1 FROM kb_access WHERE kb_id = c.kb_id AND user_id = ?)
-      )
+      AND c.user_id = ?
     GROUP BY c.id
     ORDER BY c.updated_at DESC
     LIMIT ? OFFSET ?
-  `).all(like, userId, userId, limit, offset) as ConvSearchResult[]
+  `).all(like, userId, limit, offset) as ConvSearchResult[]
 
   const row = db.prepare(`
     SELECT COUNT(DISTINCT c.id) AS cnt
@@ -541,12 +1130,46 @@ export function searchConversations(
     WHERE m.role IN ('user', 'assistant')
       AND m.content IS NOT NULL
       AND m.content LIKE ?
-      AND (
-        c.user_id = ?
-        OR kb.is_public = 1
-        OR EXISTS (SELECT 1 FROM kb_access WHERE kb_id = c.kb_id AND user_id = ?)
-      )
-  `).get(like, userId, userId) as { cnt: number }
+      AND c.user_id = ?
+  `).get(like, userId) as { cnt: number }
 
   return { items, total: row.cnt }
+}
+
+// ── 系统配置 ──────────────────────────────────────────
+
+export function getConfig(key: string): string | null {
+  const row = db.prepare('SELECT value FROM system_config WHERE key = ?').get(key) as { value: string } | undefined
+  return row?.value ?? null
+}
+
+export function setConfig(key: string, value: string): void {
+  db.prepare(`
+    INSERT INTO system_config (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, value)
+}
+
+// ── 反馈统计（跨全部 KB）─────────────────────────────
+
+export interface KbFeedbackStats {
+  kb_id: number
+  kb_name: string
+  positive: number
+  negative: number
+}
+
+export function getAllFeedbackStats(): KbFeedbackStats[] {
+  return db.prepare(`
+    SELECT
+      kb.id   AS kb_id,
+      kb.name AS kb_name,
+      SUM(CASE WHEN f.rating =  1 THEN 1 ELSE 0 END) AS positive,
+      SUM(CASE WHEN f.rating = -1 THEN 1 ELSE 0 END) AS negative
+    FROM response_feedback f
+    JOIN conversations c ON c.id = f.conversation_id
+    JOIN knowledge_bases kb ON kb.id = c.kb_id
+    GROUP BY kb.id
+    ORDER BY (positive + negative) DESC
+  `).all() as KbFeedbackStats[]
 }

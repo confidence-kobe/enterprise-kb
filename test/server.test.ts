@@ -330,7 +330,7 @@ describe('knowledge base access control', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(404)
       .expect(res => {
-        expect(res.body).toMatchObject({ error: 'PDF 文本提取失败或尚未完成' })
+        expect(res.body).toMatchObject({ error: '文档文本提取失败或尚未完成' })
       })
   })
 
@@ -471,6 +471,94 @@ describe('knowledge base access control', () => {
           original_name: 'Recovery Playbook.md',
         })
       })
+  })
+
+  it('finds Chinese text using trigram full-text search', async () => {
+    const admin = await login('admin', 'Admin@123')
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ name: 'CJK Search Atlas' })
+      .expect(201)
+
+    const kbId = kb.body.id as number
+
+    await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: '项目排错SOP', content: 'private alpha content；中文项目检索用于验证中文子串搜索。' })
+      .expect(201)
+
+    await request(app)
+      .post(`/api/kbs/${kbId}/docs/text`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ title: '通用项目说明', content: '这里只描述项目背景，不包含具体排错步骤。' })
+      .expect(201)
+
+    const chineseSearch = await request(app)
+      .get(`/api/kbs/${kbId}/search/docs?q=${encodeURIComponent('中文子串')}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+    expect(chineseSearch.body.length).toBeGreaterThan(0)
+
+    const rankedSearch = await request(app)
+      .get(`/api/kbs/${kbId}/search/docs?q=${encodeURIComponent('项目 排错')}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+    expect(rankedSearch.body[0].original_name).toContain('项目排错SOP')
+    expect(rankedSearch.body[0].snippet).toContain('>>>')
+
+    await request(app)
+      .delete(`/api/kbs/${kbId}`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .expect(200)
+  })
+})
+
+describe('audit log', () => {
+  it('records administrative actions and restricts audit reads to admins', async () => {
+    const adminLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'Admin@123' })
+      .expect(200)
+    const adminAuth = { Authorization: `Bearer ${adminLogin.body.token}` }
+
+    const createdUser = await request(app)
+      .post('/api/admin/users')
+      .set(adminAuth)
+      .send({ username: 'audit-user', password: 'User@123', role: 'user' })
+      .expect(201)
+
+    const userLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'audit-user', password: 'User@123' })
+      .expect(200)
+    const userAuth = { Authorization: `Bearer ${userLogin.body.token}` }
+
+    await request(app)
+      .get('/api/admin/audit')
+      .set(userAuth)
+      .expect(403)
+
+    const kb = await request(app)
+      .post('/api/kbs')
+      .set(adminAuth)
+      .send({ name: 'Audit KB' })
+      .expect(201)
+
+    const audit = await request(app)
+      .get('/api/admin/audit?action=kb.create')
+      .set(adminAuth)
+      .expect(200)
+
+    expect(audit.body.total).toBeGreaterThan(0)
+    expect(audit.body.items.some((item: { action: string; kb_id: number; username: string }) =>
+      item.action === 'kb.create' && item.kb_id === kb.body.id && item.username === 'admin',
+    )).toBe(true)
+
+    await request(app).delete(`/api/kbs/${kb.body.id}`).set(adminAuth).expect(200)
+    await request(app).delete(`/api/admin/users/${createdUser.body.id}`).set(adminAuth).expect(200)
   })
 })
 

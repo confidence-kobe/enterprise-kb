@@ -15,6 +15,7 @@ import * as path from 'node:path'
 import { READ_ONLY_TOOLS } from '../packages/claude-tools-kit/dist/index.js'
 import { adaptTools }      from './toolAdapter.js'
 import { searchDocContent } from './db.js'
+import { isEmbeddingEnabled, generateEmbedding } from './embedding.js'
 import type OpenAI         from 'openai'
 
 // ── 类型定义 ──────────────────────────────────────────
@@ -130,8 +131,8 @@ const SearchDocsTool: LLMTool = {
   definition: {
     name: 'SearchDocs',
     description: [
-      '在知识库中进行全文检索，返回包含关键词的文档片段及来源文件。',
-      '比 Grep 更快，支持多词联合检索，适合作为第一步定位工具。',
+      '在知识库中进行混合全文检索，返回包含关键词的文档片段及来源文件。',
+      '融合严格匹配、宽松召回、标题和短语加权，支持多词联合检索，适合作为第一步定位工具。',
       '返回结果包含 >>>高亮词<<< 标记和文件路径，可直接用 Read 精读全文。',
     ].join(' '),
     parameters: {
@@ -151,11 +152,17 @@ const SearchDocsTool: LLMTool = {
   },
 
   async execute({ query, limit }, kbPath) {
-    // 从路径提取 kbId：storage/kb_<id>
     const kbId = Number(path.basename(kbPath).replace('kb_', ''))
     if (!kbId) return '无法识别知识库 ID'
 
-    const results = searchDocContent(kbId, String(query), Math.min(Number(limit ?? 8), 20))
+    const queryStr = String(query)
+    let queryEmbedding: Float32Array | undefined
+    if (isEmbeddingEnabled()) {
+      const emb = await generateEmbedding(queryStr)
+      if (emb) queryEmbedding = emb
+    }
+
+    const results = searchDocContent(kbId, queryStr, Math.min(Number(limit ?? 8), 20), queryEmbedding)
     if (!results.length) return '未找到匹配内容，请尝试换用其他关键词或使用 Grep 工具'
 
     return results
