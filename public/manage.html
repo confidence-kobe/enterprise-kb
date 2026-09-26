@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=25">
+  <link rel="stylesheet" href="style.css?v=26">
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 </head>
@@ -58,6 +58,14 @@
       <button class="tab-btn" data-tab="settings" id="settings-tab" style="display:none">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         设置
+      </button>
+      <button class="tab-btn" data-tab="feedback" id="feedback-tab" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        反馈分析
+      </button>
+      <button class="tab-btn" data-tab="mcp" id="mcp-tab" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        MCP 接入
       </button>
     </div>
 
@@ -211,6 +219,57 @@
       </div>
     </div>
 
+    <!-- 反馈分析标签 -->
+    <div class="tab-panel" id="tab-feedback">
+      <div class="section-header">
+        <div class="section-title">反馈分析</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <select class="input" id="feedback-kb-select" style="width:180px;font-size:13px"></select>
+          <button class="btn btn-secondary btn-sm" id="feedback-refresh-btn">刷新</button>
+        </div>
+      </div>
+
+      <!-- 统计卡片 -->
+      <div class="feedback-stats-row" id="feedback-stats-row">
+        <div class="feedback-stat-card">
+          <div class="feedback-stat-value" id="fb-positive">—</div>
+          <div class="feedback-stat-label">好评</div>
+        </div>
+        <div class="feedback-stat-card">
+          <div class="feedback-stat-value" id="fb-negative">—</div>
+          <div class="feedback-stat-label">差评</div>
+        </div>
+        <div class="feedback-stat-card">
+          <div class="feedback-stat-value" id="fb-rate">—</div>
+          <div class="feedback-stat-label">好评率</div>
+        </div>
+      </div>
+
+      <!-- 差评原因分布 -->
+      <div class="card" id="feedback-reasons-card" style="margin-bottom:16px;display:none">
+        <div class="feedback-section-title">差评原因分布</div>
+        <div id="feedback-reasons-list"></div>
+      </div>
+
+      <!-- 差评问题列表 -->
+      <div class="card audit-card">
+        <table class="user-table audit-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>会话标题</th>
+              <th>问题摘要</th>
+              <th>原因</th>
+              <th>备注</th>
+            </tr>
+          </thead>
+          <tbody id="feedback-list"></tbody>
+        </table>
+        <div class="no-data-hint hidden" id="feedback-empty">暂无差评记录</div>
+        <button class="conv-load-more hidden" id="feedback-load-more">加载更多</button>
+      </div>
+    </div>
+
     <!-- 系统设置标签 -->
     <div class="tab-panel" id="tab-settings">
       <div class="section-header">
@@ -227,6 +286,77 @@
             切换后新对话立即生效，进行中的流式响应不受影响
           </div>
         </div>
+      </div>
+    </div>
+    <!-- MCP 接入标签 -->
+    <div class="tab-panel" id="tab-mcp">
+      <div class="section-header">
+        <div class="section-title">MCP 接入</div>
+        <button class="btn btn-primary" id="create-mcp-key-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          生成 API Key
+        </button>
+      </div>
+      <div class="card" style="padding:20px;margin-bottom:16px;max-width:720px">
+        <p style="font-size:13px;color:var(--muted);line-height:1.7;margin:0">
+          将企业知识库暴露为标准 <strong>MCP Server</strong>，让 Claude Code、Cursor 等 AI 工具直接调用企业知识。<br>
+          生成 API Key 后，将配置片段粘贴到客户端的 <code>.mcp.json</code> 文件中。
+        </p>
+      </div>
+      <div id="mcp-keys-list" style="max-width:720px"></div>
+    </div>
+  </div>
+
+  <!-- MCP Key 生成弹层 -->
+  <div class="modal hidden" id="mcp-key-modal">
+    <div class="modal-box" style="max-width:480px">
+      <div class="modal-header">
+        <span>生成 MCP API Key</span>
+        <button class="modal-close" id="mcp-key-modal-close" aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">标签（便于识别）</label>
+          <input class="input" id="mcp-key-label" placeholder="如：我的 Claude Code 配置">
+        </div>
+        <div class="form-group">
+          <label class="form-label">允许访问的知识库（不选=全部可访问）</label>
+          <div id="mcp-kb-checkboxes" style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;padding:0 20px 20px">
+        <button class="btn btn-secondary btn-sm" id="mcp-key-modal-cancel">取消</button>
+        <button class="btn btn-primary btn-sm" id="mcp-key-modal-confirm">生成</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MCP Key 显示弹层（只显示一次）-->
+  <div class="modal hidden" id="mcp-key-result-modal">
+    <div class="modal-box" style="max-width:600px">
+      <div class="modal-header">
+        <span>API Key 已生成（请立即保存）</span>
+        <button class="modal-close" id="mcp-key-result-close" aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div style="padding:16px 20px 4px">
+        <div style="background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:10px 14px;font-size:12.5px;color:#92400e;margin-bottom:14px">
+          ⚠️ 此 Key 只显示一次，关闭后无法再查看，请立即复制保存。
+        </div>
+        <label style="font-size:12px;color:var(--muted);font-weight:500">API Key</label>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <input class="input" id="mcp-key-result-value" readonly style="font-family:monospace;font-size:12px">
+          <button class="btn btn-secondary btn-sm" id="mcp-key-copy-btn">复制</button>
+        </div>
+        <label style="font-size:12px;color:var(--muted);font-weight:500;margin-top:14px;display:block">Claude Code 配置（粘贴到 .mcp.json）</label>
+        <pre id="mcp-config-snippet" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:11.5px;overflow-x:auto;margin-top:4px;line-height:1.6"></pre>
+        <button class="btn btn-secondary btn-sm" id="mcp-config-copy-btn" style="margin-top:6px">复制配置</button>
+      </div>
+      <div style="display:flex;justify-content:flex-end;padding:12px 20px 20px">
+        <button class="btn btn-primary btn-sm" id="mcp-key-result-done">我已保存，关闭</button>
       </div>
     </div>
   </div>
@@ -452,6 +582,6 @@
   </div>
 
   <div id="toast" class="hidden"></div>
-  <script src="manage.js?v=22"></script>
+  <script src="manage.js?v=23"></script>
 </body>
 </html>

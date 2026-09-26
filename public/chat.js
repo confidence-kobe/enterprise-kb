@@ -453,7 +453,7 @@ async function sendQuestion(question, { skipUserMsg = false } = {}) {
     welcomeEl.classList.add('hidden')
     appendUserMessage(question)
   }
-  const { row, toolsLog, responseText, cursorEl, copyBtn, thumbUp, thumbDown } = appendAssistantSkeleton()
+  const { row, toolsLog, responseText, cursorEl, copyBtn, thumbUp, thumbDown, sourcesSection } = appendAssistantSkeleton()
 
   abortController = new AbortController()
 
@@ -476,7 +476,7 @@ async function sendQuestion(question, { skipUserMsg = false } = {}) {
       throw new Error(e.error ?? `HTTP ${res.status}`)
     }
 
-    await readSSE(res, { toolsLog, responseText, cursorEl, row, copyBtn, thumbUp, thumbDown, question })
+    await readSSE(res, { toolsLog, responseText, cursorEl, row, copyBtn, thumbUp, thumbDown, sourcesSection, question })
   } catch (err) {
     cursorEl.remove()
     if (err.name === 'AbortError') {
@@ -506,7 +506,7 @@ function appendRetryBtn(row, question) {
   row.querySelector('.msg-ai-body')?.appendChild(btn)
 }
 
-async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBtn, thumbUp, thumbDown, question }) {
+async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBtn, thumbUp, thumbDown, sourcesSection, question }) {
   const reader  = response.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
@@ -562,6 +562,10 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
           row.querySelector('.msg-meta').textContent = ev.context?.truncated
             ? `${ev.turns} 轮检索 · 已使用最近上下文`
             : `${ev.turns} 轮检索`
+          if (Array.isArray(ev.sources) && ev.sources.length > 0 && sourcesSection) {
+            renderSources(sourcesSection, ev.sources)
+            sourcesSection.classList.remove('hidden')
+          }
           if (copyBtn) copyBtn.classList.remove('hidden')
           setLoading(false)
           scrollBottom()
@@ -648,28 +652,81 @@ function appendAssistantSkeleton() {
   thumbDown.title = '没帮助'
   thumbDown.textContent = '👎'
 
-  function submitFeedback(rating) {
+  // ── 来源卡片区 ────────────────────────────────────────
+  const sourcesSection = document.createElement('div')
+  sourcesSection.className = 'sources-section hidden'
+
+  // ── 结构化差评面板 ─────────────────────────────────────
+  const feedbackReasonPanel = document.createElement('div')
+  feedbackReasonPanel.className = 'feedback-reason-panel hidden'
+  feedbackReasonPanel.innerHTML = `
+    <div class="feedback-reason-label">帮我们改进，选择一个原因：</div>
+    <div class="feedback-reason-chips">
+      <button class="feedback-reason-chip" data-reason="doc_missing">知识库缺少文档</button>
+      <button class="feedback-reason-chip" data-reason="wrong_answer">回答有误</button>
+      <button class="feedback-reason-chip" data-reason="not_found">没找到内容</button>
+      <button class="feedback-reason-chip" data-reason="other">其他</button>
+    </div>
+    <textarea class="feedback-comment" placeholder="补充说明（可选）" rows="2" maxlength="500"></textarea>
+    <div class="feedback-reason-actions">
+      <button class="feedback-skip-btn">跳过</button>
+      <button class="feedback-submit-btn" disabled>提交</button>
+    </div>
+  `
+
+  let selectedReason = null
+  feedbackReasonPanel.querySelectorAll('.feedback-reason-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      feedbackReasonPanel.querySelectorAll('.feedback-reason-chip').forEach(b => b.classList.remove('active'))
+      btn.classList.add('active')
+      selectedReason = btn.dataset.reason
+      feedbackReasonPanel.querySelector('.feedback-submit-btn').disabled = false
+    })
+  })
+
+  function doSubmitFeedback(rating, reason, comment) {
     const convId = row.dataset.conversationId
     if (!convId) return
     thumbUp.classList.toggle('active', rating === 1)
     thumbDown.classList.toggle('active', rating === -1)
+    feedbackReasonPanel.classList.add('hidden')
     fetch(`/api/conversations/${convId}/feedback`, {
       method: 'POST',
       headers: { ...auth(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rating }),
+      body: JSON.stringify({ rating, reason: reason ?? undefined, comment: comment ?? undefined }),
     }).catch(() => {})
   }
-  thumbUp.addEventListener('click', () => submitFeedback(1))
-  thumbDown.addEventListener('click', () => submitFeedback(-1))
+
+  feedbackReasonPanel.querySelector('.feedback-submit-btn').addEventListener('click', () => {
+    const comment = feedbackReasonPanel.querySelector('.feedback-comment').value.trim() || null
+    doSubmitFeedback(-1, selectedReason, comment)
+  })
+  feedbackReasonPanel.querySelector('.feedback-skip-btn').addEventListener('click', () => {
+    doSubmitFeedback(-1, null, null)
+  })
+
+  thumbUp.addEventListener('click', () => {
+    feedbackReasonPanel.classList.add('hidden')
+    doSubmitFeedback(1, null, null)
+  })
+  thumbDown.addEventListener('click', () => {
+    if (thumbDown.classList.contains('active')) return
+    selectedReason = null
+    feedbackReasonPanel.querySelectorAll('.feedback-reason-chip').forEach(b => b.classList.remove('active'))
+    feedbackReasonPanel.querySelector('.feedback-comment').value = ''
+    feedbackReasonPanel.querySelector('.feedback-submit-btn').disabled = true
+    feedbackReasonPanel.classList.toggle('hidden')
+    scrollBottom()
+  })
 
   meta.append(copyBtn, thumbUp, thumbDown)
 
-  content.append(toolsLog, responseText, meta)
+  content.append(toolsLog, responseText, sourcesSection, feedbackReasonPanel, meta)
   row.append(avatar, content)
   messagesEl.appendChild(row)
   scrollBottom()
 
-  return { row, toolsLog, responseText, cursorEl, copyBtn, thumbUp, thumbDown }
+  return { row, toolsLog, responseText, cursorEl, copyBtn, thumbUp, thumbDown, sourcesSection }
 }
 
 function addToolCall(container, name, input) {
@@ -695,6 +752,35 @@ function addToolCall(container, name, input) {
 function shortenPath(p) {
   const parts = String(p).replace(/\\/g, '/').split('/')
   return parts.length > 3 ? '…/' + parts.slice(-2).join('/') : p
+}
+
+function renderSources(container, sources) {
+  const details = document.createElement('details')
+  details.className = 'sources-details'
+
+  const summary = document.createElement('summary')
+  summary.className = 'sources-summary'
+  summary.textContent = `参考来源（${sources.length}）`
+  details.appendChild(summary)
+
+  const list = document.createElement('div')
+  list.className = 'sources-list'
+
+  for (const src of sources) {
+    const card = document.createElement('div')
+    card.className = 'source-card'
+    const shortName = src.name.length > 40 ? '…' + src.name.slice(-38) : src.name
+    card.innerHTML = `<span class="source-name">${escHtml(shortName)}</span><span class="source-line">行 ${src.line}</span>`
+
+    if (src.docId && currentKb?.id && currentKb.id !== 'all') {
+      card.classList.add('source-card-clickable')
+      card.addEventListener('click', () => openSrcPreview(src.docId, src.name, src.line))
+    }
+    list.appendChild(card)
+  }
+
+  details.appendChild(list)
+  container.appendChild(details)
 }
 
 function summarizeInput(name, input) {

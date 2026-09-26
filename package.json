@@ -3,8 +3,12 @@
   "version": "1.0.0",
   "description": "Enterprise knowledge base with OpenAI-compatible LLM support, multi-user auth, and document management",
   "type": "module",
+  "bin": {
+    "enterprise-kb-mcp": "./dist/mcp-stdio.js"
+  },
   "scripts": {
     "start": "node dist/server.js",
+    "mcp": "node dist/mcp-stdio.js",
     "dev": "npx tsx src/server.ts",
     "build": "tsc",
     "test": "vitest run",
@@ -14,6 +18,7 @@
     "smoke:full": "node scripts/full-smoke.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.0.0",
     "claude-tools-kit": "file:packages/claude-tools-kit",

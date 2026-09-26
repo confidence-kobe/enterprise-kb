@@ -51,9 +51,13 @@ if (isAdmin) {
   document.getElementById('users-tab').style.display = ''
   document.getElementById('audit-tab').style.display = ''
   document.getElementById('settings-tab').style.display = ''
+  document.getElementById('feedback-tab').style.display = ''
+  document.getElementById('mcp-tab').style.display = ''
   loadUsers()
   initModelSettings()
   initAuditLog()
+  initFeedbackPanel()
+  initMcpPanel()
 }
 
 loadKbs()
@@ -1403,4 +1407,315 @@ function initTextDocModal() {
 
   // 对外暴露 open，供编辑按钮调用
   window._openTextDocModal = open
+
+// ── 反馈分析面板 ──────────────────────────────────────
+
+function initFeedbackPanel() {
+  const kbSelect      = document.getElementById('feedback-kb-select')
+  const refreshBtn    = document.getElementById('feedback-refresh-btn')
+  const loadMoreBtn   = document.getElementById('feedback-load-more')
+  const statPositive  = document.getElementById('fb-positive')
+  const statNegative  = document.getElementById('fb-negative')
+  const statRate      = document.getElementById('fb-rate')
+  const reasonsCard   = document.getElementById('feedback-reasons-card')
+  const reasonsList   = document.getElementById('feedback-reasons-list')
+  const feedbackList  = document.getElementById('feedback-list')
+  const feedbackEmpty = document.getElementById('feedback-empty')
+
+  const REASON_LABELS = {
+    doc_missing: '知识库缺少文档',
+    wrong_answer: '回答有误',
+    not_found: '没找到内容',
+    other: '其他',
+  }
+
+  let currentKbId = null
+  let offset = 0
+  const limit = 20
+
+  // 填充 KB 下拉（复用已加载的 allKbs）
+  function populateKbSelect() {
+    kbSelect.innerHTML = ''
+    const kbs = typeof allKbs !== 'undefined' ? allKbs : []
+    if (!kbs.length) {
+      kbSelect.innerHTML = '<option value="">暂无知识库</option>'
+      return
+    }
+    for (const kb of kbs) {
+      const opt = document.createElement('option')
+      opt.value = kb.id
+      opt.textContent = kb.name
+      kbSelect.appendChild(opt)
+    }
+    currentKbId = kbs[0]?.id ?? null
+    kbSelect.value = currentKbId
+  }
+
+  function renderStats(stats) {
+    statPositive.textContent = stats.positive
+    statNegative.textContent = stats.negative
+    const total = stats.positive + stats.negative
+    statRate.textContent = total > 0 ? `${Math.round(stats.positive / total * 100)}%` : '—'
+
+    const reasons = Object.entries(stats.byReason ?? {})
+    if (reasons.length > 0) {
+      reasonsList.innerHTML = ''
+      for (const [key, cnt] of reasons.sort((a, b) => b[1] - a[1])) {
+        const row = document.createElement('div')
+        row.className = 'feedback-reason-row'
+        row.innerHTML = `<span class="feedback-reason-name">${REASON_LABELS[key] ?? key}</span><span class="feedback-reason-cnt">${cnt} 次</span>`
+        reasonsList.appendChild(row)
+      }
+      reasonsCard.style.display = ''
+    } else {
+      reasonsCard.style.display = 'none'
+    }
+  }
+
+  function renderItems(items, append = false) {
+    if (!append) feedbackList.innerHTML = ''
+    if (!items.length && !append) {
+      feedbackEmpty.classList.remove('hidden')
+      return
+    }
+    feedbackEmpty.classList.add('hidden')
+    for (const item of items) {
+      const tr = document.createElement('tr')
+      const date = new Date(item.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      const snippet = (item.question_snippet ?? '').slice(0, 60)
+      const reason = item.reason ? (REASON_LABELS[item.reason] ?? item.reason) : '—'
+      const comment = item.comment ? escHtml(item.comment.slice(0, 80)) : '—'
+      tr.innerHTML = `
+        <td style="white-space:nowrap;color:var(--muted);font-size:12px">${escHtml(date)}</td>
+        <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(item.conversation_title ?? '—')}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)">${escHtml(snippet)}</td>
+        <td><span class="badge badge-warn">${escHtml(reason)}</span></td>
+        <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px">${comment}</td>
+      `
+      feedbackList.appendChild(tr)
+    }
+  }
+
+  async function loadFeedback(append = false) {
+    if (!currentKbId) return
+    if (!append) offset = 0
+    try {
+      const res = await fetch(`/api/admin/kbs/${currentKbId}/feedback?limit=${limit}&offset=${offset}`, { headers: auth() })
+      if (!res.ok) return
+      const data = await res.json()
+      if (!append) renderStats(data.stats)
+      renderItems(data.items, append)
+      offset += data.items.length
+      loadMoreBtn.classList.toggle('hidden', !data.hasMore)
+    } catch {}
+  }
+
+  kbSelect.addEventListener('change', () => {
+    currentKbId = kbSelect.value ? Number(kbSelect.value) : null
+    loadFeedback()
+  })
+  refreshBtn.addEventListener('click', () => loadFeedback())
+  loadMoreBtn.addEventListener('click', () => loadFeedback(true))
+
+  // 切换到 feedback tab 时加载
+  document.querySelectorAll('.tab-btn[data-tab="feedback"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!currentKbId) populateKbSelect()
+      loadFeedback()
+    })
+  })
+
+  populateKbSelect()
+}
+
+/* ── MCP 接入管理 ──────────────────────────────────── */
+
+function initMcpPanel() {
+  const keysListEl  = document.getElementById('mcp-keys-list')
+  const createBtn   = document.getElementById('create-mcp-key-btn')
+
+  // ── 创建 Key 弹层 ──
+  const createModal   = document.getElementById('mcp-key-modal')
+  const createClose   = document.getElementById('mcp-key-modal-close')
+  const createCancel  = document.getElementById('mcp-key-modal-cancel')
+  const createConfirm = document.getElementById('mcp-key-modal-confirm')
+  const labelInput    = document.getElementById('mcp-key-label')
+  const kbCheckboxes  = document.getElementById('mcp-kb-checkboxes')
+
+  // ── 显示 Key 弹层 ──
+  const resultModal   = document.getElementById('mcp-key-result-modal')
+  const resultClose   = document.getElementById('mcp-key-result-close')
+  const resultDone    = document.getElementById('mcp-key-result-done')
+  const resultValue   = document.getElementById('mcp-key-result-value')
+  const configSnippet = document.getElementById('mcp-config-snippet')
+  const copyKeyBtn    = document.getElementById('mcp-key-copy-btn')
+  const copyConfigBtn = document.getElementById('mcp-config-copy-btn')
+
+  function openCreateModal() {
+    labelInput.value = ''
+    kbCheckboxes.innerHTML = ''
+    const kbs = allKbs ?? []
+    if (!kbs.length) {
+      kbCheckboxes.innerHTML = '<span style="font-size:12px;color:var(--muted)">暂无知识库</span>'
+    } else {
+      for (const kb of kbs) {
+        const label = document.createElement('label')
+        label.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer'
+        label.innerHTML = `<input type="checkbox" value="${kb.id}"> ${escHtml(kb.name)}`
+        kbCheckboxes.appendChild(label)
+      }
+    }
+    createModal.classList.remove('hidden')
+    labelInput.focus()
+  }
+
+  function closeCreateModal() { createModal.classList.add('hidden') }
+
+  createBtn.addEventListener('click', openCreateModal)
+  createClose.addEventListener('click', closeCreateModal)
+  createCancel.addEventListener('click', closeCreateModal)
+  createModal.addEventListener('click', e => { if (e.target === createModal) closeCreateModal() })
+
+  createConfirm.addEventListener('click', async () => {
+    const label  = labelInput.value.trim()
+    const kbIds  = Array.from(kbCheckboxes.querySelectorAll('input[type="checkbox"]:checked'))
+                       .map(cb => Number(cb.value))
+
+    createConfirm.disabled = true
+    createConfirm.textContent = '生成中…'
+    try {
+      const res = await fetch('/api/mcp/keys', {
+        method: 'POST',
+        headers: { ...auth(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: label || undefined, kb_ids: kbIds }),
+      })
+      const data = await res.json()
+      if (!res.ok) { showToast(data.error ?? '生成失败', 'error'); return }
+
+      closeCreateModal()
+      const resolvedKbIds = Array.isArray(data.kb_ids) ? data.kb_ids : (typeof data.kb_ids === 'string' ? JSON.parse(data.kb_ids || '[]') : kbIds)
+      showResultModal(data.key, resolvedKbIds)
+      loadMcpKeys()
+    } catch { showToast('网络错误', 'error') }
+    finally { createConfirm.disabled = false; createConfirm.textContent = '生成' }
+  })
+
+  function showResultModal(rawKey, kbIds) {
+    resultValue.value = rawKey
+
+    const origin  = location.origin
+    const kbParam = kbIds.length === 1 ? `, "--kb-id=${kbIds[0]}"` : ''
+    const distPath = 'H:/enterprise-kb/dist/mcp-stdio.js'
+
+    const httpCfg = JSON.stringify({
+      mcpServers: {
+        'enterprise-kb': {
+          type: 'http',
+          url: `${origin}/mcp`,
+          headers: { Authorization: `Bearer ${rawKey}` },
+        },
+      },
+    }, null, 2)
+
+    const stdioCfg = JSON.stringify({
+      mcpServers: {
+        'enterprise-kb': {
+          command: 'node',
+          args: [distPath, ...kbIds.map(id => `--kb-id=${id}`)],
+          env: { MCP_API_KEY: rawKey },
+        },
+      },
+    }, null, 2)
+
+    configSnippet.textContent = `// HTTP 模式（推荐，远程团队共享）\n${httpCfg}\n\n// 或 stdio 本地模式\n${stdioCfg}`
+    resultModal.classList.remove('hidden')
+  }
+
+  function closeResultModal() { resultModal.classList.add('hidden') }
+
+  resultClose.addEventListener('click', closeResultModal)
+  resultDone.addEventListener('click', closeResultModal)
+  resultModal.addEventListener('click', e => { if (e.target === resultModal) closeResultModal() })
+
+  copyKeyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(resultValue.value).then(() => showToast('已复制 API Key', 'success'))
+  })
+  copyConfigBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(configSnippet.textContent).then(() => showToast('已复制配置', 'success'))
+  })
+
+  // ── 加载并渲染 Key 列表 ──
+  async function loadMcpKeys() {
+    keysListEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">加载中…</div>'
+    try {
+      const res = await fetch('/api/mcp/keys', { headers: auth() })
+      if (!res.ok) { keysListEl.innerHTML = '<div style="color:var(--muted)">加载失败</div>'; return }
+      const keys = await res.json()
+      renderMcpKeys(keys)
+    } catch { keysListEl.innerHTML = '<div style="color:var(--muted)">加载失败</div>' }
+  }
+
+  function renderMcpKeys(keys) {
+    if (!keys.length) {
+      keysListEl.innerHTML = '<div class="card" style="padding:20px;color:var(--muted);font-size:13px;max-width:720px">暂无 API Key，点击右上角「生成 API Key」创建第一个。</div>'
+      return
+    }
+
+    const table = document.createElement('div')
+    table.className = 'card'
+    table.style.cssText = 'max-width:720px;overflow:hidden'
+    table.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="padding:10px 16px;text-align:left;font-weight:600;color:var(--muted)">标签</th>
+            <th style="padding:10px 16px;text-align:left;font-weight:600;color:var(--muted)">前缀</th>
+            <th style="padding:10px 16px;text-align:left;font-weight:600;color:var(--muted)">KB 范围</th>
+            <th style="padding:10px 16px;text-align:left;font-weight:600;color:var(--muted)">创建时间</th>
+            <th style="padding:10px 16px;text-align:left;font-weight:600;color:var(--muted)">最近使用</th>
+            <th style="padding:10px 16px"></th>
+          </tr>
+        </thead>
+        <tbody id="mcp-keys-tbody"></tbody>
+      </table>`
+    keysListEl.innerHTML = ''
+    keysListEl.appendChild(table)
+
+    const tbody = document.getElementById('mcp-keys-tbody')
+    for (const key of keys) {
+      const kbIds  = JSON.parse(key.kb_ids || '[]')
+      const kbText = kbIds.length
+        ? kbIds.map(id => { const kb = allKbs.find(k => k.id === id); return kb ? kb.name : `KB#${id}` }).join(', ')
+        : '全部可访问'
+      const created = key.created_at ? new Date(key.created_at * 1000).toLocaleDateString('zh-CN') : '—'
+      const used    = key.last_used_at ? new Date(key.last_used_at * 1000).toLocaleDateString('zh-CN') : '从未'
+      const tr = document.createElement('tr')
+      tr.style.borderBottom = '1px solid var(--border)'
+      tr.innerHTML = `
+        <td style="padding:10px 16px">${escHtml(key.label || '—')}</td>
+        <td style="padding:10px 16px;font-family:monospace;color:var(--muted)">${escHtml(key.key_prefix)}…</td>
+        <td style="padding:10px 16px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(kbText)}">${escHtml(kbText)}</td>
+        <td style="padding:10px 16px;color:var(--muted)">${created}</td>
+        <td style="padding:10px 16px;color:var(--muted)">${used}</td>
+        <td style="padding:10px 16px;text-align:right">
+          <button class="btn btn-sm" style="color:#ef4444;border-color:#ef4444" data-delete-key="${key.id}">删除</button>
+        </td>`
+      tbody.appendChild(tr)
+    }
+
+    tbody.addEventListener('click', async e => {
+      const btn = e.target.closest('[data-delete-key]')
+      if (!btn) return
+      const id = Number(btn.dataset.deleteKey)
+      if (!confirm('确定删除此 API Key？删除后相关接入将立即失效。')) return
+      const res = await fetch(`/api/mcp/keys/${id}`, { method: 'DELETE', headers: auth() })
+      if (res.ok) { showToast('已删除', 'success'); loadMcpKeys() }
+      else { const d = await res.json(); showToast(d.error ?? '删除失败', 'error') }
+    })
+  }
+
+  // 切换到 MCP tab 时加载
+  document.querySelectorAll('.tab-btn[data-tab="mcp"]').forEach(btn => {
+    btn.addEventListener('click', loadMcpKeys)
+  })
 }
