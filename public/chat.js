@@ -568,7 +568,7 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
           renderMd(responseText, responseText.dataset.raw ?? '', false)
           if (Array.isArray(ev.messages)) history = [...history, ...ev.messages]
           updateHistoryCount()
-          row.querySelector('.msg-meta').textContent = ev.context?.truncated
+          row.querySelector('.msg-meta-info').textContent = ev.context?.truncated
             ? `${ev.turns} 轮检索 · 已使用最近上下文`
             : `${ev.turns} 轮检索`
           if (copyBtn) copyBtn.classList.remove('hidden')
@@ -657,28 +657,107 @@ function appendAssistantSkeleton() {
   thumbDown.title = '没帮助'
   thumbDown.textContent = '👎'
 
-  function submitFeedback(rating) {
+  function submitFeedback(rating, detail = {}) {
     const convId = row.dataset.conversationId
-    if (!convId) return
+    if (!convId) return Promise.resolve(false)
     thumbUp.classList.toggle('active', rating === 1)
     thumbDown.classList.toggle('active', rating === -1)
-    fetch(`/api/conversations/${convId}/feedback`, {
+    return fetch(`/api/conversations/${convId}/feedback`, {
       method: 'POST',
       headers: { ...auth(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rating }),
-    }).catch(() => {})
+      body: JSON.stringify({ rating, ...detail }),
+    }).then(r => r.ok).catch(() => false)
   }
-  thumbUp.addEventListener('click', () => submitFeedback(1))
-  thumbDown.addEventListener('click', () => submitFeedback(-1))
 
-  meta.append(copyBtn, thumbUp, thumbDown)
+  const reasonPanel = createFeedbackReasonPanel(detail => submitFeedback(-1, detail))
+  thumbUp.addEventListener('click', () => {
+    reasonPanel.close()
+    submitFeedback(1)
+  })
+  thumbDown.addEventListener('click', () => {
+    // 先记下差评，原因为可选补充
+    submitFeedback(-1)
+    reasonPanel.open()
+  })
 
-  content.append(toolsLog, responseText, meta)
+  // 检索轮次等文字单独放一个元素，避免覆盖复制和反馈按钮
+  const metaInfo = document.createElement('span')
+  metaInfo.className = 'msg-meta-info'
+
+  meta.append(metaInfo, copyBtn, thumbUp, thumbDown)
+
+  content.append(toolsLog, responseText, meta, reasonPanel.el)
   row.append(avatar, content)
   messagesEl.appendChild(row)
   scrollBottom()
 
   return { row, toolsLog, responseText, cursorEl, copyBtn, thumbUp, thumbDown }
+}
+
+const FEEDBACK_REASON_OPTIONS = [
+  ['incorrect',  '答案不正确'],
+  ['incomplete', '回答不完整'],
+  ['not_found',  '没找到相关资料'],
+  ['off_topic',  '答非所问'],
+  ['outdated',   '信息过时'],
+  ['other',      '其他'],
+]
+
+/** 差评原因面板：选择一个原因并可补充说明，提交后显示致谢 */
+function createFeedbackReasonPanel(onSubmit) {
+  const el = document.createElement('div')
+  el.className = 'feedback-reason-panel hidden'
+  el.innerHTML = `
+    <div class="feedback-reason-title">哪里不满意？<span>选填，帮助管理员改进知识库</span></div>
+    <div class="feedback-reason-chips" role="radiogroup" aria-label="差评原因">
+      ${FEEDBACK_REASON_OPTIONS.map(([value, label]) =>
+        `<button type="button" class="feedback-reason-chip" role="radio" aria-checked="false" data-reason="${value}">${label}</button>`).join('')}
+    </div>
+    <textarea class="feedback-reason-comment" maxlength="500" rows="2" placeholder="补充说明（可选），例如正确答案或应参考的文档"></textarea>
+    <div class="feedback-reason-actions">
+      <span class="feedback-reason-error hidden">提交失败，请重试</span>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="skip">跳过</button>
+      <button type="button" class="btn btn-primary btn-sm" data-action="submit" disabled>提交</button>
+    </div>
+  `
+  const chips = [...el.querySelectorAll('.feedback-reason-chip')]
+  const commentEl = el.querySelector('.feedback-reason-comment')
+  const submitBtn = el.querySelector('[data-action="submit"]')
+  const errorEl = el.querySelector('.feedback-reason-error')
+  let selected = null
+
+  const updateSubmit = () => { submitBtn.disabled = !selected && !commentEl.value.trim() }
+  chips.forEach(chip => chip.addEventListener('click', () => {
+    selected = selected === chip.dataset.reason ? null : chip.dataset.reason
+    chips.forEach(c => {
+      const on = c.dataset.reason === selected
+      c.classList.toggle('active', on)
+      c.setAttribute('aria-checked', String(on))
+    })
+    updateSubmit()
+  }))
+  commentEl.addEventListener('input', updateSubmit)
+
+  const close = () => el.classList.add('hidden')
+  el.querySelector('[data-action="skip"]').addEventListener('click', close)
+  submitBtn.addEventListener('click', async () => {
+    submitBtn.disabled = true
+    errorEl.classList.add('hidden')
+    const ok = await onSubmit({ reason: selected ?? undefined, comment: commentEl.value.trim() || undefined })
+    if (ok) {
+      el.innerHTML = '<div class="feedback-reason-thanks">感谢反馈，管理员会据此改进知识库。</div>'
+      setTimeout(close, 2500)
+    } else {
+      errorEl.classList.remove('hidden')
+      updateSubmit()
+    }
+  })
+
+  return {
+    el,
+    open() { if (el.querySelector('.feedback-reason-chips')) el.classList.remove('hidden') },
+    close,
+  }
 }
 
 function addToolCall(container, name, input) {
@@ -1100,9 +1179,6 @@ function rebuildChatUI(msgs) {
         cursorEl.remove()
         renderMd(responseText, msg.content, false)
         if (copyBtn) copyBtn.classList.remove('hidden')
-        const rows = messagesEl.querySelectorAll('.msg-assistant')
-        const lastRow = rows[rows.length - 1]
-        if (lastRow) lastRow.querySelector('.msg-meta').textContent = ''
       }
       // tool_calls only — skip rendering, will show in next tool_result if needed
     }

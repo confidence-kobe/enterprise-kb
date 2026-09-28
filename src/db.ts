@@ -248,6 +248,10 @@ export function initDb(dbPath: string): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_conv_user
     ON response_feedback(conversation_id, user_id)
   `)
+  // Migration: 差评原因与当时问答快照
+  for (const col of ['reason TEXT', 'comment TEXT', 'question TEXT', 'answer TEXT', 'updated_at INTEGER']) {
+    try { db.exec(`ALTER TABLE response_feedback ADD COLUMN ${col}`) } catch { /* column already exists */ }
+  }
 
   // Migration: unicode61 → trigram for CJK support (trigram handles 3+ char Chinese terms;
   // 2-char terms continue to be served by the existing LIKE substring fallback)
@@ -613,12 +617,41 @@ export function updateDocSummary(id: number, summary: string): void {
   db.prepare('UPDATE documents SET summary = ? WHERE id = ?').run(summary.slice(0, 300), id)
 }
 
-export function upsertFeedback(conversationId: number, userId: number, rating: 1 | -1): void {
+export const FEEDBACK_REASONS = ['incorrect', 'incomplete', 'not_found', 'off_topic', 'outdated', 'other'] as const
+export type FeedbackReason = typeof FEEDBACK_REASONS[number]
+
+export interface FeedbackDetail {
+  reason?: FeedbackReason | null
+  comment?: string | null
+}
+
+/** 取对话中最后一轮用户提问与助手回答（用于差评快照） */
+function getLastExchange(conversationId: number): { question: string | null; answer: string | null } {
+  const q = db.prepare(`
+    SELECT content FROM messages
+    WHERE conversation_id = ? AND role = 'user' AND content IS NOT NULL
+    ORDER BY seq DESC LIMIT 1
+  `).get(conversationId) as { content: string } | undefined
+  const a = db.prepare(`
+    SELECT content FROM messages
+    WHERE conversation_id = ? AND role = 'assistant' AND content IS NOT NULL AND content != ''
+    ORDER BY seq DESC LIMIT 1
+  `).get(conversationId) as { content: string } | undefined
+  return { question: q?.content.slice(0, 500) ?? null, answer: a?.content.slice(0, 1000) ?? null }
+}
+
+export function upsertFeedback(conversationId: number, userId: number, rating: 1 | -1, detail: FeedbackDetail = {}): void {
+  // 好评清空差评原因；差评保存原因、补充说明与当时的问答快照
+  const reason  = rating === -1 ? detail.reason ?? null : null
+  const comment = rating === -1 ? detail.comment?.trim().slice(0, 500) || null : null
+  const { question, answer } = rating === -1 ? getLastExchange(conversationId) : { question: null, answer: null }
   db.prepare(`
-    INSERT INTO response_feedback(conversation_id, user_id, rating)
-    VALUES(?,?,?)
-    ON CONFLICT(conversation_id, user_id) DO UPDATE SET rating = excluded.rating
-  `).run(conversationId, userId, rating)
+    INSERT INTO response_feedback(conversation_id, user_id, rating, reason, comment, question, answer, updated_at)
+    VALUES(?,?,?,?,?,?,?, strftime('%s','now'))
+    ON CONFLICT(conversation_id, user_id) DO UPDATE SET
+      rating = excluded.rating, reason = excluded.reason, comment = excluded.comment,
+      question = excluded.question, answer = excluded.answer, updated_at = excluded.updated_at
+  `).run(conversationId, userId, rating, reason, comment, question, answer)
 }
 
 export function getFeedbackStats(kbId: number): { positive: number; negative: number } {
@@ -1157,6 +1190,59 @@ export interface KbFeedbackStats {
   kb_name: string
   positive: number
   negative: number
+}
+
+export interface FeedbackReasonCount {
+  reason: FeedbackReason | null
+  count: number
+}
+
+/** 差评原因分布（reason 为 null 表示未填写原因） */
+export function getNegativeFeedbackReasons(): FeedbackReasonCount[] {
+  return db.prepare(`
+    SELECT reason, COUNT(*) AS count
+    FROM response_feedback
+    WHERE rating = -1
+    GROUP BY reason
+    ORDER BY count DESC
+  `).all() as FeedbackReasonCount[]
+}
+
+export interface NegativeFeedbackItem {
+  id: number
+  conversation_id: number
+  kb_id: number
+  kb_name: string
+  username: string
+  reason: FeedbackReason | null
+  comment: string | null
+  question: string | null
+  answer: string | null
+  created_at: number
+}
+
+export function listNegativeFeedback(
+  opts: { limit: number; offset: number; reason?: FeedbackReason | 'none' },
+): { items: NegativeFeedbackItem[]; total: number } {
+  const where = ['f.rating = -1']
+  const params: unknown[] = []
+  if (opts.reason === 'none') where.push('f.reason IS NULL')
+  else if (opts.reason) { where.push('f.reason = ?'); params.push(opts.reason) }
+  const whereSql = where.join(' AND ')
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM response_feedback f WHERE ${whereSql}`).get(...params) as { n: number }).n
+  const items = db.prepare(`
+    SELECT f.id, f.conversation_id, c.kb_id, kb.name AS kb_name, u.username,
+           f.reason, f.comment, f.question, f.answer,
+           COALESCE(f.updated_at, f.created_at) AS created_at
+    FROM response_feedback f
+    JOIN conversations c    ON c.id = f.conversation_id
+    JOIN knowledge_bases kb ON kb.id = c.kb_id
+    LEFT JOIN users u       ON u.id = f.user_id
+    WHERE ${whereSql}
+    ORDER BY COALESCE(f.updated_at, f.created_at) DESC, f.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, opts.limit, opts.offset) as NegativeFeedbackItem[]
+  return { items, total }
 }
 
 export function getAllFeedbackStats(): KbFeedbackStats[] {

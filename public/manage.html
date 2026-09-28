@@ -10,7 +10,7 @@
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=30">
+  <link rel="stylesheet" href="style.css?v=31">
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
 </head>
@@ -52,6 +52,10 @@
       <button class="tab-btn" data-tab="audit" id="audit-tab" style="display:none">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-5"/></svg>
         审计
+      </button>
+      <button class="tab-btn" data-tab="feedback" id="feedback-tab" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></svg>
+        反馈
       </button>
       <button class="tab-btn" data-tab="settings" id="settings-tab" style="display:none">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -207,6 +211,27 @@
         </table>
         <button class="conv-load-more hidden" id="audit-load-more">加载更多</button>
       </div>
+    </div>
+
+    <!-- 回答反馈标签 -->
+    <div class="tab-panel" id="tab-feedback">
+      <div class="section-header">
+        <div class="section-title">回答反馈</div>
+        <div class="audit-filter-bar">
+          <select class="input input-sm" id="feedback-reason-filter" aria-label="按原因筛选">
+            <option value="">全部差评</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" id="feedback-refresh-btn">刷新</button>
+        </div>
+      </div>
+      <div class="manage-stats-row" id="feedback-stats"></div>
+      <div class="card feedback-reasons-card">
+        <div class="feedback-card-title">差评原因分布</div>
+        <div id="feedback-reason-bars"></div>
+      </div>
+      <div class="feedback-card-title feedback-list-title">差评明细</div>
+      <div id="feedback-list"></div>
+      <button class="conv-load-more hidden" id="feedback-load-more">加载更多</button>
     </div>
 
     <!-- 系统设置标签 -->

@@ -694,4 +694,61 @@ describe('conversation search and pinning', () => {
         expect(res.body.items[1]).toMatchObject({ id: second.id })
       })
   })
+
+  it('records thumbs-down reasons with a snapshot and lists them for admins only', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+
+    const kb = await request(app).post('/api/kbs').set(auth).send({ name: 'Feedback KB' }).expect(201)
+    const kbId = kb.body.id as number
+    const conv = createConversation(admin.user.id, kbId, 'Leave policy')
+    insertMessages(conv.id, [
+      { role: 'user', content: 'How many days of annual leave?', tool_calls: null, tool_call_id: null, seq: 0 },
+      { role: 'assistant', content: 'Ten days per year.', tool_calls: null, tool_call_id: null, seq: 1 },
+    ])
+
+    // 非法原因与超长说明被拒绝
+    await request(app).post(`/api/conversations/${conv.id}/feedback`).set(auth)
+      .send({ rating: -1, reason: 'hacked' }).expect(400)
+    await request(app).post(`/api/conversations/${conv.id}/feedback`).set(auth)
+      .send({ rating: -1, reason: 'incorrect', comment: 'x'.repeat(501) }).expect(400)
+
+    // 先记录一次无原因差评，再补充原因（同一对话只保留一条）
+    await request(app).post(`/api/conversations/${conv.id}/feedback`).set(auth).send({ rating: -1 }).expect(200)
+    await request(app).post(`/api/conversations/${conv.id}/feedback`).set(auth)
+      .send({ rating: -1, reason: 'outdated', comment: 'Policy changed to 15 days in 2026' }).expect(200)
+
+    const list = await request(app).get('/api/admin/feedback/negative').set(auth).expect(200)
+    const item = list.body.items.find((i: { conversation_id: number }) => i.conversation_id === conv.id)
+    expect(item).toMatchObject({
+      kb_id: kbId,
+      kb_name: 'Feedback KB',
+      username: 'admin',
+      reason: 'outdated',
+      comment: 'Policy changed to 15 days in 2026',
+      question: 'How many days of annual leave?',
+      answer: 'Ten days per year.',
+    })
+
+    const filtered = await request(app).get('/api/admin/feedback/negative').set(auth)
+      .query({ reason: 'incorrect' }).expect(200)
+    expect(filtered.body.items.some((i: { conversation_id: number }) => i.conversation_id === conv.id)).toBe(false)
+    await request(app).get('/api/admin/feedback/negative').set(auth).query({ reason: 'bogus' }).expect(400)
+
+    const stats = await request(app).get('/api/admin/feedback').set(auth).expect(200)
+    expect(stats.body.reasons).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'outdated' })]))
+
+    // 改为好评后清空原因，不再出现在差评列表
+    await request(app).post(`/api/conversations/${conv.id}/feedback`).set(auth).send({ rating: 1 }).expect(200)
+    const after = await request(app).get('/api/admin/feedback/negative').set(auth).expect(200)
+    expect(after.body.items.some((i: { conversation_id: number }) => i.conversation_id === conv.id)).toBe(false)
+
+    // 普通用户不能查看差评列表，也不能给别人的对话打分
+    await request(app).post('/api/admin/users').set(auth)
+      .send({ username: 'fbuser', password: 'Fbuser@123', role: 'user' }).expect(201)
+    const user = await login('fbuser', 'Fbuser@123')
+    await request(app).get('/api/admin/feedback/negative').set('Authorization', `Bearer ${user.token}`).expect(403)
+    await request(app).post(`/api/conversations/${conv.id}/feedback`).set('Authorization', `Bearer ${user.token}`)
+      .send({ rating: -1, reason: 'incorrect' }).expect(403)
+  })
 })

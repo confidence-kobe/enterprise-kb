@@ -24,6 +24,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          updateDocMeta, updateDocSummary, updateDocIndexStatus, createAuditEvent, listAuditEvents,
          updateKbSystemPrompt, storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs,
          upsertFeedback, getFeedbackStats, getAllFeedbackStats,
+         getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS,
          getConfig, setConfig } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
@@ -1527,9 +1528,18 @@ app.post('/api/conversations/:id/feedback', requireAuth, (req: AuthRequest, res)
   const conv = getConversationById(convId)
   if (!conv) { res.status(404).json({ error: '对话不存在' }); return }
   if (conv.user_id !== req.user!.userId) { res.status(403).json({ error: '无权限' }); return }
-  const { rating } = req.body as { rating: 1 | -1 }
+  const { rating, reason, comment } = req.body as { rating: 1 | -1; reason?: unknown; comment?: unknown }
   if (rating !== 1 && rating !== -1) { res.status(400).json({ error: 'rating 必须为 1 或 -1' }); return }
-  upsertFeedback(convId, req.user!.userId, rating)
+  if (reason != null && !(FEEDBACK_REASONS as readonly unknown[]).includes(reason)) {
+    res.status(400).json({ error: '无效的差评原因' }); return
+  }
+  if (comment != null && (typeof comment !== 'string' || comment.length > 500)) {
+    res.status(400).json({ error: '补充说明最多 500 字' }); return
+  }
+  upsertFeedback(convId, req.user!.userId, rating, {
+    reason: reason as (typeof FEEDBACK_REASONS)[number] | undefined,
+    comment: comment as string | undefined,
+  })
   res.json({ ok: true })
 })
 
@@ -1590,7 +1600,22 @@ app.get('/api/admin/feedback', requireAdmin, (_req, res) => {
   const total_negative = items.reduce((s, i) => s + i.negative, 0)
   const total = total_positive + total_negative
   const satisfaction = total > 0 ? Math.round((total_positive / total) * 100) : null
-  res.json({ items, total_positive, total_negative, satisfaction })
+  res.json({ items, total_positive, total_negative, satisfaction, reasons: getNegativeFeedbackReasons() })
+})
+
+app.get('/api/admin/feedback/negative', requireAdmin, (req, res) => {
+  const limit  = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+  const offset = Math.max(Number(req.query.offset) || 0, 0)
+  const reasonParam = String(req.query.reason ?? '').trim()
+  let reason: (typeof FEEDBACK_REASONS)[number] | 'none' | undefined
+  if (reasonParam === 'none') reason = 'none'
+  else if (reasonParam) {
+    if (!(FEEDBACK_REASONS as readonly string[]).includes(reasonParam)) {
+      res.status(400).json({ error: '无效的差评原因' }); return
+    }
+    reason = reasonParam as (typeof FEEDBACK_REASONS)[number]
+  }
+  res.json(listNegativeFeedback({ limit, offset, reason }))
 })
 
 app.get('/api/admin/audit', requireAdmin, (req, res) => {
