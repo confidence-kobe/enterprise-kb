@@ -1337,9 +1337,10 @@ function initTextDocModal() {
       return
     }
     try {
-      const html = typeof DOMPurify !== 'undefined'
+      // 未加载到 marked / DOMPurify 时退回纯文本，绝不插入未净化的 HTML
+      const html = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined'
         ? DOMPurify.sanitize(marked.parse(md))
-        : marked.parse(md)
+        : `<pre>${escHtml(md)}</pre>`
       previewPane.innerHTML = `<div class="md-preview">${html}</div>`
     } catch { previewPane.innerHTML = '<div class="text-doc-preview-empty">预览渲染失败</div>' }
   }

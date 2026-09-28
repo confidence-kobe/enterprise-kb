@@ -640,6 +640,21 @@ app.use(express.json({ limit: '4mb' }))
 app.use(express.static(path.join(__dirname, '../public')))
 app.get('/favicon.ico', (_req, res) => res.status(204).end())
 
+// 前端第三方库从本地 node_modules 提供，不依赖外网 CDN（内网 / 国内网络可用）。
+// 只暴露白名单中的文件，不把整个 node_modules 挂成静态目录。
+const NODE_MODULES_DIR = path.join(__dirname, '../node_modules')
+const VENDOR_SCRIPTS: Record<string, string> = {
+  'marked.min.js': 'marked/marked.min.js',
+  'purify.min.js': 'dompurify/dist/purify.min.js',
+  'p5.min.js':     'p5/lib/p5.min.js',
+}
+for (const [name, rel] of Object.entries(VENDOR_SCRIPTS)) {
+  app.get(`/vendor/${name}`, (_req, res) => res.sendFile(path.join(NODE_MODULES_DIR, rel)))
+}
+const INTER_DIR = path.join(NODE_MODULES_DIR, '@fontsource-variable/inter')
+app.get('/vendor/inter/wght.css', (_req, res) => res.sendFile(path.join(INTER_DIR, 'wght.css')))
+app.use('/vendor/inter/files', express.static(path.join(INTER_DIR, 'files'), { maxAge: '30d', immutable: true }))
+
 app.get('/healthz', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() })
 })

@@ -46,6 +46,25 @@ afterAll(async () => {
 })
 
 describe('server health and auth', () => {
+  it('serves frontend vendor libraries locally without exposing node_modules', async () => {
+    for (const name of ['marked.min.js', 'purify.min.js', 'p5.min.js']) {
+      await request(app)
+        .get(`/vendor/${name}`)
+        .expect(200)
+        .expect('Content-Type', /javascript/)
+    }
+
+    const css = await request(app).get('/vendor/inter/wght.css').expect(200).expect('Content-Type', /css/)
+    const fontFile = /url\(\.\/files\/([^)]+\.woff2)\)/.exec(css.text)?.[1]
+    expect(fontFile).toBeTruthy()
+    await request(app).get(`/vendor/inter/files/${fontFile}`).expect(200)
+
+    await request(app).get('/vendor/inter/package.json').expect(404)
+    await request(app).get('/vendor/marked/package.json').expect(404)
+    await request(app).get('/vendor/inter/files/..%2Fpackage.json').expect(404)
+    await request(app).get('/node_modules/marked/package.json').expect(404)
+  })
+
   it('serves liveness and readiness endpoints', async () => {
     await request(app)
       .get('/healthz')
