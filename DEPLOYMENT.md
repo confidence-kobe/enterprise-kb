@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Node.js 20 or newer.
+- Node.js 20 or newer (22 LTS recommended).
 - A writable SQLite data directory.
 - A writable document storage directory.
 - An OpenAI-compatible LLM endpoint. For Ollama, use `http://localhost:11434/v1`.
@@ -18,6 +18,7 @@ Copy `.env.example` to `.env` and set production values:
 - `HISTORY_MAX_MESSAGES`, `HISTORY_MAX_CHARS` to cap trusted persisted conversation context sent to the model.
 - `STORAGE_PATH`, `DB_PATH`.
 - `CORS_ORIGIN` only when the UI and API are served from different origins.
+- `HTTPS_PROXY` / `NO_PROXY` when the server must reach the LLM or embedding endpoint through a corporate proxy. Credentials in the proxy URL are redacted from logs.
 
 The server refuses to start in production when `JWT_SECRET` or `ADMIN_PASSWORD` still uses an example/default value.
 

@@ -6,7 +6,7 @@ Document retrieval uses structure-aware chunks plus hybrid lexical ranking acros
 
 ## Stack
 
-- Node.js 20+
+- Node.js 20+ (22 LTS recommended; CI and Docker use 22)
 - TypeScript
 - Express 5
 - SQLite via `better-sqlite3`
@@ -92,6 +92,7 @@ Use `.env.example` as the template. Important variables:
 - `DB_PATH`
 - `CORS_ORIGIN`
 - `TRUST_PROXY`
+- `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` (optional outbound proxy for LLM and embedding calls)
 
 Production refuses weak/default `JWT_SECRET` and `ADMIN_PASSWORD` values.
 
