@@ -4,6 +4,7 @@
  */
 
 import OpenAI from 'openai'
+import { fetch as undiciFetch } from 'undici'
 import type { LLMTool, QAEvent } from './tools.js'
 
 type Message = OpenAI.Chat.ChatCompletionMessageParam
@@ -90,8 +91,9 @@ export class LLMExecutor {
     this.client = new OpenAI({
       baseURL: config.baseUrl.replace(/\/$/, ''),
       apiKey: config.apiKey,
-      // 使用全局 fetch，使 HTTPS_PROXY / NO_PROXY 设置同样作用于问答请求
-      fetch: globalThis.fetch,
+      // 使用 undici 的 fetch，使 HTTPS_PROXY / NO_PROXY（undici 全局 dispatcher）同样作用于问答请求。
+      // 不能用 globalThis.fetch：Node 内置 undici 与 npm undici 版本不同，组合使用会报 invalid content-length header
+      fetch: undiciFetch as unknown as NonNullable<ConstructorParameters<typeof OpenAI>[0]>['fetch'],
     })
   }
 
