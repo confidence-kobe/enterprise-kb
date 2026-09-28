@@ -11,3 +11,6 @@ data/
 *.log
 coverage/
 .vitest/
+.claude/worktrees/
+.tmp.driveupload/
+.idea/
