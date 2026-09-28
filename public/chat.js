@@ -211,6 +211,7 @@ async function loadKbs() {
     sidebarKbs.innerHTML = ''
     if (!kbs.length) {
       sidebarKbs.innerHTML = '<div class="no-kb-hint">暂无知识库<br><a href="/manage.html">去管理页创建</a></div>'
+      setDashboardPlaceholder('还没有知识库，请先到管理页创建。', '还没有知识库，暂无会话。')
       return
     }
 
@@ -249,6 +250,7 @@ async function loadKbs() {
 
   } catch (e) {
     sidebarKbs.innerHTML = `<div class="no-kb-hint" style="color:var(--red)">加载失败</div>`
+    setDashboardPlaceholder('知识库加载失败，请刷新重试。', '知识库加载失败，请刷新重试。')
   }
 }
 
@@ -315,6 +317,7 @@ async function selectKb(kb) {
     sidebarConvs.classList.add('hidden')
     document.getElementById('new-conv-btn')?.classList.add('hidden')
     kbDocMap.clear()
+    setDashboardPlaceholder('跨库模式下请直接提问，结果会注明来源文档。', '跨库提问不保存为会话。')
     return
   }
 
@@ -345,6 +348,12 @@ async function selectKb(kb) {
   document.getElementById('new-conv-btn').classList.remove('hidden')
   convSearchEl.value = ''
   await loadConversations(kb.id)
+}
+
+/** 没有可展示的知识库内容时，替换首页两个面板里的"加载中…"占位 */
+function setDashboardPlaceholder(docsText, convsText) {
+  if (welcomeRecentDocs) welcomeRecentDocs.innerHTML = `<div class="dashboard-empty">${escHtml(docsText)}</div>`
+  if (welcomeRecentConvs) welcomeRecentConvs.innerHTML = `<div class="dashboard-empty">${escHtml(convsText)}</div>`
 }
 
 async function loadDashboardDocs(kbId) {
