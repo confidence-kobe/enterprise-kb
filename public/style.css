@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════
-   Enterprise KB — style.css v25
+   Enterprise KB — style.css v30
    Design system: Inter · Dark sidebar · Card-first redesign
    ═══════════════════════════════════════════════════════════ */
 
@@ -91,7 +91,7 @@ html[data-theme="dark"] {
 html[data-theme="dark"] ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); }
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   font-size: 14px;
   line-height: 1.5;
   background: var(--bg);
