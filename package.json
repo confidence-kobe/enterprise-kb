@@ -3,26 +3,39 @@
   "version": "1.0.0",
   "description": "Enterprise knowledge base with OpenAI-compatible LLM support, multi-user auth, and document management",
   "type": "module",
+  "bin": {
+    "enterprise-kb-mcp": "./dist/mcp-stdio.js"
+  },
   "scripts": {
     "start": "node dist/server.js",
+    "mcp": "node dist/mcp-stdio.js",
     "dev": "npx tsx src/server.ts",
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run build && npm run test && npm audit --omit=dev --audit-level=moderate",
-    "codex:smoke": "node scripts/codex-smoke.mjs"
+    "codex:smoke": "node scripts/codex-smoke.mjs",
+    "smoke:full": "node scripts/full-smoke.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.0.0",
     "claude-tools-kit": "file:packages/claude-tools-kit",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
+    "exceljs": "^4.4.0",
     "express": "^5.0.0",
     "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.12.3",
     "multer": "^2.1.1",
+    "officeparser": "^8.0.0",
     "openai": "^4.77.0",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "undici": "^8.11.2"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

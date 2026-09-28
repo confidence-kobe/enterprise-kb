@@ -1,14 +1,35 @@
 /**
- * 系统提示词构建器
+ * 系统提示词构建模块 (System Prompt Builder)
+ *
+ * 核心设计目标与防护规范：
+ * 1. 角色与边界界定：声明模型为知识库专属助手，设定严格的只读权限边界，禁止篡改文件或越权访问外网；
+ * 2. 检索工作流指引 (Best Practice Workflow)：
+ *    - 优先推荐调用 `SearchDocs` 一次性定位核心段落，快速收集事实证据；
+ *    - 仅在片段信息不足或需要完整上下文时调用 `Read` 精读；
+ *    - 防无谓重试：限制检索轮次（通常最多 3 轮），禁止携带相同参数重复调用；
+ * 3. 溯源与真实性规范：强制模型使用「文件名:行号」格式进行事实引用，未检索到信息时诚实告知，严禁脑补与幻觉；
+ * 4. 自定义指令扩展：支持知识库管理员配置专属补充提示词 (customPrompt)。
  */
 
-export function buildSystemPrompt(kbName: string, kbPath: string): string {
-  return `你是企业知识库「${kbName}」的专属问答助手。
+/**
+ * 组装生成企业知识库专用的系统级提示词 (System Prompt)
+ *
+ * @param kbName 知识库展示名称
+ * @param kbPath 知识库在服务端的根目录物理存储路径
+ * @param customPrompt 管理员为该知识库额外定制的补充指令或领域约束（可选）
+ * @returns 最终合成的系统提示词字符串
+ */
+export function buildSystemPrompt(kbName: string, kbPath: string, customPrompt?: string | null): string {
+  const base = `你是企业知识库「${kbName}」的专属问答助手。
 在以下本地文档目录中精确检索信息，回答用户问题。
 
 知识库目录：${kbPath}
 
 ## 检索工作流
+
+- 优先调用 SearchDocs 一次定位内容；已有足够证据时立即回答。
+- 不要重复调用参数相同或含义相同的检索工具。
+- 通常最多进行 3 轮检索；只有确实缺少关键证据时才继续。
 
 ### 第一步：SearchDocs — 全文检索（首选）
 用关键词快速定位相关段落，支持多词联合检索：
@@ -39,4 +60,7 @@ export function buildSystemPrompt(kbName: string, kbPath: string): string {
 
 - 只能读取文件，不能修改或创建
 - 只在知识库目录内检索，不访问外部网络`
+
+  // 若管理员配置了自定义提示词，以 Markdown 二级标题的形式无缝追加在末尾
+  return customPrompt?.trim() ? `${base}\n\n## 补充指令\n\n${customPrompt.trim()}` : base
 }

@@ -7,6 +7,42 @@
 - A writable document storage directory.
 - An OpenAI-compatible LLM endpoint. For Ollama, use `http://localhost:11434/v1`.
 
+## Topology
+
+The app is a single process: static UI, REST/SSE API, and MCP HTTP share one port. SQLite and document files stay on local volumes; the LLM may run on the host or another internal URL.
+
+```mermaid
+flowchart TB
+    subgraph Users["Operators"]
+        Browser["Browser :8080"]
+        IDE["MCP client"]
+    end
+
+    subgraph Runtime["enterprise-kb"]
+        HTTP["UI + REST + SSE + /mcp"]
+        Health["/healthz /readyz"]
+    end
+
+    subgraph Volumes["Persistent volumes"]
+        Data[("DB_PATH / data")]
+        Store[("STORAGE_PATH / storage")]
+    end
+
+    subgraph Models["LLM"]
+        Endpoint["LLM_BASE_URL<br/>e.g. Ollama /v1"]
+    end
+
+    Browser --> HTTP
+    IDE --> HTTP
+    HTTP --> Data
+    HTTP --> Store
+    HTTP --> Endpoint
+    Orchestrator["Compose / systemd / k8s"] --> Health
+    Health --> HTTP
+```
+
+See [TECHNICAL.md §10](TECHNICAL.md#10-运维部署健康检查与容灾备份) for Compose examples and backup notes.
+
 ## Configure
 
 Copy `.env.example` to `.env` and set production values:
@@ -14,7 +50,8 @@ Copy `.env.example` to `.env` and set production values:
 - `NODE_ENV=production` in the runtime environment.
 - `JWT_SECRET`: random string, at least 32 characters.
 - `ADMIN_PASSWORD`: non-default initial admin password.
-- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
+- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_MAX_TURNS`.
+- `HISTORY_MAX_MESSAGES`, `HISTORY_MAX_CHARS` to cap trusted persisted conversation context sent to the model.
 - `STORAGE_PATH`, `DB_PATH`.
 - `CORS_ORIGIN` only when the UI and API are served from different origins.
 
