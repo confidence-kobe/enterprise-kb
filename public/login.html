@@ -79,8 +79,9 @@
   <script>
     if (localStorage.getItem('kb_token')) location.href = '/index.html'
 
-    // p5.js flow field — Perlin noise vector field
-    new p5(function (p) {
+    // p5.js flow field — Perlin noise vector field (skipped if the CDN script failed to load,
+    // so the login form below still works on networks that block the CDN)
+    if (window.p5) new p5(function (p) {
       const N = 1400
       const pts = []
       let zoff = 0
