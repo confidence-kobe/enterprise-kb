@@ -30,7 +30,8 @@
     "officeparser": "^8.0.0",
     "openai": "^4.77.0",
     "p5": "^1.9.4",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "undici": "^7.30.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

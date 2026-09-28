@@ -90,6 +90,8 @@ export class LLMExecutor {
     this.client = new OpenAI({
       baseURL: config.baseUrl.replace(/\/$/, ''),
       apiKey: config.apiKey,
+      // 使用全局 fetch，使 HTTPS_PROXY / NO_PROXY 设置同样作用于问答请求
+      fetch: globalThis.fetch,
     })
   }
 
