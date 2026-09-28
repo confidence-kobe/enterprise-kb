@@ -25,6 +25,14 @@ import multer from 'multer'
 import * as path from 'node:path'
 import * as fs from 'node:fs'
 import * as url from 'node:url'
+import { setGlobalDispatcher, ProxyAgent } from 'undici'
+
+// 若环境变量中配置了 HTTP 代理，则让 Node.js fetch() 自动走代理
+const _proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+if (_proxyUrl) {
+  setGlobalDispatcher(new ProxyAgent(_proxyUrl))
+  console.log(`[proxy] 使用代理: ${_proxyUrl}`)
+}
 
 import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createUser, deleteUser,
          listKbsForUser, getAllKbs, getKbById, createKb, deleteKb, updateKbPublic, updateKbStoragePath, updateKbMeta,

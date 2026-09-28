@@ -13,6 +13,44 @@ Document retrieval uses structure-aware chunks plus hybrid lexical ranking acros
 - Static frontend in `public/`
 - OpenAI-compatible LLM endpoint support
 
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph UI["Browser"]
+        Chat["Q&A workbench"]
+        Manage["Admin console"]
+    end
+
+    subgraph App["Express 5 + TypeScript"]
+        Auth["JWT / RBAC"]
+        Agent["ReAct + SSE"]
+        Index["Parse / chunk / embed"]
+        Hybrid["FTS5 + vectors"]
+        MCP["MCP stdio + HTTP"]
+    end
+
+    subgraph Data["Local disk"]
+        SQLite[("SQLite WAL")]
+        Files["storage/"]
+    end
+
+    LLM["OpenAI-compatible LLM"]
+
+    Chat --> Auth
+    Manage --> Auth
+    Auth --> Agent
+    Auth --> Index
+    Agent --> Hybrid
+    Agent --> LLM
+    Index --> SQLite
+    Index --> Files
+    Hybrid --> SQLite
+    MCP --> Hybrid
+```
+
+Detailed diagrams (mind map, ER, search pipeline, deployment) live in [TECHNICAL.md](TECHNICAL.md).
+
 ## Quick Start
 
 Install dependencies:

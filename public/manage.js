@@ -1,11 +1,32 @@
-/* ── 认证 ─────────────────────────────────────────── */
-const token = localStorage.getItem('kb_token')
-const user  = JSON.parse(localStorage.getItem('kb_user') || 'null')
-if (!token || !user) { location.href = '/login.html' }
+/**
+ * ============================================================================
+ * 企业级知识库管理控制台前端交互主脚本 (manage.js)
+ *
+ * 核心功能模块：
+ * 1. 身份认证与权限控制：检查 JWT Token，根据 admin / user 角色动态控制管理功能面板
+ * 2. 界面主题管理：深色模式 (Dark Mode) 与浅色模式持久化无缝切换
+ * 3. 知识库 (KB) 资产管理：概览数据卡片、增删改查、公开/私有切换、自定义系统提示词
+ * 4. 文档管理与知识索引：文档多条件分页列表、FTS 检索高亮、解析与向量化状态流转、大文件拖拽上传
+ * 5. 同步数据源目录：配置本地文件夹路径、差量扫描与定时比对执行
+ * 6. 原文在线预览与智能推荐：基于向量相似度自动推荐关联文档
+ * 7. 多租户成员协作权限：基于 RBAC 的知识库协作者添加与移除
+ * 8. 平台安全审计与用户中心：操作日志检索审计、用户增删改查、密码重置与模型热切换
+ * 9. MCP 协议接入管理：API Key 分发、知识库访问范围隔离与客户端配置生成
+ * ============================================================================
+ */
 
+/* ── 客户端身份认证与管理员权限判定 ─────────────────── */
+const token = localStorage.getItem('kb_token')
+let user = null
+try { user = JSON.parse(localStorage.getItem('kb_user') || 'null') } catch { user = null }
+
+// 未登录或令牌缺失，强制重定向至登录入口
+if (!token || !user) { localStorage.removeItem('kb_user'); location.href = '/login.html' }
+
+/** 当前登录用户是否拥有超级管理员权限 */
 const isAdmin = user?.role === 'admin'
 
-/* ── 主题初始化 ─────────────────────────────────────── */
+/* ── 界面色彩主题初始化（明暗切换） ─────────────────── */
 ;(function initTheme() {
   const saved = localStorage.getItem('kb_theme')
   const isDark = saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -29,24 +50,27 @@ const isAdmin = user?.role === 'admin'
   }
 })()
 
-/* ── DOM ──────────────────────────────────────────── */
-const toast        = document.getElementById('toast')
-const kbList       = document.getElementById('kb-list')
-const docKbSelect  = document.getElementById('doc-kb-select')
-const docList      = document.getElementById('doc-list')
-const uploadArea   = document.getElementById('upload-area')
-const uploadZone   = document.getElementById('upload-zone')
-const fileInput    = document.getElementById('file-input')
-const userList     = document.getElementById('user-list')
-const auditList    = document.getElementById('audit-list')
+/* ── DOM 核心容器与操作控件引用 ─────────────────────── */
+const toast           = document.getElementById('toast')
+const kbList          = document.getElementById('kb-list')
+const docKbSelect     = document.getElementById('doc-kb-select')
+const docList         = document.getElementById('doc-list')
+const uploadArea      = document.getElementById('upload-area')
+const uploadZone      = document.getElementById('upload-zone')
+const fileInput       = document.getElementById('file-input')
+const userList        = document.getElementById('user-list')
+const auditList       = document.getElementById('audit-list')
 const syncSourcePanel = document.getElementById('sync-source-panel')
 const syncPathInput   = document.getElementById('sync-path-input')
 const syncStatusEl    = document.getElementById('sync-status')
 
-/* ── 初始化 ───────────────────────────────────────── */
+/* ── 页面生命周期初始化入口 ─────────────────────────── */
+
+// 渲染右上角当前登录角色徽章
 document.getElementById('user-badge').textContent = isAdmin ? '管理员' : '用户'
 document.getElementById('user-badge').className   = `badge badge-${user.role}`
 
+// 管理员专享 Tab 面板展示与数据初始化
 if (isAdmin) {
   document.getElementById('users-tab').style.display = ''
   document.getElementById('audit-tab').style.display = ''
@@ -60,6 +84,7 @@ if (isAdmin) {
   initMcpPanel()
 }
 
+// 通用模块初始化
 loadKbs()
 initTabs()
 initKbModal()
@@ -75,7 +100,7 @@ initTextDocModal()
 initSyncSource()
 if (isAdmin) initResetPwdModal()
 
-// 事件委托：KB 卡片操作（一次性绑定，覆盖所有渲染周期）
+// 事件委托：知识库卡片核心操作按钮（一次性委托绑定，避免重复渲染时产生内存泄露）
 kbList.addEventListener('click', e => {
   const btn = e.target.closest('[data-action]')
   if (!btn) return
@@ -90,8 +115,17 @@ kbList.addEventListener('click', e => {
   if (action === 'delete-kb')     deleteKb(id, kb.name)
 })
 
+/**
+ * 组装标准 HTTP 认证请求头
+ * @returns {{ Authorization: string }} 包含 Bearer Token 的请求头对象
+ */
 function auth() { return { Authorization: `Bearer ${token}` } }
 
+/**
+ * 弹出全屏浮层提示信息 (Toast)，并在 3 秒后自动消失
+ * @param {string} msg - 提示文本
+ * @param {'success'|'error'|''} [type=''] - 提示样式类型
+ */
 function showToast(msg, type = '') {
   toast.textContent = msg
   toast.className = type
@@ -100,13 +134,13 @@ function showToast(msg, type = '') {
   toast._timer = setTimeout(() => toast.classList.add('hidden'), 3000)
 }
 
-/* ── 全局 Escape 关闭弹层 ────────────────────────── */
+/* ── 全局键盘事件：按 Escape 键关闭当前激活的模态弹窗 ── */
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return
   document.querySelectorAll('.modal:not(.hidden)').forEach(m => m.classList.add('hidden'))
 })
 
-/* ── Tab 切换 ─────────────────────────────────────── */
+/* ── Tab 导航标签栏切换 ──────────────────────────────── */
 function initTabs() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -119,23 +153,36 @@ function initTabs() {
   })
 }
 
-/* ── 知识库列表 ────────────────────────────────────── */
+/* ── 知识库 (Knowledge Base) 数据管理与列表渲染 ───────── */
 let allKbs = []
 let initialRouteApplied = false
 
+/**
+ * 从后端加载当前用户可见的所有知识库列表
+ */
 async function loadKbs() {
   try {
-    const res = await fetch('/api/kbs', { headers: auth() })
-    if (res.status === 401) { location.href = '/login.html'; return }
+    const res = await fetch('/api/kbs', {
+      headers: auth(),
+      signal: AbortSignal.timeout(10000),
+    })
+    if (res.status === 401) { localStorage.removeItem('kb_token'); localStorage.removeItem('kb_user'); location.href = '/login.html'; return }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     allKbs = await res.json()
+    if (!Array.isArray(allKbs)) throw new Error('unexpected response')
     renderKbList()
     renderDocKbSelect()
     applyInitialManageRoute()
-  } catch {
-    kbList.innerHTML = '<div class="empty-state"><div>加载失败，请刷新重试</div></div>'
+  } catch (err) {
+    const msg = err?.name === 'TimeoutError' ? '请求超时，请刷新重试' : (err?.message || '加载失败，请刷新重试')
+    if (kbList) kbList.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-text">${msg}</div></div>`
   }
 }
 
+/**
+ * 读取 URL 查询参数，实现从对话页或外部链接直达指定知识库与标签页
+ * 例如：manage.html?tab=docs&kb=12
+ */
 function applyInitialManageRoute() {
   if (initialRouteApplied) return
   initialRouteApplied = true
@@ -152,10 +199,14 @@ function applyInitialManageRoute() {
   }
 }
 
+/**
+ * 渲染知识库概览看板与卡片网格
+ * 顶部展示全平台知识库数、文档总数、对话总数等汇总指标
+ */
 function renderKbList() {
   kbList.innerHTML = ''
 
-  // Stats dashboard row
+  // 顶部汇总统计指标卡片
   const totalDocs  = allKbs.reduce((s, k) => s + (k.doc_count  ?? 0), 0)
   const totalConvs = allKbs.reduce((s, k) => s + (k.conv_count ?? 0), 0)
   const statsRow = document.createElement('div')
@@ -188,7 +239,7 @@ function renderKbList() {
   grid.className = 'kb-card-grid'
   kbList.appendChild(grid)
 
-  // Accent color palette cycling by kb.id
+  // 依据知识库 ID 循环分配的主题色彩调色板
   const palette = [
     { bar: '#1e40af', icon: '#1e40af', bg: 'rgba(30,64,175,.08)', border: 'rgba(30,64,175,.2)' },
     { bar: '#7c3aed', icon: '#7c3aed', bg: 'rgba(124,58,237,.08)', border: 'rgba(124,58,237,.2)' },
@@ -251,11 +302,18 @@ function renderKbList() {
   }
 }
 
+/**
+ * 记录选中的知识库 ID 并跳转至主聊天交互页
+ * @param {number} id - 知识库 ID
+ */
 function openKbChat(id) {
   localStorage.setItem('kb_last_selected_id', String(id))
   location.href = '/index.html'
 }
 
+/**
+ * 填充文档管理 Tab 顶部的知识库切换下拉选择列表
+ */
 function renderDocKbSelect() {
   docKbSelect.innerHTML = '<option value="">— 选择知识库 —</option>'
   for (const kb of allKbs) {
@@ -266,6 +324,11 @@ function renderDocKbSelect() {
   }
 }
 
+/**
+ * 切换知识库的公开 / 私有访问属性
+ * @param {number} id - 知识库 ID
+ * @param {boolean} isPublic - 是否公开
+ */
 async function togglePublic(id, isPublic) {
   await fetch(`/api/kbs/${id}/public`, {
     method: 'PATCH',
@@ -276,6 +339,11 @@ async function togglePublic(id, isPublic) {
   loadKbs()
 }
 
+/**
+ * 删除指定知识库及其全部关联文档与向量索引
+ * @param {number} id - 知识库 ID
+ * @param {string} name - 知识库名称
+ */
 async function deleteKb(id, name) {
   if (!confirm(`确认删除知识库「${name}」？\n此操作将同时删除所有文档，不可恢复！`)) return
   const res = await fetch(`/api/kbs/${id}`, { method: 'DELETE', headers: auth() })
@@ -283,7 +351,7 @@ async function deleteKb(id, name) {
   else { showToast('删除失败', 'error') }
 }
 
-/* ── 新建/编辑知识库弹层 ────────────────────────────── */
+/* ── 新建 / 编辑知识库模态弹窗 ───────────────────────── */
 function initKbModal() {
   const modal    = document.getElementById('kb-modal')
   const titleEl  = document.getElementById('kb-modal-title')
@@ -318,14 +386,14 @@ function initKbModal() {
     const systemPrompt = document.getElementById('kb-system-prompt').value.trim()
     let res
     if (editId) {
-      // 编辑模式
+      // 编辑已有知识库（支持修改描述与专有 System Prompt）
       res = await fetch(`/api/kbs/${editId}`, {
         method: 'PATCH',
         headers: { ...auth(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, description: desc, system_prompt: systemPrompt || null }),
       })
     } else {
-      // 创建模式
+      // 创建新知识库
       res = await fetch('/api/kbs', {
         method: 'POST',
         headers: { ...auth(), 'Content-Type': 'application/json' },
@@ -343,6 +411,10 @@ function initKbModal() {
   })
 }
 
+/**
+ * 唤起知识库编辑弹窗并回填现有配置数据
+ * @param {object} kb - 知识库对象
+ */
 function openKbEditModal(kb) {
   document.getElementById('kb-modal-title').textContent = '编辑知识库'
   document.getElementById('kb-modal-confirm').textContent = '保存'
@@ -355,10 +427,11 @@ function openKbEditModal(kb) {
   document.getElementById('kb-name').focus()
 }
 
-/* ── 文档管理 ──────────────────────────────────────── */
+/* ── 文档资产管理与检索模块 ──────────────────────────── */
 let currentDocKbId = null
 const selectedDocIds = new Set()
 
+// 切换文档所选知识库
 docKbSelect.addEventListener('change', () => {
   currentDocKbId = docKbSelect.value ? Number(docKbSelect.value) : null
   const docSearch = document.getElementById('doc-search')
@@ -369,7 +442,7 @@ docKbSelect.addEventListener('change', () => {
   else { uploadArea.classList.add('hidden') }
 })
 
-// 文档内容搜索（防抖 300ms）
+// 文档内容全文检索（防抖 300ms）
 let docSearchTimer = null
 document.addEventListener('input', e => {
   if (e.target.id !== 'doc-search') return
@@ -379,6 +452,10 @@ document.addEventListener('input', e => {
   docSearchTimer = setTimeout(() => searchDocContent(q), 300)
 })
 
+/**
+ * 执行文档内容全文检索并高亮展示匹配的分块片段
+ * @param {string} q - 搜索关键词
+ */
 async function searchDocContent(q) {
   if (!currentDocKbId) return
   docList.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:13px">搜索中…</div>'
@@ -413,6 +490,11 @@ let docOffset = 0
 let docTotal  = 0
 let docRefreshTimer = null
 
+/**
+ * 生成文档处理状态徽章 HTML（待解析 / 解析中 / 已索引 / 未索引 / 失败）
+ * @param {object} doc - 文档记录
+ * @returns {string} 状态徽章 HTML
+ */
 function docStatusBadge(doc) {
   const status = doc.index_status ?? 'ready'
   const labels = {
@@ -427,14 +509,23 @@ function docStatusBadge(doc) {
   return `<span class="doc-status doc-status-${status}"${title}>${labels[status] ?? status}</span>`
 }
 
+/**
+ * 生成同步数据源标记徽章 HTML
+ * @param {object} doc - 文档记录
+ * @returns {string} 同步徽章 HTML
+ */
 function docSourceBadge(doc) {
   if (doc.source_type !== 'sync') return ''
   const title = doc.source_path ? ` title="${escHtml(doc.source_path)}"` : ''
   return `<span class="doc-source doc-source-sync"${title}>同步</span>`
 }
 
+/**
+ * 计算并生成文档向量覆盖率徽章 HTML
+ * @param {object} doc - 文档记录
+ * @returns {string} 向量覆盖率徽章 HTML
+ */
 function vectorBadge(doc) {
-  // Show vector coverage if the doc object exposes chunk/vec counts
   const chunks = doc.chunk_count ?? doc.chunks ?? 0
   const vecs   = doc.vec_count  ?? doc.vecs   ?? 0
   if (!chunks) return ''
@@ -443,6 +534,11 @@ function vectorBadge(doc) {
   return `<span class="doc-vec-badge ${cls}" title="向量覆盖率 ${pct}%（${vecs}/${chunks} 块）">⚡ ${pct}%</span>`
 }
 
+/**
+ * 分页加载当前所选知识库的文档列表
+ * 若存在处于 pending 或 processing 状态的任务，自动开启 3 秒轮询刷新
+ * @param {boolean} [append=false] - 是否以追加模式加载更多
+ */
 async function loadDocs(append = false) {
   if (!currentDocKbId) return
   if (docRefreshTimer) {
@@ -459,14 +555,14 @@ async function loadDocs(append = false) {
     { headers: auth() }
   )
   const data = await res.json()
-  const docs = data.items ?? data   // 兼容无分页格式
+  const docs = data.items ?? data   // 兼容无分页老接口格式
 
   if (!append) {
     docList.innerHTML = ''
     docTotal = data.total ?? docs.length
   }
 
-  // Show / hide table header
+  // 控制表头显隐
   const tableHeader = document.getElementById('doc-table-header')
   if (tableHeader) tableHeader.style.display = !docs.length && !append ? 'none' : ''
 
@@ -518,7 +614,7 @@ async function loadDocs(append = false) {
 
   docOffset += docs.length
 
-  // "加载更多" 按钮
+  // "加载更多" 翻页按钮处理
   const existingMore = document.getElementById('doc-load-more')
   if (existingMore) existingMore.remove()
   if (docOffset < docTotal) {
@@ -534,18 +630,26 @@ async function loadDocs(append = false) {
   if (tableHeader) tableHeader.style.display = ''
   if (!append) { selectedDocIds.clear(); updateBulkBar(); syncSelectAllCheckbox() }
   updateBulkBar()
+
+  // 若存在异步解析任务，定时轮询刷新列表状态
   const hasActiveIndexJobs = docs.some(doc => ['pending', 'processing'].includes(doc.index_status))
   if (!append && hasActiveIndexJobs) {
     docRefreshTimer = setTimeout(() => loadDocs(false), 3000)
   }
 }
 
+/**
+ * 更新批量操作控制条已选条数文本与删除按钮状态
+ */
 function updateBulkBar() {
   const count = selectedDocIds.size
   document.getElementById('doc-selected-count').textContent = `已选 ${count} 项`
   document.getElementById('doc-bulk-delete-btn').disabled = count === 0
 }
 
+/**
+ * 同步表头“全选”复选框的勾选与半选（indeterminate）状态
+ */
 function syncSelectAllCheckbox() {
   const allCbs   = [...document.querySelectorAll('.doc-cb')]
   const selectAll = document.getElementById('doc-select-all')
@@ -555,7 +659,13 @@ function syncSelectAllCheckbox() {
   selectAll.indeterminate = checked > 0 && checked < allCbs.length
 }
 
+/* ── 文档批量操作模块 ────────────────────────────────── */
+
+/**
+ * 初始化文档全选与批量删除功能
+ */
 function initDocBulk() {
+  // 全选/全不选复选框
   document.getElementById('doc-select-all').addEventListener('change', e => {
     const checked = e.target.checked
     document.querySelectorAll('.doc-cb').forEach(cb => {
@@ -567,6 +677,7 @@ function initDocBulk() {
     updateBulkBar()
   })
 
+  // 批量删除执行按钮
   document.getElementById('doc-bulk-delete-btn').addEventListener('click', async () => {
     if (!currentDocKbId || selectedDocIds.size === 0) return
     if (!confirm(`确定删除选中的 ${selectedDocIds.size} 个文档？此操作不可撤销`)) return
@@ -586,6 +697,11 @@ function initDocBulk() {
   })
 }
 
+/* ── 文档全量重建索引模块 ────────────────────────────── */
+
+/**
+ * 初始化重建索引按钮，用于重新切分并生成该知识库全部文档的向量与全文索引
+ */
 function initReindex() {
   const btn      = document.getElementById('reindex-btn')
   const statusEl = document.getElementById('reindex-status')
@@ -616,15 +732,28 @@ function initReindex() {
   })
 }
 
+/**
+ * 获取当前选中的知识库元数据对象
+ * @returns {object|null} 知识库对象或 null
+ */
 function selectedDocKb() {
   return allKbs.find(kb => kb.id === currentDocKbId) ?? null
 }
 
+/**
+ * 判断当前登录用户是否有权限管理当前知识库（系统管理员或知识库 Owner）
+ * @returns {boolean} 是否具备管理权限
+ */
 function canManageCurrentKb() {
   const kb = selectedDocKb()
   return Boolean(kb && (isAdmin || kb.owner_id === user.id))
 }
 
+/* ── 本地目录同步源数据管理模块 ──────────────────────── */
+
+/**
+ * 根据知识库状态渲染本地同步源配置面板
+ */
 function renderSyncSourcePanel() {
   if (!syncSourcePanel) return
   const kb = selectedDocKb()
@@ -648,6 +777,11 @@ function renderSyncSourcePanel() {
   }
 }
 
+/**
+ * 格式化同步任务执行结果汇总文本
+ * @param {object} summary - 同步统计对象
+ * @returns {string} 汇总描述字符串
+ */
 function syncSummaryText(summary) {
   const skipped = summary.skipped
     ? Object.values(summary.skipped).reduce((sum, value) => sum + Number(value || 0), 0)
@@ -655,16 +789,27 @@ function syncSummaryText(summary) {
   return `新增 ${summary.added || 0} / 更新 ${summary.updated || 0} / 删除 ${summary.removed || 0} / 跳过 ${skipped}`
 }
 
+/**
+ * 局部更新本地内存中的知识库属性缓存
+ * @param {number} id - 知识库 ID
+ * @param {object} patch - 增量属性补丁
+ */
 function updateKbLocal(id, patch) {
   const idx = allKbs.findIndex(kb => kb.id === id)
   if (idx >= 0) allKbs[idx] = { ...allKbs[idx], ...patch }
 }
 
+/**
+ * 初始化本地同步源路径保存与即时同步执行逻辑
+ */
 function initSyncSource() {
   const saveBtn = document.getElementById('sync-save-btn')
   const runBtn  = document.getElementById('sync-run-btn')
   if (!saveBtn || !runBtn) return
 
+  /**
+   * 保存本地文件夹同步绝对路径
+   */
   async function savePath() {
     if (!currentDocKbId || !canManageCurrentKb()) return
     const nextPath = syncPathInput.value.trim()
@@ -692,6 +837,7 @@ function initSyncSource() {
     if (e.key === 'Enter') savePath()
   })
 
+  // 立即触发全量扫描同步
   runBtn.addEventListener('click', async () => {
     if (!currentDocKbId || !canManageCurrentKb()) return
     if (!syncPathInput.value.trim()) {
@@ -719,6 +865,11 @@ function initSyncSource() {
   })
 }
 
+/**
+ * 删除单个文档
+ * @param {number} id - 文档 ID
+ * @param {string} name - 文档原名
+ */
 async function deleteDoc(id, name) {
   if (!confirm(`确认删除文档「${name}」？`)) return
   const res = await fetch(`/api/kbs/${currentDocKbId}/docs/${id}`, { method: 'DELETE', headers: auth() })
@@ -726,6 +877,11 @@ async function deleteDoc(id, name) {
   else { showToast('删除失败', 'error') }
 }
 
+/* ── 文档在线预览与关联推荐模态框 ───────────────────── */
+
+/**
+ * 初始化文档预览弹窗事件
+ */
 function initPreviewModal() {
   const modal = document.getElementById('preview-modal')
   const close = () => {
@@ -738,6 +894,12 @@ function initPreviewModal() {
   modal.addEventListener('click', e => { if (e.target === modal) close() })
 }
 
+/**
+ * 打开文档预览弹层，并发请求正文内容与语义相似的关联文档列表
+ * @param {number} docId - 文档 ID
+ * @param {string} originalName - 文档原始文件名
+ * @param {string} [summary] - 可选的 AI 提炼摘要
+ */
 async function previewDoc(docId, originalName, summary) {
   const modal     = document.getElementById('preview-modal')
   const titleEl   = document.getElementById('preview-modal-title')
@@ -760,13 +922,13 @@ async function previewDoc(docId, originalName, summary) {
   relatedPane.classList.remove('hidden')
   modal.classList.remove('hidden')
 
-  // 主内容与关联推荐并行加载
+  // 主内容与关联推荐并行发起加载，缩短等待时间
   const [previewRes, relatedRes] = await Promise.allSettled([
     fetch(`/api/kbs/${currentDocKbId}/docs/${docId}/preview`, { headers: auth() }),
     fetch(`/api/kbs/${currentDocKbId}/docs/${docId}/related`, { headers: auth() }),
   ])
 
-  // 渲染预览内容
+  // 渲染正文文本内容
   try {
     const res = previewRes.status === 'fulfilled' ? previewRes.value : null
     if (!res) throw new Error('请求失败')
@@ -789,7 +951,7 @@ async function previewDoc(docId, originalName, summary) {
     contentEl.textContent = `网络错误：${e.message}`
   }
 
-  // 渲染关联推荐
+  // 渲染语义相似度关联推荐列表
   try {
     const res = relatedRes.status === 'fulfilled' ? relatedRes.value : null
     if (!res || !res.ok) throw new Error('unavailable')
@@ -814,6 +976,11 @@ async function previewDoc(docId, originalName, summary) {
   }
 }
 
+/* ── 文件上传拖拽交互与 XHR 进度条 ───────────────────── */
+
+/**
+ * 初始化文件拖拽区域与选择输入框事件
+ */
 function initUpload() {
   uploadZone.addEventListener('click', () => fileInput.click())
 
@@ -831,6 +998,10 @@ function initUpload() {
   })
 }
 
+/**
+ * 封装原生 XMLHttpRequest 批量上传选中的本地文件，实时更新进度条与百分比
+ * @param {File[]} files - 文件对象数组
+ */
 function uploadFiles(files) {
   if (!currentDocKbId || !files.length) return
 
@@ -853,6 +1024,7 @@ function uploadFiles(files) {
   xhr.open('POST', `/api/kbs/${currentDocKbId}/docs`)
   xhr.setRequestHeader('Authorization', `Bearer ${token}`)
 
+  // 监听上传进度
   xhr.upload.onprogress = (e) => {
     if (e.lengthComputable) {
       const pct = Math.round((e.loaded / e.total) * 100)
@@ -861,6 +1033,7 @@ function uploadFiles(files) {
     }
   }
 
+  // 上传完成或返回响应
   xhr.onload = () => {
     uploadZone.style.opacity = '1'
     progressBar.style.width = '100%'
@@ -891,7 +1064,11 @@ function uploadFiles(files) {
   xhr.send(form)
 }
 
-/* ── 用户管理 ──────────────────────────────────────── */
+/* ── 用户管理模块 (仅管理员权限) ─────────────────────── */
+
+/**
+ * 加载全平台注册用户列表，渲染角色修改下拉框与操作按钮
+ */
 async function loadUsers() {
   const res   = await fetch('/api/admin/users', { headers: auth() })
   const users = await res.json()
@@ -937,6 +1114,11 @@ async function loadUsers() {
   }
 }
 
+/**
+ * 删除指定用户账号
+ * @param {number} id - 用户 ID
+ * @param {string} name - 用户名
+ */
 async function deleteUser(id, name) {
   if (!confirm(`确认删除用户「${name}」？该用户的数据将保留但无法登录。`)) return
   const res = await fetch(`/api/admin/users/${id}`, { method: 'DELETE', headers: auth() })
@@ -944,6 +1126,9 @@ async function deleteUser(id, name) {
   else { showToast('删除失败', 'error') }
 }
 
+/**
+ * 初始化新建用户弹窗
+ */
 function initUserModal() {
   const modal = document.getElementById('user-modal')
   const open  = () => { ['new-username','new-password'].forEach(id => document.getElementById(id).value = ''); modal.classList.remove('hidden') }
@@ -972,12 +1157,13 @@ function initUserModal() {
   })
 }
 
-/* ── 审计日志 ──────────────────────────────────────── */
+/* ── 安全审计日志模块 ────────────────────────────────── */
 const AUDIT_PAGE_SIZE = 40
 let auditOffset = 0
 let auditTotal = 0
 let auditLoading = false
 
+/** 审计事件中文映射表 */
 const auditActionLabels = {
   'auth.login': '登录成功',
   'auth.login_failed': '登录失败',
@@ -1005,6 +1191,9 @@ const auditActionLabels = {
   'config.model_update': '切换模型',
 }
 
+/**
+ * 初始化审计日志检索过滤与分页按钮事件
+ */
 function initAuditLog() {
   const refreshBtn = document.getElementById('audit-refresh-btn')
   const loadMoreBtn = document.getElementById('audit-load-more')
@@ -1021,6 +1210,10 @@ function initAuditLog() {
   })
 }
 
+/**
+ * 加载并分页渲染系统安全审计日志
+ * @param {boolean} [append=false] - 是否为追加加载更多
+ */
 async function loadAuditLog(append = false) {
   if (!isAdmin || auditLoading || !auditList) return
   auditLoading = true
@@ -1060,6 +1253,11 @@ async function loadAuditLog(append = false) {
   }
 }
 
+/**
+ * 构建审计日志单行表格 DOM 节点
+ * @param {object} item - 审计日志项
+ * @returns {HTMLTableRowElement} 行元素
+ */
 function renderAuditRow(item) {
   const tr = document.createElement('tr')
   const detail = formatAuditDetail(item.detail)
@@ -1074,6 +1272,11 @@ function renderAuditRow(item) {
   return tr
 }
 
+/**
+ * 解析审计明细字段为可读格式（键值对或纯文本）
+ * @param {string} detail - 原始 detail 文本或 JSON 字符串
+ * @returns {string} 格式化后的简短明细
+ */
 function formatAuditDetail(detail) {
   if (!detail) return ''
   try {
@@ -1088,9 +1291,12 @@ function formatAuditDetail(detail) {
   return String(detail).slice(0, 240)
 }
 
-/* ── 成员管理弹层 ──────────────────────────────────── */
+/* ── 知识库协作者成员权限管理模态框 ─────────────────── */
 let currentMembersKbId = null
 
+/**
+ * 初始化成员管理弹窗
+ */
 function initMembersModal() {
   const modal  = document.getElementById('members-modal')
   const close  = () => modal.classList.add('hidden')
@@ -1099,6 +1305,7 @@ function initMembersModal() {
   document.getElementById('members-modal-close2').addEventListener('click', close)
   modal.addEventListener('click', e => { if (e.target === modal) close() })
 
+  // 添加成员
   document.getElementById('member-add-btn').addEventListener('click', async () => {
     const username = document.getElementById('member-username').value.trim()
     if (!username) return
@@ -1122,6 +1329,10 @@ function initMembersModal() {
   })
 }
 
+/**
+ * 唤起指定知识库的成员管理弹窗
+ * @param {object} kb - 知识库对象
+ */
 async function openMembersModal(kb) {
   currentMembersKbId = kb.id
   document.getElementById('members-modal-title').textContent = `成员管理 — ${kb.name}`
@@ -1130,6 +1341,10 @@ async function openMembersModal(kb) {
   await loadMembers(kb.id)
 }
 
+/**
+ * 拉取指定知识库已授权的协作者列表
+ * @param {number} kbId - 知识库 ID
+ */
 async function loadMembers(kbId) {
   const list = document.getElementById('member-list')
   list.innerHTML = '<div style="color:var(--muted);font-size:13px">加载中…</div>'
@@ -1160,7 +1375,11 @@ async function loadMembers(kbId) {
   }
 }
 
-/* ── 管理员重置用户密码 ────────────────────────────── */
+/* ── 管理员重置用户密码模态框 ───────────────────────── */
+
+/**
+ * 初始化管理员重置指定用户密码的模态弹窗与提交校验
+ */
 function initResetPwdModal() {
   const modal = document.getElementById('reset-pwd-modal')
   const close = () => {
@@ -1172,6 +1391,7 @@ function initResetPwdModal() {
   document.getElementById('reset-pwd-cancel').addEventListener('click', close)
   modal.addEventListener('click', e => { if (e.target === modal) close() })
 
+  // 提交重置密码
   document.getElementById('reset-pwd-confirm-btn').addEventListener('click', async () => {
     const uid     = document.getElementById('reset-pwd-uid').value
     const newPwd  = document.getElementById('reset-pwd-new').value
@@ -1192,6 +1412,11 @@ function initResetPwdModal() {
   })
 }
 
+/**
+ * 唤起重置指定用户密码模态框并回填目标用户信息
+ * @param {number} uid - 用户 ID
+ * @param {string} username - 用户名
+ */
 function openResetPwdModal(uid, username) {
   document.getElementById('reset-pwd-uid').value = uid
   document.getElementById('reset-pwd-username').textContent = username
@@ -1201,7 +1426,11 @@ function openResetPwdModal(uid, username) {
   document.getElementById('reset-pwd-new').focus()
 }
 
-/* ── 修改密码弹层 ───────────────────────────────────── */
+/* ── 个人修改密码模态框 ─────────────────────────────── */
+
+/**
+ * 初始化当前登录用户修改个人密码的弹窗事件与逻辑
+ */
 function initPwdModal() {
   const modal  = document.getElementById('pwd-modal')
   const close  = () => {
@@ -1214,6 +1443,7 @@ function initPwdModal() {
   document.getElementById('pwd-modal-cancel').addEventListener('click', close)
   modal.addEventListener('click', e => { if (e.target === modal) close() })
 
+  // 提交修改密码
   document.getElementById('pwd-modal-confirm').addEventListener('click', async () => {
     const current = document.getElementById('pwd-current').value
     const next    = document.getElementById('pwd-new').value
@@ -1234,7 +1464,12 @@ function initPwdModal() {
   })
 }
 
-/* ── 系统设置（模型热切换） ──────────────────────────── */
+/* ── 系统底层配置与大模型热切换 ─────────────────────── */
+
+/**
+ * 初始化系统设置面板中的 LLM 大模型动态切换下拉框
+ * 支持免重启服务器即时更新后端推理模型
+ */
 async function initModelSettings() {
   const sel     = document.getElementById('model-select')
   const saveBtn = document.getElementById('model-save-btn')
@@ -1263,7 +1498,11 @@ async function initModelSettings() {
   })
 }
 
-/* ── 退出 ─────────────────────────────────────────── */
+/* ── 退出登录 ───────────────────────────────────────── */
+
+/**
+ * 初始化用户退出登录按钮，清除本地认证缓存并跳回登录页
+ */
 function initLogout() {
   document.getElementById('logout-btn').addEventListener('click', () => {
     localStorage.removeItem('kb_token')
@@ -1272,15 +1511,31 @@ function initLogout() {
   })
 }
 
-/* ── 工具函数 ──────────────────────────────────────── */
+/* ── 文本与数据格式化通用工具函数 ───────────────────── */
+
+/**
+ * 对 HTML 特殊敏感字符进行转义，抵御 XSS 注入攻击
+ * @param {string} s - 输入文本
+ * @returns {string} 转义后的安全文本
+ */
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
 }
 
+/**
+ * 将秒级时间戳格式化为本地短日期 (YYYY/MM/DD)
+ * @param {number} ts - 秒级时间戳
+ * @returns {string} 格式化日期
+ */
 function fmtTime(ts) {
   return new Date(ts * 1000).toLocaleDateString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit' })
 }
 
+/**
+ * 将秒级时间戳格式化为本地完整日期时间 (YYYY/MM/DD HH:mm)
+ * @param {number} ts - 秒级时间戳
+ * @returns {string} 格式化日期时间
+ */
 function fmtDateTime(ts) {
   return new Date(ts * 1000).toLocaleString('zh-CN', {
     year: 'numeric',
@@ -1291,13 +1546,23 @@ function fmtDateTime(ts) {
   })
 }
 
+/**
+ * 将字节数值格式化为可读的文件大小字符串 (B / KB / MB)
+ * @param {number} bytes - 字节数
+ * @returns {string} 格式化后的大小字符串
+ */
 function fmtSize(bytes) {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   return (bytes / 1024 / 1024).toFixed(1) + ' MB'
 }
 
-/* ── 新建/编辑文本文档 ────────────────────────────────── */
+/* ── 在线文本笔记与 Markdown 文档编辑器 ──────────────── */
+
+/**
+ * 初始化新建与编辑纯文本/Markdown 文档的轻量编辑器模态框
+ * 支持实时 Markdown 双栏预览、字数统计、Tab 缩进与快捷提交
+ */
 function initTextDocModal() {
   const modal      = document.getElementById('text-doc-modal')
   const modalTitle = document.getElementById('text-doc-modal-title')
@@ -1310,8 +1575,12 @@ function initTextDocModal() {
   const closeBtn   = document.getElementById('text-doc-modal-close')
   const openBtn    = document.getElementById('new-text-doc-btn')
 
-  let editingDocId = null  // null = create mode, number = edit mode
+  let editingDocId = null  // null 表示新建模式，number 表示编辑已有文档
 
+  /**
+   * 实时渲染右侧 Markdown 预览面板并进行 XSS 净化
+   * @param {string} md - 原始 Markdown 内容
+   */
   function renderPreview(md) {
     if (!md.trim()) {
       previewPane.innerHTML = '<div class="text-doc-preview-empty">预览将在右侧实时显示…</div>'
@@ -1325,6 +1594,10 @@ function initTextDocModal() {
     } catch { previewPane.innerHTML = '<div class="text-doc-preview-empty">预览渲染失败</div>' }
   }
 
+  /**
+   * 唤起文本编辑器弹窗
+   * @param {object} [opts={}] - 编辑选项（docId, title, content）
+   */
   function open(opts = {}) {
     if (!currentDocKbId) { showToast('请先选择知识库', 'error'); return }
     editingDocId = opts.docId ?? null
@@ -1342,6 +1615,9 @@ function initTextDocModal() {
     editingDocId = null
   }
 
+  /**
+   * 统计编辑器当前字数并触发预览更新
+   */
   function updateCount() {
     const len = editor.value.length
     charCount.textContent = len.toLocaleString() + ' 字'
@@ -1349,6 +1625,9 @@ function initTextDocModal() {
     renderPreview(editor.value)
   }
 
+  /**
+   * 提交保存文本内容至服务端并触发后台向量化索引
+   */
   async function save() {
     const title   = titleInput.value.trim() || '未命名笔记'
     const content = editor.value.trim()
@@ -1383,14 +1662,14 @@ function initTextDocModal() {
     }
   }
 
-  // 全局入口：新建
+  // 绑定交互事件
   openBtn.addEventListener('click', () => open())
   closeBtn.addEventListener('click', close)
   cancelBtn.addEventListener('click', close)
   saveBtn.addEventListener('click', save)
   editor.addEventListener('input', updateCount)
 
-  // Tab 键插入两个空格而不是跳走
+  // 支持在代码/文本编辑中按 Tab 键缩进两个空格
   editor.addEventListener('keydown', e => {
     if (e.key === 'Tab') {
       e.preventDefault()
@@ -1400,16 +1679,22 @@ function initTextDocModal() {
       editor.selectionStart = editor.selectionEnd = s + 2
       updateCount()
     }
+    // Ctrl/Meta+Enter 快速保存
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save()
   })
 
   modal.addEventListener('click', e => { if (e.target === modal) close() })
 
-  // 对外暴露 open，供编辑按钮调用
+  // 挂载至全局，供列表“编辑”按钮跨作用域调用
   window._openTextDocModal = open
+}
 
-// ── 反馈分析面板 ──────────────────────────────────────
+/* ── 用户回答质量反馈数据分析面板 ─────────────────────── */
 
+/**
+ * 初始化用户评价与差评归因分析看板模块 (Feedback Analysis Panel)
+ * 统计点赞率、各分类错误出现频次及用户填写的详细建议
+ */
 function initFeedbackPanel() {
   const kbSelect      = document.getElementById('feedback-kb-select')
   const refreshBtn    = document.getElementById('feedback-refresh-btn')
@@ -1422,6 +1707,7 @@ function initFeedbackPanel() {
   const feedbackList  = document.getElementById('feedback-list')
   const feedbackEmpty = document.getElementById('feedback-empty')
 
+  /** 差评归因中文代号表 */
   const REASON_LABELS = {
     doc_missing: '知识库缺少文档',
     wrong_answer: '回答有误',
@@ -1433,7 +1719,9 @@ function initFeedbackPanel() {
   let offset = 0
   const limit = 20
 
-  // 填充 KB 下拉（复用已加载的 allKbs）
+  /**
+   * 填充知识库筛选下拉选项
+   */
   function populateKbSelect() {
     kbSelect.innerHTML = ''
     const kbs = typeof allKbs !== 'undefined' ? allKbs : []
@@ -1451,6 +1739,10 @@ function initFeedbackPanel() {
     kbSelect.value = currentKbId
   }
 
+  /**
+   * 渲染好评数、差评数、好评率以及原因分布柱形条
+   * @param {object} stats - 统计数据对象
+   */
   function renderStats(stats) {
     statPositive.textContent = stats.positive
     statNegative.textContent = stats.negative
@@ -1472,6 +1764,11 @@ function initFeedbackPanel() {
     }
   }
 
+  /**
+   * 渲染用户详细反馈表格列表
+   * @param {Array<object>} items - 反馈明细数组
+   * @param {boolean} [append=false] - 是否追加模式
+   */
   function renderItems(items, append = false) {
     if (!append) feedbackList.innerHTML = ''
     if (!items.length && !append) {
@@ -1496,6 +1793,10 @@ function initFeedbackPanel() {
     }
   }
 
+  /**
+   * 从服务端拉取指定知识库的质量反馈明细与统计指标
+   * @param {boolean} [append=false] - 是否分页加载更多
+   */
   async function loadFeedback(append = false) {
     if (!currentKbId) return
     if (!append) offset = 0
@@ -1517,7 +1818,7 @@ function initFeedbackPanel() {
   refreshBtn.addEventListener('click', () => loadFeedback())
   loadMoreBtn.addEventListener('click', () => loadFeedback(true))
 
-  // 切换到 feedback tab 时加载
+  // 切换到 feedback 标签页时动态触发加载
   document.querySelectorAll('.tab-btn[data-tab="feedback"]').forEach(btn => {
     btn.addEventListener('click', () => {
       if (!currentKbId) populateKbSelect()
@@ -1528,13 +1829,17 @@ function initFeedbackPanel() {
   populateKbSelect()
 }
 
-/* ── MCP 接入管理 ──────────────────────────────────── */
+/* ── MCP (Model Context Protocol) 开放平台接入管理 ───── */
 
+/**
+ * 初始化 Model Context Protocol (MCP) 接入管理面板
+ * 负责分发和吊销 API Key，并针对 Claude Desktop / Cursor 生成标准客户端配置
+ */
 function initMcpPanel() {
   const keysListEl  = document.getElementById('mcp-keys-list')
   const createBtn   = document.getElementById('create-mcp-key-btn')
 
-  // ── 创建 Key 弹层 ──
+  // ── 创建 API Key 模态弹层 ──
   const createModal   = document.getElementById('mcp-key-modal')
   const createClose   = document.getElementById('mcp-key-modal-close')
   const createCancel  = document.getElementById('mcp-key-modal-cancel')
@@ -1542,7 +1847,7 @@ function initMcpPanel() {
   const labelInput    = document.getElementById('mcp-key-label')
   const kbCheckboxes  = document.getElementById('mcp-kb-checkboxes')
 
-  // ── 显示 Key 弹层 ──
+  // ── 生成成功展示凭证弹层 ──
   const resultModal   = document.getElementById('mcp-key-result-modal')
   const resultClose   = document.getElementById('mcp-key-result-close')
   const resultDone    = document.getElementById('mcp-key-result-done')
@@ -1551,6 +1856,9 @@ function initMcpPanel() {
   const copyKeyBtn    = document.getElementById('mcp-key-copy-btn')
   const copyConfigBtn = document.getElementById('mcp-config-copy-btn')
 
+  /**
+   * 打开生成 Key 弹窗并渲染可授权的知识库多选列表
+   */
   function openCreateModal() {
     labelInput.value = ''
     kbCheckboxes.innerHTML = ''
@@ -1576,6 +1884,7 @@ function initMcpPanel() {
   createCancel.addEventListener('click', closeCreateModal)
   createModal.addEventListener('click', e => { if (e.target === createModal) closeCreateModal() })
 
+  // 提交生成新 API Key
   createConfirm.addEventListener('click', async () => {
     const label  = labelInput.value.trim()
     const kbIds  = Array.from(kbCheckboxes.querySelectorAll('input[type="checkbox"]:checked'))
@@ -1600,13 +1909,18 @@ function initMcpPanel() {
     finally { createConfirm.disabled = false; createConfirm.textContent = '生成' }
   })
 
+  /**
+   * 展示生成的明文 API Key，并提供 Claude Desktop 等接入配置示例
+   * @param {string} rawKey - 完整明文 API Key
+   * @param {number[]} kbIds - 授权绑定的知识库 ID 列表
+   */
   function showResultModal(rawKey, kbIds) {
     resultValue.value = rawKey
 
     const origin  = location.origin
-    const kbParam = kbIds.length === 1 ? `, "--kb-id=${kbIds[0]}"` : ''
     const distPath = 'H:/enterprise-kb/dist/mcp-stdio.js'
 
+    // HTTP 远程共享配置
     const httpCfg = JSON.stringify({
       mcpServers: {
         'enterprise-kb': {
@@ -1617,6 +1931,7 @@ function initMcpPanel() {
       },
     }, null, 2)
 
+    // stdio 本地进程配置
     const stdioCfg = JSON.stringify({
       mcpServers: {
         'enterprise-kb': {
@@ -1644,7 +1959,9 @@ function initMcpPanel() {
     navigator.clipboard.writeText(configSnippet.textContent).then(() => showToast('已复制配置', 'success'))
   })
 
-  // ── 加载并渲染 Key 列表 ──
+  /**
+   * 加载现存的 MCP API Key 列表
+   */
   async function loadMcpKeys() {
     keysListEl.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">加载中…</div>'
     try {
@@ -1655,6 +1972,10 @@ function initMcpPanel() {
     } catch { keysListEl.innerHTML = '<div style="color:var(--muted)">加载失败</div>' }
   }
 
+  /**
+   * 渲染 MCP Key 数据表格与删除操作
+   * @param {Array<object>} keys - Key 列表数据
+   */
   function renderMcpKeys(keys) {
     if (!keys.length) {
       keysListEl.innerHTML = '<div class="card" style="padding:20px;color:var(--muted);font-size:13px;max-width:720px">暂无 API Key，点击右上角「生成 API Key」创建第一个。</div>'
@@ -1703,6 +2024,7 @@ function initMcpPanel() {
       tbody.appendChild(tr)
     }
 
+    // 吊销并删除 Key
     tbody.addEventListener('click', async e => {
       const btn = e.target.closest('[data-delete-key]')
       if (!btn) return
@@ -1714,7 +2036,7 @@ function initMcpPanel() {
     })
   }
 
-  // 切换到 MCP tab 时加载
+  // 切换到 MCP 标签页时触发数据加载
   document.querySelectorAll('.tab-btn[data-tab="mcp"]').forEach(btn => {
     btn.addEventListener('click', loadMcpKeys)
   })

@@ -5,14 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>登录 — 知识库</title>
   <script>
+    // 初始化色彩主题（读取本地缓存或跟随系统首选项）
     if (localStorage.getItem('kb_theme') === 'dark' || (!localStorage.getItem('kb_theme') && matchMedia('(prefers-color-scheme: dark)').matches)) {
       document.documentElement.dataset.theme = 'dark'
     }
   </script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=25">
+  <link rel="stylesheet" href="style.css?v=27">
 </head>
 <body class="login-page">
 
@@ -75,8 +73,10 @@
   </div>
 
   <script>
+    // 已登录状态直接跳转至主对话交互页
     if (localStorage.getItem('kb_token')) location.href = '/index.html'
 
+    // 监听登录表单提交事件，向后台验证凭证
     document.getElementById('login-form').addEventListener('submit', async e => {
       e.preventDefault()
       const btn = document.getElementById('login-btn')
@@ -97,10 +97,12 @@
         const data = await res.json()
         if (!res.ok) throw new Error(data.error ?? '用户名或密码错误')
 
+        // 登录成功：持久化 JWT Token 与用户基本信息
         localStorage.setItem('kb_token', data.token)
         localStorage.setItem('kb_user', JSON.stringify(data.user))
         location.href = '/index.html'
       } catch (err) {
+        // 报错展示并复原提交按钮状态
         errEl.textContent = err.message
         errEl.style.display = 'block'
         btn.disabled = false
