@@ -5,6 +5,8 @@
 
 import OpenAI from 'openai'
 import { fetch as undiciFetch } from 'undici'
+import { scopeForKbPath } from './toolScope.js'
+import type { ToolScope } from './toolScope.js'
 import type { LLMTool, QAEvent } from './tools.js'
 
 type Message = OpenAI.Chat.ChatCompletionMessageParam
@@ -84,6 +86,8 @@ export class LLMExecutor {
     apiKey: string
     model: string
     kbPath: string
+    /** 工具访问范围；缺省为仅 kbPath 这一个知识库 */
+    scope?: ToolScope
     systemPrompt?: string
     maxTurns?: number
     onEvent?: (e: QAEvent) => void
@@ -104,6 +108,7 @@ export class LLMExecutor {
     signal?: AbortSignal,
   ): Promise<RunResult> {
     const { model, kbPath, systemPrompt, maxTurns = 25, onEvent } = this.config
+    const scope = this.config.scope ?? scopeForKbPath(kbPath)
 
     const messages: Message[] = [
       ...(systemPrompt ? [{ role: 'system', content: systemPrompt } as Message] : []),
@@ -237,7 +242,7 @@ export class LLMExecutor {
           isError = true
         } else {
           try {
-            output = await tool.execute(params, kbPath)
+            output = await tool.execute(params, scope)
           } catch (err) {
             output  = `工具执行错误：${(err as Error).message}`
             isError = true

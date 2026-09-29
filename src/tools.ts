@@ -17,6 +17,11 @@ import { adaptTools }      from './toolAdapter.js'
 import { searchDocContent } from './db.js'
 import { isEmbeddingEnabled, generateEmbedding } from './embedding.js'
 import type OpenAI         from 'openai'
+import { isWithinDirs } from './toolScope.js'
+import type { ToolScope } from './toolScope.js'
+
+export { isWithinDirs, scopeForKbPath } from './toolScope.js'
+export type { ToolScope } from './toolScope.js'
 
 // ── 类型定义 ──────────────────────────────────────────
 
@@ -28,7 +33,7 @@ export type QAEvent =
 
 export interface LLMTool {
   definition: OpenAI.FunctionDefinition
-  execute(params: Record<string, unknown>, kbPath: string): Promise<string>
+  execute(params: Record<string, unknown>, scope: ToolScope): Promise<string>
 }
 
 // ── 来自 claude-tools-kit 的原版工具（Glob / Grep / Read） ──
@@ -101,9 +106,14 @@ const KBStatsTool: LLMTool = {
     },
   },
 
-  async execute({ dir }, kbPath) {
-    const root = dir ? path.resolve(kbPath, String(dir)) : kbPath
-    const stats = collectKbStats(root)
+  async execute({ dir }, scope) {
+    const roots = dir ? [path.resolve(scope.cwd, String(dir))] : scope.allowedDirs
+    if (!roots.every(root => isWithinDirs(root, scope.allowedDirs))) {
+      throw new Error('只能统计知识库目录内的文件')
+    }
+    const stats: FileStats = { totalFiles: 0, totalLines: 0, totalSizeKB: 0, byExtension: {} }
+    for (const root of roots) walkStats(root, stats)
+    const root = roots.join(', ')
 
     const lines: string[] = [
       `知识库统计`,
@@ -151,18 +161,23 @@ const SearchDocsTool: LLMTool = {
     },
   },
 
-  async execute({ query, limit }, kbPath) {
-    const kbId = Number(path.basename(kbPath).replace('kb_', ''))
-    if (!kbId) return '无法识别知识库 ID'
+  async execute({ query, limit }, scope) {
+    if (!scope.kbIds.length) return '无法识别知识库 ID'
 
     const queryStr = String(query)
+    const max = Math.min(Number(limit ?? 8), 20)
     let queryEmbedding: Float32Array | undefined
     if (isEmbeddingEnabled()) {
       const emb = await generateEmbedding(queryStr)
       if (emb) queryEmbedding = emb
     }
 
-    const results = searchDocContent(kbId, queryStr, Math.min(Number(limit ?? 8), 20), queryEmbedding)
+    // 多个知识库时轮流取各库的靠前结果，避免单个库占满名额
+    const perKb = scope.kbIds.map(kbId => searchDocContent(kbId, queryStr, max, queryEmbedding))
+    const results: typeof perKb[number] = []
+    for (let i = 0; results.length < max && perKb.some(r => i < r.length); i++) {
+      for (const r of perKb) if (i < r.length && results.length < max) results.push(r[i])
+    }
     if (!results.length) return '未找到匹配内容，请尝试换用其他关键词或使用 Grep 工具'
 
     return results
