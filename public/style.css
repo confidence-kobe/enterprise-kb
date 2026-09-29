@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════
-   Enterprise KB — style.css v31
+   Enterprise KB — style.css v32
    Design system: Inter · Dark sidebar · Card-first redesign
    ═══════════════════════════════════════════════════════════ */
 
@@ -2141,12 +2141,21 @@ html[data-theme="dark"] .manage-header { background: #161b22; border-color: var(
 }
 .manage-header-logo svg { width: 17px; height: 17px; }
 
+/* 窄屏：品牌与角色徽标一行，操作按钮换到第二行 */
+@media (max-width: 600px) {
+  .manage-header { height: auto; flex-wrap: wrap; padding: 10px 16px; row-gap: 8px; gap: 8px; }
+  .manage-header-brand { flex: 1 0 calc(100% - 80px); white-space: nowrap; }
+}
+
 .manage-body {
   flex: 1;
   max-width: 1480px;
   width: 100%;
   margin: 0 auto;
   padding: 24px 24px 40px;
+}
+@media (max-width: 600px) {
+  .manage-body { padding: 16px 16px 32px; }
 }
 
 /* Tabs */
