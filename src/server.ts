@@ -32,7 +32,8 @@ import { chunkDocument } from './documentChunker.js'
 import { requireAuth, requireAdmin, signToken, verifyPassword, hashPassword } from './auth.js'
 import type { AuthRequest } from './auth.js'
 import { LLMExecutor } from './executor.js'
-import { ALL_TOOLS, collectKbStats } from './tools.js'
+import { ALL_TOOLS, collectKbStats, scopeForKbPath } from './tools.js'
+import type { ToolScope } from './tools.js'
 import { buildSystemPrompt } from './prompt.js'
 import type { QAEvent } from './tools.js'
 import { buildTrustedHistory } from './conversationHistory.js'
@@ -1413,6 +1414,7 @@ app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, async (req: AuthRequest, 
     apiKey:       LLM_API_KEY,
     model:        currentModel,
     kbPath,
+    scope:        scopeForKbPath(kbPath, kb.id),
     systemPrompt: buildSystemPrompt(kb.name, kbPath, kb.system_prompt),
     maxTurns:     MAX_TURNS,
     onEvent:      (e: QAEvent) => {
@@ -1481,7 +1483,9 @@ app.post('/api/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => 
     })
   )).flat()
 
-  const kbPaths = allKbs.map(kb => `· ${kb.name}: ${kb.storage_path || path.join(STORAGE_PATH, `kb_${kb.id}`)}`).join('\n')
+  // 工具只能访问该用户有权限的知识库目录（listKbsForUser 已做权限过滤）
+  const kbDirs = allKbs.map(kb => path.join(STORAGE_PATH, `kb_${kb.id}`))
+  const kbPaths = allKbs.map((kb, i) => `· ${kb.name}: ${kbDirs[i]}`).join('\n')
   const systemPrompt = `你是企业全局知识库的问答助手，可访问以下知识库：\n${kbPaths}\n\n回答时必须标注来源文件和行号。知识库中无相关内容时，明确说明"知识库中未找到相关内容"，不要猜测。`
 
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
@@ -1495,10 +1499,10 @@ app.post('/api/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => 
   const abortCtrl = new AbortController()
   res.on('close', () => { abortCtrl.abort(); clearInterval(keepalive) })
 
-  const kbPath = allKbs[0]?.storage_path || STORAGE_PATH
+  const scope: ToolScope = { cwd: kbDirs[0], allowedDirs: kbDirs, kbIds: allKbs.map(kb => kb.id) }
   const executor = new LLMExecutor({
     baseUrl: LLM_BASE_URL, apiKey: LLM_API_KEY, model: currentModel,
-    kbPath, systemPrompt, maxTurns: MAX_TURNS,
+    kbPath: kbDirs[0], scope, systemPrompt, maxTurns: MAX_TURNS,
     onEvent: (e: QAEvent) => { if (!abortCtrl.signal.aborted) send(e) },
   })
 

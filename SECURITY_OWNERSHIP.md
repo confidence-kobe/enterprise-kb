@@ -29,6 +29,7 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 | App to SQLite | `src/db.ts` | parameterized queries, foreign keys, WAL | Backend owner |
 | App to local storage | `STORAGE_PATH` | generated filenames, allowlisted extensions, per-KB directories | Backend owner |
 | App to LLM provider | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | environment config and request limits | Platform owner |
+| LLM tool calls to local files | `src/toolAdapter.ts`, `src/toolScope.ts`, `src/tools.ts` | `ToolScope`: path params and Glob patterns must resolve (after symlinks) inside the KB directories the user can access | Backend owner |
 | Host/container runtime | Docker, `.env`, volumes | non-root container user, mounted persistent volumes, secret handling | Platform owner |
 | CI | `.github/workflows/ci.yml` | `npm ci`, build, tests, audit | Repository owner |
 
@@ -43,6 +44,7 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 - Upload size is limited to 50 MB.
 - Upload extensions are allowlisted.
 - SQL calls use prepared statements.
+- LLM tools (Read/Grep/Glob/KBStats/SearchDocs) are limited to a `ToolScope`: one KB for per-KB Q&A, and only the user's accessible KBs (`listKbsForUser`) for cross-KB Q&A. The boundary is enforced in `assertParamsInScope`, because claude-tools-kit's `plan` mode does not check `allowedDirectories`.
 - Security response headers are set in Express.
 - `.env`, `data/`, `storage/`, database files, logs, and dependency/build output are ignored by git.
 - Docker runtime uses the `node` user and persists data/storage through volumes.
@@ -69,6 +71,9 @@ src/server.ts
 src/auth.ts
 src/db.ts
 src/tools.ts
+src/toolScope.ts
+src/toolAdapter.ts
+test/toolScope.test.ts
 test/server.test.ts
 ```
 
