@@ -41,6 +41,7 @@ jobs:
             package.json \
             package-lock.json \
             README.md \
+            CHANGELOG.md \
             DEPLOYMENT.md \
             RELEASE.md \
             AGENTS.md \
