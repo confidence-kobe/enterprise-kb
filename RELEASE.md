@@ -33,6 +33,7 @@ The release workflow produces a tarball containing:
 
 - built server output in `dist/`
 - `public/`
+- `CHANGELOG.md` with upgrade notes
 - vendored `packages/claude-tools-kit/dist/`
 - runtime and deployment metadata
 
