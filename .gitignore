@@ -4,6 +4,7 @@ dist/
 !packages/claude-tools-kit/dist/**
 storage/
 data/
+backups/
 .env
 *.db
 *.db-shm

@@ -54,6 +54,7 @@ npm run test
 npm run check
 npm run codex:smoke
 npm run smoke:full
+npm run backup
 npm start
 ```
 
@@ -62,6 +63,7 @@ npm start
 - `npm run check`: build, test, then run production dependency audit.
 - `npm run codex:smoke`: check the running app health endpoints.
 - `npm run smoke:full`: exercise auth, users, KBs, documents, permissions, conversations, and a real model answer, then remove its temporary data.
+- `npm run backup` / `npm run backup:list` / `npm run restore -- <backup> --yes`: back up or restore the database and documents. See `DEPLOYMENT.md`.
 - `npm start`: run `dist/server.js`.
 
 For smoke checks against a non-default port:
@@ -88,6 +90,7 @@ Use `.env.example` as the template. Important variables:
 - `HISTORY_MAX_CHARS`
 - `SYNC_MAX_FILES`
 - `SYNC_MAX_TOTAL_MB`
+- `BACKUP_DIR`, `BACKUP_KEEP` (backup location and how many backups to keep; default `./backups`, 7)
 - `SYNC_ALLOWED_ROOTS` (optional; comma-separated folders that sync sources must be inside. Only admins can set a sync folder.)
 - `STORAGE_PATH`
 - `DB_PATH`

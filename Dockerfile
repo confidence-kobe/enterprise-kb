@@ -20,6 +20,8 @@ ENV NODE_ENV=production
 ENV PORT=8080
 ENV STORAGE_PATH=/app/storage
 ENV DB_PATH=/app/data/enterprise-kb.db
+# 备份写入数据卷，容器重建后仍在
+ENV BACKUP_DIR=/app/data/backups
 
 WORKDIR /app
 
