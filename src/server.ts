@@ -763,7 +763,7 @@ app.post('/api/auth/login', loginRateLimit, (req, res) => {
     res.status(401).json({ error: '用户名或密码错误' }); return
   }
 
-  const token = signToken({ userId: user.id, username: user.username, role: user.role })
+  const token = signToken({ userId: user.id, username: user.username, role: user.role, tv: user.token_version })
   audit(req, 'auth.login', 'auth', { userId: user.id, username: user.username })
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } })
 })
@@ -790,7 +790,10 @@ app.patch('/api/me/password', requireAuth, (req: AuthRequest, res) => {
 
   updateUserPassword(req.user!.userId, hashPassword(newPassword))
   audit(req, 'user.password_changed', 'user', { entityId: req.user!.userId })
-  res.json({ ok: true })
+  // 改密会使所有旧 Token 失效（含其他设备）；为当前会话签发新 Token
+  const updated = getUserById(req.user!.userId)!
+  const token = signToken({ userId: updated.id, username: updated.username, role: updated.role, tv: updated.token_version })
+  res.json({ ok: true, token })
 })
 
 // ── 知识库路由 ────────────────────────────────────────

@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - Only admins can set a knowledge base's sync folder. New optional `SYNC_ALLOWED_ROOTS` limits which server folders can be synced.
 - Upload permission is checked before the file is written, so rejected uploads no longer leave files in the knowledge base folder.
 - Public knowledge bases are read-only for non-members.
+- Login tokens are revoked immediately when a user is deleted, their role changes, or their password changes. Previously they stayed valid until expiry (24 h by default), including a demoted admin's admin rights.
 - Dependency updates for multer, body-parser, qs, form-data, brace-expansion and uuid advisories.
 
 ### Changed

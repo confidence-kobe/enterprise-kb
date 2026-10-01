@@ -17,6 +17,8 @@ export interface User {
   password_hash: string
   role: 'admin' | 'user'
   created_at: number
+  /** 每次改密、改角色时递增，使已签发的 Token 立即失效 */
+  token_version: number
 }
 
 export interface KnowledgeBase {
@@ -229,6 +231,9 @@ export function initDb(dbPath: string): void {
     db.exec(`ALTER TABLE documents ADD COLUMN source_size INTEGER`)
   } catch { /* column already exists */ }
   try {
+    db.exec(`ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0`)
+  } catch { /* column already exists */ }
+  try {
     db.exec(`ALTER TABLE knowledge_bases ADD COLUMN system_prompt TEXT`)
   } catch { /* column already exists */ }
   try {
@@ -318,8 +323,8 @@ export function getUserById(id: number): User | undefined {
   return db.prepare('SELECT * FROM users WHERE id = ?').get(id) as User | undefined
 }
 
-export function listUsers(): Omit<User, 'password_hash'>[] {
-  return db.prepare('SELECT id, username, role, created_at FROM users ORDER BY created_at').all() as Omit<User, 'password_hash'>[]
+export function listUsers(): Omit<User, 'password_hash' | 'token_version'>[] {
+  return db.prepare('SELECT id, username, role, created_at FROM users ORDER BY created_at').all() as Omit<User, 'password_hash' | 'token_version'>[]
 }
 
 export function createUser(username: string, password: string, role: 'admin' | 'user' = 'user'): User {
@@ -437,8 +442,9 @@ export function listKbMembers(kbId: number): Omit<User, 'password_hash'>[] {
   `).all(kbId) as Omit<User, 'password_hash'>[]
 }
 
+/** 改密后旧 Token 全部失效 */
 export function updateUserPassword(id: number, newHash: string): void {
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newHash, id)
+  db.prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?').run(newHash, id)
 }
 
 // ── 审计日志 ──────────────────────────────────────────
@@ -762,8 +768,9 @@ export function countMessages(conversationId: number): number {
   return row.cnt
 }
 
+/** 角色变更后旧 Token 全部失效 */
 export function updateUserRole(id: number, role: 'admin' | 'user'): void {
-  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id)
+  db.prepare('UPDATE users SET role = ?, token_version = token_version + 1 WHERE id = ?').run(role, id)
 }
 
 export function pinConversation(id: number, pinned: boolean): void {

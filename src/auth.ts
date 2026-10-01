@@ -29,6 +29,8 @@ export interface JwtPayload {
   userId: number
   username: string
   role: 'admin' | 'user'
+  /** 签发时的 token_version；与数据库不一致说明已改密/改角色，Token 作废 */
+  tv?: number
 }
 
 // ── Token ─────────────────────────────────────────────
@@ -63,13 +65,22 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
     return
   }
 
+  let payload: JwtPayload
   try {
-    const token = header.slice(7)
-    req.user = verifyToken(token)
-    next()
+    payload = verifyToken(header.slice(7))
   } catch {
     res.status(401).json({ error: 'Token 已过期或无效，请重新登录' })
+    return
   }
+
+  // 每次请求都以数据库为准：用户被删除、改密或改角色后，旧 Token 立即失效，角色取最新值
+  const user = getUserById(payload.userId)
+  if (!user || (user.token_version ?? 0) !== (payload.tv ?? 0)) {
+    res.status(401).json({ error: '登录已失效，请重新登录' })
+    return
+  }
+  req.user = { userId: user.id, username: user.username, role: user.role, tv: user.token_version }
+  next()
 }
 
 /** 验证管理员身份 */
