@@ -88,6 +88,7 @@ Use `.env.example` as the template. Important variables:
 - `HISTORY_MAX_CHARS`
 - `SYNC_MAX_FILES`
 - `SYNC_MAX_TOTAL_MB`
+- `SYNC_ALLOWED_ROOTS` (optional; comma-separated folders that sync sources must be inside. Only admins can set a sync folder.)
 - `STORAGE_PATH`
 - `DB_PATH`
 - `CORS_ORIGIN`

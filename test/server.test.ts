@@ -751,4 +751,50 @@ describe('conversation search and pinning', () => {
     await request(app).post(`/api/conversations/${conv.id}/feedback`).set('Authorization', `Bearer ${user.token}`)
       .send({ rating: -1, reason: 'incorrect' }).expect(403)
   })
+
+  it('only lets admins point a knowledge base at a server folder', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: 'syncuser', password: 'Syncuser@123', role: 'user' }).expect(201)
+    const user = await login('syncuser', 'Syncuser@123')
+    const userAuth = { Authorization: `Bearer ${user.token}` }
+
+    // 模拟服务器上的敏感目录
+    const serverDir = path.join(testRoot, 'server-config')
+    fs.mkdirSync(serverDir, { recursive: true })
+    fs.writeFileSync(path.join(serverDir, 'secrets.json'), '{"apiKey":"sk-live-secret"}')
+
+    const kb = await request(app).post('/api/kbs').set(userAuth).send({ name: 'User owned KB' }).expect(201)
+    const kbId = kb.body.id as number
+
+    // 普通用户（知识库所有者）不能设置同步目录，也无法借此导入服务器文件
+    await request(app).patch(`/api/kbs/${kbId}/sync-source`).set(userAuth).send({ path: serverDir }).expect(403)
+    await request(app).post(`/api/kbs/${kbId}/sync`).set(userAuth).expect(400)
+    const docs = await request(app).get(`/api/kbs/${kbId}/docs`).set(userAuth).expect(200)
+    const docItems = Array.isArray(docs.body) ? docs.body : docs.body.items
+    expect(docItems.some((d: { original_name: string }) => d.original_name.includes('secrets'))).toBe(false)
+
+    // 所有者仍可清空同步目录
+    await request(app).patch(`/api/kbs/${kbId}/sync-source`).set(userAuth).send({ path: '' }).expect(200)
+
+    // 管理员可以设置；SYNC_ALLOWED_ROOTS 生效时只能在允许的根目录下
+    const allowedRoot = path.join(testRoot, 'shared-docs')
+    fs.mkdirSync(path.join(allowedRoot, 'handbook'), { recursive: true })
+    process.env.SYNC_ALLOWED_ROOTS = allowedRoot
+    try {
+      await request(app).patch(`/api/kbs/${kbId}/sync-source`).set(adminAuth).send({ path: serverDir }).expect(400)
+      await request(app).patch(`/api/kbs/${kbId}/sync-source`).set(adminAuth)
+        .send({ path: path.join(allowedRoot, 'handbook') }).expect(200)
+      // 管理员设置后，所有者可以执行同步
+      await request(app).post(`/api/kbs/${kbId}/sync`).set(userAuth).expect(200)
+    } finally {
+      delete process.env.SYNC_ALLOWED_ROOTS
+    }
+
+    // 指向存储目录的符号链接同样被拒绝
+    const link = path.join(testRoot, 'storage-link')
+    fs.symlinkSync(process.env.STORAGE_PATH!, link)
+    await request(app).patch(`/api/kbs/${kbId}/sync-source`).set(adminAuth).send({ path: link }).expect(400)
+  })
 })

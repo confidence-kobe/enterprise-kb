@@ -668,8 +668,18 @@ function renderSyncSourcePanel() {
     if (syncStatusEl) syncStatusEl.textContent = ''
     return
   }
+  // 只有管理员能设置同步目录；所有者可对管理员设置好的目录执行同步
+  if (!isAdmin && !kb.sync_source_path) {
+    syncSourcePanel.classList.add('hidden')
+    if (syncPathInput) syncPathInput.value = ''
+    if (syncStatusEl) syncStatusEl.textContent = ''
+    return
+  }
   syncSourcePanel.classList.remove('hidden')
   syncPathInput.value = kb.sync_source_path || ''
+  syncPathInput.disabled = !isAdmin
+  syncPathInput.title = isAdmin ? '' : '同步目录由管理员设置'
+  document.getElementById('sync-save-btn')?.classList.toggle('hidden', !isAdmin)
   if (kb.sync_last_result) {
     try {
       const last = JSON.parse(kb.sync_last_result)

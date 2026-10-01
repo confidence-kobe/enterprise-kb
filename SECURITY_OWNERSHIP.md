@@ -28,6 +28,7 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 | Browser to uploaded files | document preview routes | route auth checks and stored filename lookup | Backend owner |
 | App to SQLite | `src/db.ts` | parameterized queries, foreign keys, WAL | Backend owner |
 | App to local storage | `STORAGE_PATH` | generated filenames, allowlisted extensions, per-KB directories | Backend owner |
+| Server folders to KB (folder sync) | `PATCH /api/kbs/:id/sync-source`, `POST /api/kbs/:id/sync` | admin-only sync folder; real path must not overlap `STORAGE_PATH` and must be inside `SYNC_ALLOWED_ROOTS` when set; re-validated on every run | Backend owner |
 | App to LLM provider | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | environment config and request limits | Platform owner |
 | LLM tool calls to local files | `src/toolAdapter.ts`, `src/toolScope.ts`, `src/tools.ts` | `ToolScope`: path params and Glob patterns must resolve (after symlinks) inside the KB directories the user can access | Backend owner |
 | Host/container runtime | Docker, `.env`, volumes | non-root container user, mounted persistent volumes, secret handling | Platform owner |
