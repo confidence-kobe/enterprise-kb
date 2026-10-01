@@ -235,6 +235,31 @@ function normalizeSourcePath(sourcePath: string): string {
     : path.resolve(PROJECT_ROOT, sourcePath))
 }
 
+/** 解析符号链接后的真实路径；不存在时退回普通解析 */
+function realPathOf(p: string): string {
+  try { return fs.realpathSync(p) } catch { return path.resolve(p) }
+}
+
+/** 可选的同步根目录白名单（逗号分隔），每次读取环境变量以便运行时调整 */
+function syncAllowedRoots(): string[] {
+  return (process.env.SYNC_ALLOWED_ROOTS ?? '')
+    .split(',')
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map(p => realPathOf(normalizeSourcePath(p)))
+}
+
+/** 校验同步目录，返回错误信息；通过时返回 null */
+function validateSyncSource(sourcePath: string): string | null {
+  if (!isDirectory(sourcePath)) return '同步路径不存在或不是文件夹'
+  const real = realPathOf(sourcePath)
+  const storage = realPathOf(STORAGE_PATH)
+  if (isPathInside(storage, real) || isPathInside(real, storage)) return '同步路径不能指向或包含应用存储目录'
+  const roots = syncAllowedRoots()
+  if (roots.length && !roots.some(root => isPathInside(root, real))) return '同步路径不在允许的目录范围内（SYNC_ALLOWED_ROOTS）'
+  return null
+}
+
 function isDirectory(sourcePath: string): boolean {
   try {
     return fs.statSync(sourcePath).isDirectory()
@@ -858,13 +883,16 @@ app.patch('/api/kbs/:id/sync-source', requireAuth, (req: AuthRequest, res) => {
     return
   }
 
-  const sourcePath = normalizeSourcePath(rawPath)
-  if (!isDirectory(sourcePath)) {
-    res.status(400).json({ error: '同步路径不存在或不是文件夹' })
+  // 同步会把服务器目录中的文件导入知识库，只有管理员可以指定目录（所有者仍可清空）
+  if (req.user!.role !== 'admin') {
+    res.status(403).json({ error: '只有管理员可以设置同步目录' })
     return
   }
-  if (isPathInside(STORAGE_PATH, sourcePath) || isPathInside(sourcePath, STORAGE_PATH)) {
-    res.status(400).json({ error: '同步路径不能指向或包含应用存储目录' })
+
+  const sourcePath = normalizeSourcePath(rawPath)
+  const invalid = validateSyncSource(sourcePath)
+  if (invalid) {
+    res.status(400).json({ error: invalid })
     return
   }
 
@@ -883,8 +911,10 @@ app.post('/api/kbs/:id/sync', requireAuth, (req: AuthRequest, res) => {
     res.status(400).json({ error: '请先设置同步文件夹' })
     return
   }
-  if (!isDirectory(sourcePath)) {
-    res.status(400).json({ error: '同步路径不存在或不是文件夹' })
+  // 执行时再次校验：目录可能已被替换为符号链接，或白名单已调整
+  const invalid = validateSyncSource(sourcePath)
+  if (invalid) {
+    res.status(400).json({ error: invalid })
     return
   }
 

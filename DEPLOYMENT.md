@@ -18,6 +18,7 @@ Copy `.env.example` to `.env` and set production values:
 - `HISTORY_MAX_MESSAGES`, `HISTORY_MAX_CHARS` to cap trusted persisted conversation context sent to the model.
 - `STORAGE_PATH`, `DB_PATH`.
 - `CORS_ORIGIN` only when the UI and API are served from different origins.
+- `SYNC_ALLOWED_ROOTS`: restrict local folder sync to specific server folders (for example `/srv/shared-docs`). Only admins can set a knowledge base's sync folder; owners can run a sync on a folder an admin configured.
 - `HTTPS_PROXY` / `NO_PROXY` when the server must reach the LLM or embedding endpoint through a corporate proxy. Credentials in the proxy URL are redacted from logs.
 
 The server refuses to start in production when `JWT_SECRET` or `ADMIN_PASSWORD` still uses an example/default value.
