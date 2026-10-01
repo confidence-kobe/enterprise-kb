@@ -33,6 +33,7 @@ All notable changes to this project will be documented in this file.
 - Conversation search, pinning, batch delete and a stop-generation button.
 - Model selection that persists across restarts, and a per-user Q&A rate limit (`QA_RATE_MAX`, `QA_RATE_WINDOW_MS`).
 - Outbound HTTP proxy support (`HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`).
+- Backup and restore: `npm run backup` (works while the server runs; keeps the newest `BACKUP_KEEP`), `npm run backup:list`, and `npm run restore -- <backup> --yes`, which keeps the current data aside. See `DEPLOYMENT.md`.
 
 ### Fixed
 

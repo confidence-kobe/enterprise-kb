@@ -72,6 +72,46 @@ The Compose file persists SQLite data and document storage in named volumes:
 - `enterprise_kb_data`
 - `enterprise_kb_storage`
 
+## Backup And Restore
+
+Everything the app stores lives in two places: the SQLite database (`DB_PATH`) and the document folder (`STORAGE_PATH`). One command backs up both. Run `npm run build` first if you are running from source.
+
+```bash
+npm run backup          # snapshot DB + documents into BACKUP_DIR (default ./backups)
+npm run backup:list     # list existing backups
+```
+
+- The backup is safe to take while the server is running (it uses SQLite's online backup API) and checks the copy's integrity.
+- Each backup is a folder `backup-<UTC time>/` with `enterprise-kb.db`, `storage/` and `manifest.json`.
+- Only the newest `BACKUP_KEEP` backups (default 7) are kept.
+- Backups sit on the same machine as the data. **Copy the backup folder somewhere else regularly** (another disk, NAS or object storage).
+
+Scheduled backup (Linux cron, every day at 02:30):
+
+```cron
+30 2 * * * cd /opt/enterprise-kb && npm run backup >> backups/backup.log 2>&1
+```
+
+Restore (stop the server first; the command refuses to run while `/healthz` answers):
+
+```bash
+npm run restore -- backup-20261001-020000          # preview only
+npm run restore -- backup-20261001-020000 --yes    # restore
+```
+
+The current database and document folder are renamed to `*.before-restore-<time>`, not deleted. Remove them once the restored app looks right.
+
+Docker (backups go to `/app/data/backups` inside the data volume):
+
+```bash
+docker compose exec enterprise-kb npm run backup
+docker compose cp enterprise-kb:/app/data/backups ./kb-backups      # copy off the server
+
+docker compose stop enterprise-kb
+docker compose run --rm --no-deps enterprise-kb npm run restore -- backup-20261001-020000 --yes
+docker compose start enterprise-kb
+```
+
 ## Operational Notes
 
 - `data/`, `storage/`, `.env`, `node_modules/`, and `dist/` are intentionally ignored by git.
