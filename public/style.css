@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════
-   Enterprise KB — style.css v32
+   Enterprise KB — style.css v33
    Design system: Inter · Dark sidebar · Card-first redesign
    ═══════════════════════════════════════════════════════════ */
 
@@ -1530,6 +1530,16 @@ html[data-theme="dark"] .response-text tr:nth-child(even) td { background: #161b
 .msg-feedback-btn:hover { opacity: 1; background: var(--bg); border-color: var(--muted); }
 .msg-feedback-btn.active { opacity: 1; background: var(--bg); border-color: var(--accent); }
 .msg-feedback-btn.hidden { display: none; }
+.doc-readonly-notice {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+}
+.doc-readonly-notice.hidden { display: none; }
 .feedback-reason-panel {
   margin-top: 10px;
   padding: 12px 14px;

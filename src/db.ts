@@ -411,6 +411,14 @@ export function canUserAccessKb(userId: number, kbId: number): boolean {
   return !!access
 }
 
+/** 能否向知识库写入文档：所有者或成员（公开只代表可读，不代表可写；管理员在路由层放行） */
+export function canUserWriteKb(userId: number, kbId: number): boolean {
+  const kb = getKbById(kbId)
+  if (!kb) return false
+  if (kb.owner_id === userId) return true
+  return !!db.prepare('SELECT 1 FROM kb_access WHERE kb_id = ? AND user_id = ?').get(kbId, userId)
+}
+
 export function grantKbAccess(kbId: number, userId: number): void {
   db.prepare('INSERT OR IGNORE INTO kb_access (kb_id, user_id) VALUES (?, ?)').run(kbId, userId)
 }
