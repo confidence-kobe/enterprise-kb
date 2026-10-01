@@ -998,11 +998,18 @@ app.get('/api/kbs/:id/docs', requireAuth, (req: AuthRequest, res) => {
   }
 })
 
-app.post('/api/kbs/:id/docs', requireAuth, upload.array('files', 20), async (req: AuthRequest, res) => {
+/** 上传前校验权限：multer 会在路由处理前把文件写入知识库目录，因此必须先拦截 */
+function requireKbUploadAccess(req: AuthRequest, res: Response, next: NextFunction): void {
   const kbId = Number(req.params.id)
+  if (!Number.isInteger(kbId) || !getKbById(kbId)) { res.status(404).json({ error: '知识库不存在' }); return }
   if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
     res.status(403).json({ error: '无权限' }); return
   }
+  next()
+}
+
+app.post('/api/kbs/:id/docs', requireAuth, requireKbUploadAccess, upload.array('files', 20), async (req: AuthRequest, res) => {
+  const kbId = Number(req.params.id)
 
   const files = req.files as Express.Multer.File[] | undefined
   if (!files?.length) { res.status(400).json({ error: '未接收到文件' }); return }
