@@ -14,7 +14,7 @@ import * as url from 'node:url'
 import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createUser, deleteUser,
          listKbsForUser, getAllKbs, getKbById, createKb, deleteKb, updateKbPublic, updateKbStoragePath, updateKbMeta,
          updateKbSyncSource, updateKbSyncResult,
-         canUserAccessKb, grantKbAccess, revokeKbAccess, listKbMembers,
+         canUserAccessKb, canUserWriteKb, grantKbAccess, revokeKbAccess, listKbMembers,
          listDocs, listDocsWithCounts, listDocsBySourceType, createDoc, updateDocFromSync, deleteDoc, getDocById,
          updateUserPassword, updateUserRole,
          listConversations, createConversation, updateConversationTitle, touchConversation,
@@ -294,9 +294,15 @@ function canManageKb(kb: KnowledgeBase, user: AuthRequest['user']): boolean {
   return Boolean(user && (user.role === 'admin' || kb.owner_id === user.userId))
 }
 
-function publicKb(kb: KnowledgeBase, user: AuthRequest['user']): KnowledgeBase {
-  if (canManageKb(kb, user)) return kb
-  return { ...kb, sync_source_path: null, sync_last_at: null, sync_last_result: null }
+/** 能否写入文档（上传、新建、编辑）：管理员、所有者、成员；公开知识库对其他人只读 */
+function canWriteKb(kbId: number, user: AuthRequest['user']): boolean {
+  return Boolean(user && (user.role === 'admin' || canUserWriteKb(user.userId, kbId)))
+}
+
+function publicKb(kb: KnowledgeBase, user: AuthRequest['user']): KnowledgeBase & { can_write: boolean } {
+  const can_write = canWriteKb(kb.id, user)
+  if (canManageKb(kb, user)) return { ...kb, can_write }
+  return { ...kb, sync_source_path: null, sync_last_at: null, sync_last_result: null, can_write }
 }
 
 function publicDoc(doc: Document, kb: KnowledgeBase, user: AuthRequest['user']): Document {
@@ -807,7 +813,7 @@ app.post('/api/kbs', requireAuth, (req: AuthRequest, res) => {
   updateKbStoragePath(kb.id, realPath)
   audit(req, 'kb.create', 'kb', { entityId: kb.id, kbId: kb.id, detail: { name: name.trim() } })
 
-  res.status(201).json({ ...kb, storage_path: realPath })
+  res.status(201).json({ ...kb, storage_path: realPath, can_write: true })
 })
 
 app.get('/api/kbs/:id', requireAuth, (req: AuthRequest, res) => {
@@ -998,12 +1004,12 @@ app.get('/api/kbs/:id/docs', requireAuth, (req: AuthRequest, res) => {
   }
 })
 
-/** 上传前校验权限：multer 会在路由处理前把文件写入知识库目录，因此必须先拦截 */
+/** 上传前校验写权限：multer 会在路由处理前把文件写入知识库目录，因此必须先拦截 */
 function requireKbUploadAccess(req: AuthRequest, res: Response, next: NextFunction): void {
   const kbId = Number(req.params.id)
   if (!Number.isInteger(kbId) || !getKbById(kbId)) { res.status(404).json({ error: '知识库不存在' }); return }
-  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
+  if (!canWriteKb(kbId, req.user)) {
+    res.status(403).json({ error: '无权限向该知识库添加文档' }); return
   }
   next()
 }
@@ -1031,8 +1037,8 @@ app.post('/api/kbs/:id/docs', requireAuth, requireKbUploadAccess, upload.array('
 // ── 直接创建文本文档 ──────────────────────────────────
 app.post('/api/kbs/:id/docs/text', requireAuth, async (req: AuthRequest, res) => {
   const kbId = Number(req.params.id)
-  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
+  if (!canWriteKb(kbId, req.user)) {
+    res.status(403).json({ error: '无权限向该知识库添加文档' }); return
   }
 
   const { title, content } = req.body as { title?: string; content?: string }
@@ -1072,8 +1078,8 @@ app.post('/api/kbs/:id/docs/text', requireAuth, async (req: AuthRequest, res) =>
 app.patch('/api/kbs/:id/docs/:docId/text', requireAuth, async (req: AuthRequest, res) => {
   const kbId  = Number(req.params.id)
   const docId = Number(req.params.docId)
-  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
+  if (!canWriteKb(kbId, req.user)) {
+    res.status(403).json({ error: '无权限编辑该知识库的文档' }); return
   }
   const doc = getDocById(docId)
   if (!doc || doc.kb_id !== kbId) { res.status(404).json({ error: '文档不存在' }); return }

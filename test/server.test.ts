@@ -818,4 +818,45 @@ describe('conversation search and pinning', () => {
     const after = fs.readdirSync(kbDir).filter(name => !before.has(name))
     expect(after).toEqual([])
   })
+
+  it('lets owners and members write documents while public viewers stay read-only', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    for (const username of ['kbowner', 'kbmember', 'kbviewer']) {
+      await request(app).post('/api/admin/users').set(adminAuth)
+        .send({ username, password: 'Passw0rd!x', role: 'user' }).expect(201)
+    }
+    const owner = { Authorization: `Bearer ${(await login('kbowner', 'Passw0rd!x')).token}` }
+    const member = { Authorization: `Bearer ${(await login('kbmember', 'Passw0rd!x')).token}` }
+    const viewer = { Authorization: `Bearer ${(await login('kbviewer', 'Passw0rd!x')).token}` }
+
+    const kb = await request(app).post('/api/kbs').set(owner).send({ name: 'Shared handbook' }).expect(201)
+    const kbId = kb.body.id as number
+    expect(kb.body.can_write).toBe(true)
+    await request(app).patch(`/api/kbs/${kbId}/public`).set(owner).send({ is_public: true }).expect(200)
+    await request(app).post(`/api/kbs/${kbId}/members`).set(owner).send({ username: 'kbmember' }).expect(201)
+
+    const doc = await request(app).post(`/api/kbs/${kbId}/docs/text`).set(owner)
+      .send({ title: 'policy', content: 'Original policy' }).expect(201)
+    const docId = doc.body.id as number
+
+    // 公开知识库的普通访客：可以查看，但不能上传、新建或改写
+    const viewerList = await request(app).get('/api/kbs').set(viewer).expect(200)
+    expect(viewerList.body.find((k: { id: number }) => k.id === kbId)).toMatchObject({ can_write: false })
+    await request(app).get(`/api/kbs/${kbId}/docs/${docId}/preview`).set(viewer).expect(200)
+    await request(app).post(`/api/kbs/${kbId}/docs/text`).set(viewer).send({ title: 'x', content: 'spam' }).expect(403)
+    await request(app).patch(`/api/kbs/${kbId}/docs/${docId}/text`).set(viewer).send({ content: 'defaced' }).expect(403)
+    await request(app).post(`/api/kbs/${kbId}/docs`).set(viewer)
+      .attach('files', Buffer.from('spam'), 'spam.md').expect(403)
+
+    // 成员可以写入
+    const memberList = await request(app).get('/api/kbs').set(member).expect(200)
+    expect(memberList.body.find((k: { id: number }) => k.id === kbId)).toMatchObject({ can_write: true })
+    await request(app).patch(`/api/kbs/${kbId}/docs/${docId}/text`).set(member).send({ content: 'Updated policy' }).expect(200)
+    await request(app).post(`/api/kbs/${kbId}/docs`).set(member)
+      .attach('files', Buffer.from('# Notes'), 'notes.md').expect(201)
+
+    const preview = await request(app).get(`/api/kbs/${kbId}/docs/${docId}/preview`).set(owner).expect(200)
+    expect(preview.body.content).toBe('Updated policy')
+  })
 })

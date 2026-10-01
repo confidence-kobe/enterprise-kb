@@ -522,9 +522,9 @@ async function loadDocs(append = false) {
       <span class="doc-size">${fmtSize(doc.size)}</span>
       <span>${vecBadge}</span>
       <div class="doc-row-actions">
-        ${doc.source_type === 'text' ? `<button class="btn btn-secondary btn-sm" data-edit-id="${doc.id}" data-edit-name="${escHtml(doc.original_name)}" title="编辑文档">编辑</button>` : ''}
+        ${doc.source_type === 'text' && canWriteCurrentKb() ? `<button class="btn btn-secondary btn-sm" data-edit-id="${doc.id}" data-edit-name="${escHtml(doc.original_name)}" title="编辑文档">编辑</button>` : ''}
         <button class="btn btn-secondary btn-sm" data-preview-id="${doc.id}" title="预览文档内容">预览</button>
-        <button class="btn btn-danger btn-sm" data-doc-id="${doc.id}" title="删除文档">删除</button>
+        ${canManageCurrentKb() ? `<button class="btn btn-danger btn-sm" data-doc-id="${doc.id}" title="删除文档">删除</button>` : ''}
       </div>
     `
     const cb = item.querySelector('.doc-cb')
@@ -536,7 +536,7 @@ async function loadDocs(append = false) {
       syncSelectAllCheckbox()
     })
     item.querySelector('[data-preview-id]').addEventListener('click', () => previewDoc(doc.id, doc.original_name, doc.summary))
-    item.querySelector('[data-doc-id]').addEventListener('click', () => deleteDoc(doc.id, doc.original_name))
+    item.querySelector('[data-doc-id]')?.addEventListener('click', () => deleteDoc(doc.id, doc.original_name))
     if (doc.source_type === 'text') {
       item.querySelector('[data-edit-id]')?.addEventListener('click', async () => {
         try {
@@ -564,7 +564,7 @@ async function loadDocs(append = false) {
     docList.appendChild(btn)
   }
 
-  document.getElementById('doc-bulk-bar').classList.remove('hidden')
+  document.getElementById('doc-bulk-bar').classList.toggle('hidden', !canManageCurrentKb())
   if (tableHeader) tableHeader.style.display = ''
   if (!append) { selectedDocIds.clear(); updateBulkBar(); syncSelectAllCheckbox() }
   updateBulkBar()
@@ -659,7 +659,32 @@ function canManageCurrentKb() {
   return Boolean(kb && (isAdmin || kb.owner_id === user.id))
 }
 
+/** 当前用户能否向所选知识库写入文档（上传、新建、编辑） */
+function canWriteCurrentKb() {
+  const kb = selectedDocKb()
+  return Boolean(kb && (isAdmin || kb.can_write))
+}
+
+/** 只读知识库隐藏上传、新建入口，并给出提示 */
+function renderDocWriteControls() {
+  const writable = canWriteCurrentKb()
+  uploadZone?.classList.toggle('hidden', !writable)
+  document.getElementById('new-text-doc-btn')?.classList.toggle('hidden', !writable)
+  document.getElementById('new-text-doc-divider')?.classList.toggle('hidden', !writable)
+  document.getElementById('reindex-btn')?.classList.toggle('hidden', !canManageCurrentKb())
+  let notice = document.getElementById('doc-readonly-notice')
+  if (!notice && uploadZone) {
+    notice = document.createElement('div')
+    notice.id = 'doc-readonly-notice'
+    notice.className = 'doc-readonly-notice'
+    notice.textContent = '你对这个知识库只有查看权限。如需添加或修改文档，请联系知识库所有者把你加为成员。'
+    uploadZone.before(notice)
+  }
+  notice?.classList.toggle('hidden', writable || !selectedDocKb())
+}
+
 function renderSyncSourcePanel() {
+  renderDocWriteControls()
   if (!syncSourcePanel) return
   const kb = selectedDocKb()
   if (!kb || !canManageCurrentKb()) {
