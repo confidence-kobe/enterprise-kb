@@ -37,6 +37,7 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 ## Current Controls
 
 - JWT auth is centralized in `src/auth.ts`.
+- `requireAuth` re-reads the user on every request: deleted users are rejected, the role comes from the database (not the token), and tokens whose `tv` no longer matches `users.token_version` are rejected. Password changes and role changes increment `token_version`, so existing tokens stop working immediately.
 - Admin-only routes use `requireAdmin`.
 - KB access checks use `canUserAccessKb`, owner checks, or admin checks.
 - Document writes (upload, create/edit text docs) require `canUserWriteKb`: owner, explicit member, or admin. Public visibility grants read and Q&A only. The upload check runs before multer writes the file.

@@ -1,5 +1,5 @@
 /* ── 认证 ─────────────────────────────────────────── */
-const token = localStorage.getItem('kb_token')
+let token = localStorage.getItem('kb_token')
 const user  = JSON.parse(localStorage.getItem('kb_user') || 'null')
 if (!token || !user) { location.href = '/login.html' }
 
@@ -1419,7 +1419,11 @@ function initPwdModal() {
       body: JSON.stringify({ currentPassword: current, newPassword: next }),
     })
     const data = await res.json()
-    if (res.ok) { showToast('密码修改成功', 'success'); close() }
+    if (res.ok) {
+      // 改密后旧 Token 失效，换用服务器签发的新 Token（其他设备需重新登录）
+      if (data.token) { token = data.token; localStorage.setItem('kb_token', data.token) }
+      showToast('密码修改成功，其他设备需重新登录', 'success'); close()
+    }
     else        { showToast(data.error ?? '修改失败', 'error') }
   })
 }

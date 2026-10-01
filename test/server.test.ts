@@ -859,4 +859,42 @@ describe('conversation search and pinning', () => {
     const preview = await request(app).get(`/api/kbs/${kbId}/docs/${docId}/preview`).set(owner).expect(200)
     expect(preview.body.content).toBe('Updated policy')
   })
+
+  it('revokes existing tokens when a user is deleted, demoted or has a password change', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+
+    // 降级：管理员权限立即失效，旧 Token 不能再用
+    const boss = await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: 'tempadmin', password: 'Tempadmin@1', role: 'admin' }).expect(201)
+    const bossToken = (await login('tempadmin', 'Tempadmin@1')).token
+    await request(app).get('/api/admin/users').set('Authorization', `Bearer ${bossToken}`).expect(200)
+    await request(app).patch(`/api/admin/users/${boss.body.id}/role`).set(adminAuth).send({ role: 'user' }).expect(200)
+    await request(app).get('/api/admin/users').set('Authorization', `Bearer ${bossToken}`).expect(401)
+    // 重新登录后拿到的是普通用户身份
+    const relogged = await login('tempadmin', 'Tempadmin@1')
+    expect(relogged.user.role).toBe('user')
+    await request(app).get('/api/admin/users').set('Authorization', `Bearer ${relogged.token}`).expect(403)
+
+    // 管理员重置密码：旧 Token 失效
+    const victim = await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: 'victim', password: 'Victim@1234', role: 'user' }).expect(201)
+    const stolen = (await login('victim', 'Victim@1234')).token
+    await request(app).get('/api/me').set('Authorization', `Bearer ${stolen}`).expect(200)
+    await request(app).post(`/api/admin/users/${victim.body.id}/reset-password`).set(adminAuth)
+      .send({ password: 'Victim@5678', newPassword: 'Victim@5678' }).expect(200)
+    await request(app).get('/api/me').set('Authorization', `Bearer ${stolen}`).expect(401)
+
+    // 自己改密：返回新 Token 可继续使用，旧 Token 作废
+    const v2 = await login('victim', 'Victim@5678')
+    const changed = await request(app).patch('/api/me/password').set('Authorization', `Bearer ${v2.token}`)
+      .send({ currentPassword: 'Victim@5678', newPassword: 'Victim@9999' }).expect(200)
+    expect(typeof changed.body.token).toBe('string')
+    await request(app).get('/api/me').set('Authorization', `Bearer ${v2.token}`).expect(401)
+    await request(app).get('/api/me').set('Authorization', `Bearer ${changed.body.token}`).expect(200)
+
+    // 删除用户：旧 Token 立即失效
+    await request(app).delete(`/api/admin/users/${victim.body.id}`).set(adminAuth).expect(200)
+    await request(app).get('/api/me').set('Authorization', `Bearer ${changed.body.token}`).expect(401)
+  })
 })
