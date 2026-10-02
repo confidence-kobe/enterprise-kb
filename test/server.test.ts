@@ -897,4 +897,37 @@ describe('conversation search and pinning', () => {
     await request(app).delete(`/api/admin/users/${victim.body.id}`).set(adminAuth).expect(200)
     await request(app).get('/api/me').set('Authorization', `Bearer ${changed.body.token}`).expect(401)
   })
+
+  it('reports questions the assistant could not answer to admins', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    const kb = await request(app).post('/api/kbs').set(auth).send({ name: 'Gap KB' }).expect(201)
+    const kbId = kb.body.id as number
+
+    const ask = (q: string, a: string) => {
+      const conv = createConversation(admin.user.id, kbId, q)
+      insertMessages(conv.id, [
+        { role: 'user', content: q, tool_calls: null, tool_call_id: null, seq: 0 },
+        { role: 'assistant', content: a, tool_calls: null, tool_call_id: null, seq: 1 },
+      ])
+      return conv
+    }
+    ask('出差补贴标准是多少？', '抱歉，知识库中未找到相关内容。')
+    ask('出差补贴 标准是多少', '知识库中未找到相关内容，建议咨询财务。')
+    ask('公司地址在哪', '公司位于上海市浦东新区。')
+    const disliked = ask('加班怎么调休', '可以调休。')
+    await request(app).post(`/api/conversations/${disliked.id}/feedback`).set(auth)
+      .send({ rating: -1, reason: 'not_found' }).expect(200)
+
+    const res = await request(app).get('/api/admin/gaps').set(auth).query({ kbId, days: 30 }).expect(200)
+    expect(res.body.total).toBe(3)
+    expect(res.body.items[0]).toMatchObject({ kb_id: kbId, kb_name: 'Gap KB', count: 2, sources: { ai_not_found: 2 } })
+    expect(res.body.items.map((g: { question: string }) => g.question)).toContain('加班怎么调休')
+    expect(res.body.items.map((g: { question: string }) => g.question)).not.toContain('公司地址在哪')
+
+    await request(app).post('/api/admin/users').set(auth)
+      .send({ username: 'gapuser', password: 'Gapuser@123', role: 'user' }).expect(201)
+    const user = await login('gapuser', 'Gapuser@123')
+    await request(app).get('/api/admin/gaps').set('Authorization', `Bearer ${user.token}`).expect(403)
+  })
 })

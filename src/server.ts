@@ -24,7 +24,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          updateDocMeta, updateDocSummary, updateDocIndexStatus, createAuditEvent, listAuditEvents,
          updateKbSystemPrompt, storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs,
          upsertFeedback, getFeedbackStats, getAllFeedbackStats,
-         getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS,
+         getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS, listKnowledgeGapRows,
          getConfig, setConfig } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
@@ -39,6 +39,7 @@ import type { QAEvent } from './tools.js'
 import { buildTrustedHistory } from './conversationHistory.js'
 import { configureProxyFromEnv } from './proxy.js'
 import { extractPdfText } from './pdfText.js'
+import { groupKnowledgeGaps } from './knowledgeGaps.js'
 
 const activeProxy = configureProxyFromEnv()
 if (activeProxy) console.log(`[proxy] 出站请求使用代理：${activeProxy}`)
@@ -1643,6 +1644,15 @@ app.get('/api/admin/feedback', requireAdmin, (_req, res) => {
   const total = total_positive + total_negative
   const satisfaction = total > 0 ? Math.round((total_positive / total) * 100) : null
   res.json({ items, total_positive, total_negative, satisfaction, reasons: getNegativeFeedbackReasons() })
+})
+
+/** 知识空白：近 N 天 AI 未能回答（或用户反馈"没找到相关资料"）的问题，按出现次数排序 */
+app.get('/api/admin/gaps', requireAdmin, (req, res) => {
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365)
+  const kbId = Number(req.query.kbId) || undefined
+  const since = Math.floor(Date.now() / 1000) - days * 86400
+  const rows = listKnowledgeGapRows(since, kbId)
+  res.json({ days, total: rows.length, items: groupKnowledgeGaps(rows) })
 })
 
 app.get('/api/admin/feedback/negative', requireAdmin, (req, res) => {

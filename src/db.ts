@@ -1260,6 +1260,52 @@ export function listNegativeFeedback(
   return { items, total }
 }
 
+// ── 知识空白：AI 未能回答的问题 ─────────────────────────
+
+/** 系统提示词要求模型在知识库无答案时说出这句话（见 prompt.ts） */
+export const NOT_FOUND_MARKER = '未找到相关内容'
+
+export interface KnowledgeGapRow {
+  kb_id: number
+  kb_name: string
+  question: string
+  created_at: number
+  source: 'ai_not_found' | 'feedback_not_found'
+}
+
+/**
+ * 列出 since 之后的空白问题原始记录：
+ * - AI 回答中出现"未找到相关内容"的问题
+ * - 用户点 👎 并选择"没找到相关资料"的问题
+ */
+export function listKnowledgeGapRows(since: number, kbId?: number): KnowledgeGapRow[] {
+  const kbFilter = kbId ? 'AND c.kb_id = ?' : ''
+  const aiRows = db.prepare(`
+    SELECT c.kb_id, kb.name AS kb_name, a.created_at,
+      (SELECT u.content FROM messages u
+        WHERE u.conversation_id = a.conversation_id AND u.role = 'user' AND u.seq < a.seq AND u.content IS NOT NULL
+        ORDER BY u.seq DESC LIMIT 1) AS question
+    FROM messages a
+    JOIN conversations c    ON c.id = a.conversation_id
+    JOIN knowledge_bases kb ON kb.id = c.kb_id
+    WHERE a.role = 'assistant' AND a.content LIKE ? AND a.created_at >= ? ${kbFilter}
+  `).all(`%${NOT_FOUND_MARKER}%`, since, ...(kbId ? [kbId] : [])) as Omit<KnowledgeGapRow, 'source'>[]
+
+  const feedbackRows = db.prepare(`
+    SELECT c.kb_id, kb.name AS kb_name, f.question, COALESCE(f.updated_at, f.created_at) AS created_at
+    FROM response_feedback f
+    JOIN conversations c    ON c.id = f.conversation_id
+    JOIN knowledge_bases kb ON kb.id = c.kb_id
+    WHERE f.rating = -1 AND f.reason = 'not_found' AND f.question IS NOT NULL
+      AND COALESCE(f.updated_at, f.created_at) >= ? ${kbFilter}
+  `).all(since, ...(kbId ? [kbId] : [])) as Omit<KnowledgeGapRow, 'source'>[]
+
+  return [
+    ...aiRows.filter(r => r.question).map(r => ({ ...r, source: 'ai_not_found' as const })),
+    ...feedbackRows.map(r => ({ ...r, source: 'feedback_not_found' as const })),
+  ]
+}
+
 export function getAllFeedbackStats(): KbFeedbackStats[] {
   return db.prepare(`
     SELECT
