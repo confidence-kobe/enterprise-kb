@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Knowledge gap report in the admin 反馈 tab: questions the assistant answered with "未找到相关内容", or that users marked 👎 "没找到相关资料", grouped by question and knowledge base and ranked by how often they were asked (last 7/30/90 days). Admin API: `GET /api/admin/gaps?days=&kbId=`.
+
+### Changed
+
+- Upgraded pdf-parse to 2.x (current pdf.js); table cells in PDFs are now extracted with spacing.
+- Upgraded tsx, TypeScript 6, better-sqlite3 12 and openai 6.
+
 ## [1.1.0] - 2026-10-02
 
 ### Security

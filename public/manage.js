@@ -1141,13 +1141,47 @@ function initFeedbackTab() {
     filter.insertAdjacentHTML('beforeend', `<option value="${value}">${escHtml(label)}</option>`)
   }
   filter.addEventListener('change', () => loadNegativeFeedback(false))
+  document.getElementById('gap-days')?.addEventListener('change', () => loadKnowledgeGaps())
   document.getElementById('feedback-refresh-btn').addEventListener('click', () => loadFeedbackTab())
   document.getElementById('feedback-load-more').addEventListener('click', () => loadNegativeFeedback(true))
 }
 
 function loadFeedbackTab() {
   loadFeedbackSummary()
+  loadKnowledgeGaps()
   loadNegativeFeedback(false)
+}
+
+async function loadKnowledgeGaps() {
+  const listEl = document.getElementById('gap-list')
+  if (!listEl) return
+  const days = document.getElementById('gap-days')?.value || '30'
+  listEl.innerHTML = '<div class="feedback-empty">加载中…</div>'
+  try {
+    const res = await fetch(`/api/admin/gaps?days=${encodeURIComponent(days)}`, { headers: auth() })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || '加载失败')
+    if (!data.items.length) {
+      listEl.innerHTML = `<div class="feedback-empty">近 ${data.days} 天没有发现知识空白。</div>`
+      return
+    }
+    listEl.innerHTML = data.items.map(gap => {
+      const tags = [
+        gap.sources.ai_not_found ? `<span class="gap-tag">AI 未找到 ×${gap.sources.ai_not_found}</span>` : '',
+        gap.sources.feedback_not_found ? `<span class="gap-tag gap-tag-user">用户反馈 ×${gap.sources.feedback_not_found}</span>` : '',
+      ].join('')
+      return `
+        <div class="gap-row">
+          <span class="gap-count" title="被问到的次数">${gap.count}</span>
+          <div class="gap-main">
+            <div class="gap-question">${escHtml(gap.question)}</div>
+            <div class="gap-meta">${escHtml(gap.kb_name)} · 最近 ${fmtDateTime(gap.last_at)} ${tags}</div>
+          </div>
+        </div>`
+    }).join('')
+  } catch (e) {
+    listEl.innerHTML = `<div class="feedback-empty" style="color:var(--red)">加载失败：${escHtml(e.message)}</div>`
+  }
 }
 
 async function loadFeedbackSummary() {

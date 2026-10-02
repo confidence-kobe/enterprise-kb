@@ -10,7 +10,7 @@
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=33">
+  <link rel="stylesheet" href="style.css?v=34">
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
 </head>
@@ -228,6 +228,20 @@
       <div class="card feedback-reasons-card">
         <div class="feedback-card-title">差评原因分布</div>
         <div id="feedback-reason-bars"></div>
+      </div>
+      <div class="card feedback-reasons-card">
+        <div class="gap-card-head">
+          <div>
+            <div class="feedback-card-title">知识空白</div>
+            <div class="gap-card-sub">AI 回答"未找到相关内容"或用户反馈"没找到相关资料"的问题。把答案整理成文档上传到对应知识库即可补上。</div>
+          </div>
+          <select class="input input-sm" id="gap-days" aria-label="时间范围">
+            <option value="7">近 7 天</option>
+            <option value="30" selected>近 30 天</option>
+            <option value="90">近 90 天</option>
+          </select>
+        </div>
+        <div id="gap-list"></div>
       </div>
       <div class="feedback-card-title feedback-list-title">差评明细</div>
       <div id="feedback-list"></div>
