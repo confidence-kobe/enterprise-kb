@@ -38,18 +38,10 @@ import { buildSystemPrompt } from './prompt.js'
 import type { QAEvent } from './tools.js'
 import { buildTrustedHistory } from './conversationHistory.js'
 import { configureProxyFromEnv } from './proxy.js'
+import { extractPdfText } from './pdfText.js'
 
 const activeProxy = configureProxyFromEnv()
 if (activeProxy) console.log(`[proxy] 出站请求使用代理：${activeProxy}`)
-
-// pdf-parse 用 CommonJS require，动态导入兼容 ESM
-async function extractPdfText(filePath: string): Promise<string> {
-  const buf = fs.readFileSync(filePath)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pdfParse: any = (await import('pdf-parse')).default
-  const data = await pdfParse(buf)
-  return data.text as string
-}
 
 async function extractDocxText(filePath: string): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
