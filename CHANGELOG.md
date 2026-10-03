@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Knowledge gap report in the admin 反馈 tab: questions the assistant answered with "未找到相关内容", or that users marked 👎 "没找到相关资料", grouped by question and knowledge base and ranked by how often they were asked (last 7/30/90 days). Admin API: `GET /api/admin/gaps?days=&kbId=`.
+- Browser end-to-end tests (Playwright, `npm run test:e2e`) for login, Q&A with 👎 reasons, the admin feedback tab, read-only public knowledge bases and phone layout. They run in CI as a separate job.
 
 ### Changed
 
