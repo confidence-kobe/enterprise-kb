@@ -9,6 +9,7 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "check": "npm run build && npm run test && npm audit --omit=dev --audit-level=moderate",
     "codex:smoke": "node scripts/codex-smoke.mjs",
     "smoke:full": "node scripts/full-smoke.mjs",
@@ -37,6 +38,7 @@
     "undici": "^7.30.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^7.6.12",
     "@types/cors": "^2.8.17",

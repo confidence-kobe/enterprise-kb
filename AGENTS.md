@@ -140,6 +140,12 @@ Docker deployment files are `Dockerfile`, `.dockerignore`, and `docker-compose.y
 docker build -t enterprise-kb:local .
 ```
 
+For frontend changes, also run the browser tests (after `npm run build`):
+
+```bash
+npm run test:e2e
+```
+
 For frontend or route changes, start the app and verify in a browser:
 
 ```bash

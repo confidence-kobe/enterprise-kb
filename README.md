@@ -55,6 +55,7 @@ npm run check
 npm run codex:smoke
 npm run smoke:full
 npm run backup
+npm run test:e2e
 npm start
 ```
 
@@ -64,6 +65,7 @@ npm start
 - `npm run codex:smoke`: check the running app health endpoints.
 - `npm run smoke:full`: exercise auth, users, KBs, documents, permissions, conversations, and a real model answer, then remove its temporary data.
 - `npm run backup` / `npm run backup:list` / `npm run restore -- <backup> --yes`: back up or restore the database and documents. See `DEPLOYMENT.md`.
+- `npm run test:e2e`: build first, then run the Playwright browser tests in `e2e/`. They start a mock model and the server on a throwaway database. First run: `npx playwright install chromium`.
 - `npm start`: run `dist/server.js`.
 
 For smoke checks against a non-default port:
