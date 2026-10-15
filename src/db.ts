@@ -263,7 +263,7 @@ export function initDb(dbPath: string): void {
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE name='doc_fts'").get() as { sql: string } | undefined
     if (row && !row.sql.includes('trigram')) {
-      db.exec('DROP TABLE IF EXISTS doc_fts')
+      db.exec('DROP TABLE IF EXISTS doc_fts; DROP TABLE IF EXISTS doc_chunks')
       console.log('[DB] FTS5 tokenizer 已升级为 trigram，后台将重建全文索引')
     }
   } catch { /* ignore — table may not exist yet on first run */ }
@@ -282,6 +282,16 @@ export function initDb(dbPath: string): void {
       tokenize      = 'trigram'
     );
 
+    -- doc_fts 的附加列不能建索引；按文档/知识库查找分块走这张表（id 与 doc_fts.rowid 一致）
+    CREATE TABLE IF NOT EXISTS doc_chunks (
+      id         INTEGER PRIMARY KEY,
+      doc_id     INTEGER NOT NULL,
+      kb_id      INTEGER NOT NULL,
+      chunk_line INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_doc_chunks_doc ON doc_chunks(doc_id);
+    CREATE INDEX IF NOT EXISTS idx_doc_chunks_kb  ON doc_chunks(kb_id);
+
     CREATE TABLE IF NOT EXISTS doc_chunk_vectors (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       doc_id        INTEGER NOT NULL,
@@ -294,6 +304,25 @@ export function initDb(dbPath: string): void {
     CREATE INDEX IF NOT EXISTS idx_chunk_vectors_kb  ON doc_chunk_vectors(kb_id);
     CREATE INDEX IF NOT EXISTS idx_chunk_vectors_doc ON doc_chunk_vectors(doc_id);
   `)
+
+  migrateDocChunks()
+}
+
+/** 旧库升级：为已有全文索引补建 doc_chunks，并清理已删除文档（如删除知识库后）遗留的索引 */
+function migrateDocChunks(): void {
+  const chunks = (db.prepare('SELECT COUNT(*) AS n FROM doc_chunks').get() as { n: number }).n
+  const fts = (db.prepare('SELECT COUNT(*) AS n FROM doc_fts').get() as { n: number }).n
+  if (chunks === fts) return
+  db.transaction(() => {
+    db.exec(`
+      DELETE FROM doc_chunks;
+      DELETE FROM doc_fts WHERE CAST(doc_id AS INTEGER) NOT IN (SELECT id FROM documents);
+      INSERT INTO doc_chunks(id, doc_id, kb_id, chunk_line)
+        SELECT rowid, doc_id, kb_id, chunk_line FROM doc_fts;
+      DELETE FROM doc_chunk_vectors WHERE doc_id NOT IN (SELECT id FROM documents);
+    `)
+  })()
+  console.log(`[DB] 已为 ${fts} 个全文索引分块建立文档映射`)
 }
 
 /** 确保 admin 账户存在（首次启动时创建） */
@@ -405,7 +434,13 @@ export function updateKbSystemPrompt(id: number, systemPrompt: string | null): v
 }
 
 export function deleteKb(id: number): void {
-  db.prepare('DELETE FROM knowledge_bases WHERE id = ?').run(id)
+  db.transaction(() => {
+    // 全文索引与向量不受外键级联约束，需手动清理
+    db.prepare('DELETE FROM doc_fts WHERE rowid IN (SELECT id FROM doc_chunks WHERE kb_id = ?)').run(id)
+    db.prepare('DELETE FROM doc_chunks WHERE kb_id = ?').run(id)
+    db.prepare('DELETE FROM doc_chunk_vectors WHERE kb_id = ?').run(id)
+    db.prepare('DELETE FROM knowledge_bases WHERE id = ?').run(id)
+  })()
 }
 
 export function canUserAccessKb(userId: number, kbId: number): boolean {
@@ -531,7 +566,7 @@ export function listDocsWithCounts(kbId: number, limit: number, offset: number):
   const docs = db.prepare(
     'SELECT * FROM documents WHERE kb_id = ? ORDER BY uploaded_at DESC LIMIT ? OFFSET ?',
   ).all(kbId, limit, offset) as Document[]
-  const ftsCount = db.prepare('SELECT COUNT(*) as n FROM doc_fts WHERE doc_id = ?')
+  const ftsCount = db.prepare('SELECT COUNT(*) as n FROM doc_chunks WHERE doc_id = ?')
   const vecCount = db.prepare('SELECT COUNT(*) as n FROM doc_chunk_vectors WHERE doc_id = ?')
   for (const doc of docs) {
     doc.chunk_count = (ftsCount.get(doc.id) as { n: number }).n
@@ -796,6 +831,12 @@ export function getKbStats(kbId: number): KbStats {
 
 export const DOC_INDEX_VERSION = 4
 
+/** 按 rowid 删除文档的全文索引分块（doc_fts 的 doc_id 列无索引，直接按列删除需全表扫描） */
+function deleteDocChunks(docId: number): void {
+  db.prepare('DELETE FROM doc_fts WHERE rowid IN (SELECT id FROM doc_chunks WHERE doc_id = ?)').run(docId)
+  db.prepare('DELETE FROM doc_chunks WHERE doc_id = ?').run(docId)
+}
+
 export function indexDocContent(
   docId: number,
   kbId: number,
@@ -807,12 +848,14 @@ export function indexDocContent(
   const chunks = chunkDocument(text)
 
   db.transaction(() => {
-    db.prepare('DELETE FROM doc_fts WHERE doc_id = ?').run(docId)
-    const ins = db.prepare(
-      'INSERT INTO doc_fts(content, original_name, file_path, kb_id, doc_id, chunk_line) VALUES (?,?,?,?,?,?)',
+    deleteDocChunks(docId)
+    const insChunk = db.prepare('INSERT INTO doc_chunks(doc_id, kb_id, chunk_line) VALUES (?,?,?)')
+    const insFts = db.prepare(
+      'INSERT INTO doc_fts(rowid, content, original_name, file_path, kb_id, doc_id, chunk_line) VALUES (?,?,?,?,?,?,?)',
     )
     for (const chunk of chunks) {
-      ins.run(chunk.content, originalName, filePath, kbId, docId, chunk.startLine)
+      const { lastInsertRowid } = insChunk.run(docId, kbId, chunk.startLine)
+      insFts.run(lastInsertRowid, chunk.content, originalName, filePath, kbId, docId, chunk.startLine)
     }
     db.prepare(`
       UPDATE documents
@@ -935,10 +978,14 @@ export function searchDocContent(
   if (terms.length > 1) runFts(ftsQuery(terms, 'OR'), 'relaxed')
 
   const conditions = terms.map(() => '(content LIKE ? OR original_name LIKE ?)').join(' OR ')
+  // 3 字及以上的词可走 trigram 索引；含 2 字词时 LIKE 只能逐行扫描，先按知识库缩小范围
+  const kbFilter = terms.some(term => [...term].length < 3)
+    ? 'rowid IN (SELECT id FROM doc_chunks WHERE kb_id = ?)'
+    : 'kb_id = ?'
   const substringRows = db.prepare(`
     SELECT doc_id, original_name, file_path, content, chunk_line
     FROM doc_fts
-    WHERE kb_id = ? AND (${conditions})
+    WHERE ${kbFilter} AND (${conditions})
     LIMIT ?
   `).all(
     kbId,
@@ -958,7 +1005,8 @@ export function searchDocContent(
       if (!candidates.has(key)) {
         try {
           const row = db.prepare(
-            'SELECT content FROM doc_fts WHERE doc_id = ? AND chunk_line = ? LIMIT 1',
+            `SELECT content FROM doc_fts WHERE rowid IN (
+               SELECT id FROM doc_chunks WHERE doc_id = ? AND chunk_line = ?) LIMIT 1`,
           ).get(vr.doc_id, vr.chunk_line) as { content: string } | undefined
           if (row) {
             candidates.set(key, {
@@ -999,8 +1047,10 @@ export function searchDocContent(
 }
 
 export function removeDocFromIndex(docId: number): void {
-  db.prepare('DELETE FROM doc_fts WHERE doc_id = ?').run(docId)
-  db.prepare('DELETE FROM doc_chunk_vectors WHERE doc_id = ?').run(docId)
+  db.transaction(() => {
+    deleteDocChunks(docId)
+    db.prepare('DELETE FROM doc_chunk_vectors WHERE doc_id = ?').run(docId)
+  })()
 }
 
 // ── 向量存储与检索 ─────────────────────────────────────
@@ -1131,7 +1181,7 @@ export function isDocIndexed(docId: number): boolean {
   const doc = getDocById(docId)
   return doc?.index_version === DOC_INDEX_VERSION
     && doc.index_status === 'ready'
-    && !!db.prepare('SELECT 1 FROM doc_fts WHERE doc_id = ? LIMIT 1').get(docId)
+    && !!db.prepare('SELECT 1 FROM doc_chunks WHERE doc_id = ? LIMIT 1').get(docId)
 }
 
 export interface ConvSearchResult {
