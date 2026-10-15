@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- Upgraded proxy-addr to 2.0.8 (IP spoofing via IPv4-mapped IPv6 when `TRUST_PROXY` names a subnet, GHSA-jqcg-44mw-7w3h).
+- Removed sprintf-js (GHSA-hp3w-g68c-fv3c, no patched release) by pinning mammoth's `argparse` to 2.x. It was only reachable from mammoth's own command-line tool, which this app never runs; document parsing is unaffected.
+
 ### Added
 
 - Knowledge gap report in the admin 反馈 tab: questions the assistant answered with "未找到相关内容", or that users marked 👎 "没找到相关资料", grouped by question and knowledge base and ranked by how often they were asked (last 7/30/90 days). Admin API: `GET /api/admin/gaps?days=&kbId=`.
@@ -13,6 +18,7 @@ All notable changes to this project will be documented in this file.
 
 - Upgraded pdf-parse to 2.x (current pdf.js); table cells in PDFs are now extracted with spacing.
 - Upgraded tsx, TypeScript 6, better-sqlite3 12 and openai 6.
+- Upgraded officeparser, mammoth, p5 2 and bcryptjs 3. Existing password hashes keep working.
 
 ## [1.1.0] - 2026-10-02
 
