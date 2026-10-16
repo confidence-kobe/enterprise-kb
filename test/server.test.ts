@@ -353,6 +353,30 @@ describe('knowledge base access control', () => {
       })
   })
 
+  it('extracts and indexes an uploaded PDF in the background', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    const kb = await request(app).post('/api/kbs').set(auth).send({ name: 'PDF Policies' }).expect(201)
+    const kbId = kb.body.id as number
+
+    await request(app)
+      .post(`/api/kbs/${kbId}/docs`)
+      .set(auth)
+      .attach('files', fs.readFileSync(path.join(__dirname, 'fixtures', 'zh-policy.pdf')), 'policy.pdf')
+      .expect(201)
+
+    let status = ''
+    for (let i = 0; i < 100 && status !== 'ready' && status !== 'error'; i++) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+      const docs = await request(app).get(`/api/kbs/${kbId}/docs`).set(auth).expect(200)
+      status = docs.body[0].index_status
+    }
+    expect(status).toBe('ready')
+
+    const hits = await request(app).get(`/api/kbs/${kbId}/search/docs`).query({ q: '带薪年假' }).set(auth).expect(200)
+    expect(hits.body[0]).toMatchObject({ original_name: 'policy.pdf' })
+  })
+
   it('removes docs from storage and search indexes when deleted', async () => {
     const admin = await login('admin', 'Admin@123')
 

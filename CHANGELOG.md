@@ -21,6 +21,8 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - Faster search index bookkeeping for large knowledge bases. With 2,000 documents (11 M characters), the document list page went from about 1 s to under 1 ms, indexing went from 11.7 ms to about 2 ms per document, and deleting a document's index went from 19 ms to under 1 ms. Searches that use 2-character terms only scan the selected knowledge base. Existing databases are migrated automatically on startup. Benchmark: `npm run bench:search`.
+- Large uploads no longer freeze the server while they are indexed. A 50 MB text file used to block every other request (including streaming answers) for about 4 s. Chunks are now written in batches that yield between writes, and the longest pause is about 0.2 s. If the document is deleted or edited while indexing is still running, the remaining batches are dropped.
+- PDF, Word, Excel and PowerPoint text extraction now runs in a separate worker thread. Before this change, a 2,000-page PDF froze the server for about 6.5 s; now the longest stall is about 13 ms. Files that take longer than `EXTRACT_TIMEOUT_SECONDS` (default 120) are marked as failed instead of hanging the index queue.
 - Upgraded pdf-parse to 2.x (current pdf.js); table cells in PDFs are now extracted with spacing.
 - Upgraded tsx, TypeScript 6, better-sqlite3 12 and openai 6.
 - Upgraded officeparser, mammoth, p5 2 and bcryptjs 3. Existing password hashes keep working.

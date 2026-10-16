@@ -20,7 +20,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          listConversations, createConversation, updateConversationTitle, touchConversation,
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
          countConversations, pinConversation, getKbStats, searchConversations,
-         indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
+         indexDocContent, indexDocContentInBatches, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
          updateDocMeta, updateDocSummary, updateDocIndexStatus, createAuditEvent, listAuditEvents,
          updateKbSystemPrompt, storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs,
          upsertFeedback, getFeedbackStats, getAllFeedbackStats,
@@ -38,48 +38,12 @@ import { buildSystemPrompt } from './prompt.js'
 import type { QAEvent } from './tools.js'
 import { buildTrustedHistory } from './conversationHistory.js'
 import { configureProxyFromEnv } from './proxy.js'
-import { extractPdfText } from './pdfText.js'
+import { BINARY_DOCUMENT_EXTS } from './documentText.js'
+import { extractDocumentTextInWorker } from './extractInWorker.js'
 import { groupKnowledgeGaps } from './knowledgeGaps.js'
 
 const activeProxy = configureProxyFromEnv()
 if (activeProxy) console.log(`[proxy] 出站请求使用代理：${activeProxy}`)
-
-async function extractDocxText(filePath: string): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mammoth: any = (await import('mammoth')).default
-  const result = await mammoth.extractRawText({ path: filePath })
-  return result.value as string
-}
-
-async function extractXlsxText(filePath: string): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ExcelJS: any = (await import('exceljs')).default
-  const workbook = new ExcelJS.Workbook()
-  await workbook.xlsx.readFile(filePath)
-  const lines: string[] = []
-  workbook.eachSheet((sheet: any) => {
-    lines.push(`[工作表: ${sheet.name}]`)
-    sheet.eachRow((row: any) => {
-      const cells: string[] = []
-      row.eachCell({ includeEmpty: false }, (cell: any) => {
-        const v = cell.value
-        if (v === null || v === undefined) return
-        if (typeof v === 'object' && 'text' in v) cells.push(String(v.text))
-        else if (typeof v === 'object' && 'result' in v) cells.push(String(v.result ?? ''))
-        else if (typeof v === 'object' && v instanceof Date) cells.push(v.toISOString().slice(0, 10))
-        else cells.push(String(v))
-      })
-      if (cells.length) lines.push(cells.join('\t'))
-    })
-  })
-  return lines.join('\n')
-}
-
-async function extractPptxText(filePath: string): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const officeParser: any = (await import('officeparser')).default
-  return await officeParser.parseOfficeAsync(filePath) as string
-}
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
 
@@ -188,6 +152,8 @@ const SYNC_SKIP_DIRS = new Set([
 ])
 const SYNC_MAX_FILES = parsePositiveInt(envValue('SYNC_MAX_FILES'), 1000, 'SYNC_MAX_FILES')
 const SYNC_MAX_TOTAL_BYTES = parsePositiveInt(envValue('SYNC_MAX_TOTAL_MB'), 500, 'SYNC_MAX_TOTAL_MB') * 1024 * 1024
+/** 单个 PDF / Office 文件的解析超时，超时的文档标记为索引失败 */
+const EXTRACT_TIMEOUT_MS = parsePositiveInt(envValue('EXTRACT_TIMEOUT_SECONDS'), 120, 'EXTRACT_TIMEOUT_SECONDS') * 1000
 const SYNC_MAX_FILE_BYTES = 50 * 1024 * 1024
 
 interface SyncFile {
@@ -445,23 +411,8 @@ async function extractIndexableText(job: DocIndexJob): Promise<{ text: string; i
   const ext = path.extname(job.originalName).toLowerCase()
   const txtPath = job.filePath.replace(/\.[^.]+$/i, '.txt')
 
-  if (ext === '.pdf') {
-    const text = await extractPdfText(job.filePath)
-    fs.writeFileSync(txtPath, text, 'utf-8')
-    return { text, indexPath: txtPath }
-  }
-  if (ext === '.docx' || ext === '.doc') {
-    const text = await extractDocxText(job.filePath)
-    fs.writeFileSync(txtPath, text, 'utf-8')
-    return { text, indexPath: txtPath }
-  }
-  if (ext === '.xlsx' || ext === '.xls') {
-    const text = await extractXlsxText(job.filePath)
-    fs.writeFileSync(txtPath, text, 'utf-8')
-    return { text, indexPath: txtPath }
-  }
-  if (ext === '.pptx' || ext === '.ppt') {
-    const text = await extractPptxText(job.filePath)
+  if (BINARY_DOCUMENT_EXTS.has(ext)) {
+    const text = await extractDocumentTextInWorker(job.filePath, ext, { timeoutMs: EXTRACT_TIMEOUT_MS })
     fs.writeFileSync(txtPath, text, 'utf-8')
     return { text, indexPath: txtPath }
   }
@@ -475,7 +426,7 @@ async function processDocIndexJob(job: DocIndexJob): Promise<void> {
   try {
     const { text, indexPath } = await extractIndexableText(job)
     if (!text.trim()) throw new Error('文档没有可索引文本')
-    indexDocContent(job.docId, job.kbId, job.originalName, indexPath, text)
+    await indexDocContentInBatches(job.docId, job.kbId, job.originalName, indexPath, text)
 
     if (isEmbeddingEnabled()) {
       void generateAndStoreEmbeddings(job.docId, job.kbId, job.originalName, indexPath, text)

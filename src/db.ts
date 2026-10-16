@@ -7,7 +7,7 @@ import Database from 'better-sqlite3'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import bcrypt from 'bcryptjs'
-import { chunkDocument } from './documentChunker.js'
+import { chunkDocument, type DocumentChunk } from './documentChunker.js'
 
 // ── 类型定义 ──────────────────────────────────────────
 
@@ -837,6 +837,35 @@ function deleteDocChunks(docId: number): void {
   db.prepare('DELETE FROM doc_chunks WHERE doc_id = ?').run(docId)
 }
 
+function insertDocChunks(
+  docId: number,
+  kbId: number,
+  originalName: string,
+  filePath: string,
+  chunks: DocumentChunk[],
+): void {
+  const insChunk = db.prepare('INSERT INTO doc_chunks(doc_id, kb_id, chunk_line) VALUES (?,?,?)')
+  const insFts = db.prepare(
+    'INSERT INTO doc_fts(rowid, content, original_name, file_path, kb_id, doc_id, chunk_line) VALUES (?,?,?,?,?,?,?)',
+  )
+  for (const chunk of chunks) {
+    const { lastInsertRowid } = insChunk.run(docId, kbId, chunk.startLine)
+    insFts.run(lastInsertRowid, chunk.content, originalName, filePath, kbId, docId, chunk.startLine)
+  }
+}
+
+function markDocIndexed(docId: number): void {
+  db.prepare(`
+    UPDATE documents
+    SET index_version = ?,
+        index_status = 'ready',
+        index_error = NULL,
+        indexed_at = strftime('%s','now')
+    WHERE id = ?
+  `).run(DOC_INDEX_VERSION, docId)
+}
+
+/** 一次性事务写入全部分块（适合手动编辑等较小的文本） */
 export function indexDocContent(
   docId: number,
   kbId: number,
@@ -844,28 +873,49 @@ export function indexDocContent(
   filePath: string,
   text: string,
 ): void {
-  // 收集所有块，一次性事务写入
   const chunks = chunkDocument(text)
-
   db.transaction(() => {
     deleteDocChunks(docId)
-    const insChunk = db.prepare('INSERT INTO doc_chunks(doc_id, kb_id, chunk_line) VALUES (?,?,?)')
-    const insFts = db.prepare(
-      'INSERT INTO doc_fts(rowid, content, original_name, file_path, kb_id, doc_id, chunk_line) VALUES (?,?,?,?,?,?,?)',
-    )
-    for (const chunk of chunks) {
-      const { lastInsertRowid } = insChunk.run(docId, kbId, chunk.startLine)
-      insFts.run(lastInsertRowid, chunk.content, originalName, filePath, kbId, docId, chunk.startLine)
-    }
-    db.prepare(`
-      UPDATE documents
-      SET index_version = ?,
-          index_status = 'ready',
-          index_error = NULL,
-          indexed_at = strftime('%s','now')
-      WHERE id = ?
-    `).run(DOC_INDEX_VERSION, docId)
+    insertDocChunks(docId, kbId, originalName, filePath, chunks)
+    markDocIndexed(docId)
   })()
+}
+
+/**
+ * 分批写入分块，批次之间让出事件循环，避免大文件（几十 MB）索引时整个服务卡住数秒。
+ * 写入过程中文档处于 processing 状态，已写入的分块可能先被检索到。
+ */
+export async function indexDocContentInBatches(
+  docId: number,
+  kbId: number,
+  originalName: string,
+  filePath: string,
+  text: string,
+  batchSize = 500,
+): Promise<void> {
+  const chunks = chunkDocument(text)
+  if (chunks.length <= batchSize) {
+    indexDocContent(docId, kbId, originalName, filePath, text)
+    return
+  }
+  db.transaction(() => {
+    deleteDocChunks(docId)
+    db.prepare("UPDATE documents SET index_status = 'processing' WHERE id = ?").run(docId)
+  })()
+  const statusOf = db.prepare('SELECT index_status FROM documents WHERE id = ?')
+  for (let i = 0; i < chunks.length; i += batchSize) {
+    await new Promise(resolve => setImmediate(resolve))
+    // 等待期间文档可能被删除（清理已写入的分块），或被手动编辑重新索引（以编辑结果为准）
+    const stillIndexing = db.transaction(() => {
+      const row = statusOf.get(docId) as { index_status: string } | undefined
+      if (!row) { deleteDocChunks(docId); return false }
+      if (row.index_status !== 'processing') return false
+      insertDocChunks(docId, kbId, originalName, filePath, chunks.slice(i, i + batchSize))
+      return true
+    })()
+    if (!stillIndexing) return
+  }
+  markDocIndexed(docId)
 }
 
 export interface DocSearchResult {
