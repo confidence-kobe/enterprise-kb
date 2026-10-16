@@ -4,8 +4,8 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  closeDb, createDoc, createKb, createUser, deleteKb, initDb, indexDocContent,
-  isDocIndexed, listDocsWithCounts, removeDocFromIndex, searchDocContent,
+  closeDb, createDoc, createKb, createUser, deleteDoc, deleteKb, initDb, indexDocContent,
+  indexDocContentInBatches, isDocIndexed, listDocsWithCounts, removeDocFromIndex, searchDocContent,
 } from '../src/db.ts'
 
 let root: string
@@ -112,5 +112,50 @@ describe('search index bookkeeping', () => {
     expect(listDocsWithCounts(hr.id, 10, 0)[0].chunk_count).toBe(1)
     removeDocFromIndex(doc.id)
     expect(ftsRows()).toBe(0)
+  })
+
+  describe('batched indexing for large documents', () => {
+    const sections = Array.from({ length: 6 }, (_, i) => `## 第${i + 1}节\n\n年假相关规定第 ${i + 1} 条，需提前申请并由主管审批。`).join('\n\n')
+
+    it('indexes every chunk and lets other work run between batches', async () => {
+      const { kb } = setup()
+      const hr = kb('hr')
+      const doc = createDoc({ kbId: hr.id, filename: 'big.md', originalName: 'big.md', size: sections.length })
+
+      let ticks = 0
+      const timer = setInterval(() => { ticks++ }, 0)
+      await indexDocContentInBatches(doc.id, hr.id, 'big.md', 'big.md', sections, 2)
+      clearInterval(timer)
+
+      expect(ticks).toBeGreaterThan(0)
+      expect(isDocIndexed(doc.id)).toBe(true)
+      expect(listDocsWithCounts(hr.id, 10, 0)[0].chunk_count).toBe(6)
+      expect(searchDocContent(hr.id, '第6节')).toHaveLength(1)
+    })
+
+    it('stops and cleans up when the document is deleted mid-way', async () => {
+      const { kb } = setup()
+      const hr = kb('hr')
+      const doc = createDoc({ kbId: hr.id, filename: 'big.md', originalName: 'big.md', size: sections.length })
+
+      const indexing = indexDocContentInBatches(doc.id, hr.id, 'big.md', 'big.md', sections, 2)
+      deleteDoc(doc.id)
+      await indexing
+
+      expect(ftsRows()).toBe(0)
+    })
+
+    it('keeps a manual edit that lands while a large reindex is running', async () => {
+      const { kb } = setup()
+      const hr = kb('hr')
+      const doc = createDoc({ kbId: hr.id, filename: 'big.md', originalName: 'big.md', size: sections.length })
+
+      const indexing = indexDocContentInBatches(doc.id, hr.id, 'big.md', 'big.md', sections, 2)
+      indexDocContent(doc.id, hr.id, 'big.md', 'big.md', '年假调整为每年 15 天，需提前申请。')
+      await indexing
+
+      expect(listDocsWithCounts(hr.id, 10, 0)[0].chunk_count).toBe(1)
+      expect(searchDocContent(hr.id, '年假')[0].snippet).toContain('15 天')
+    })
   })
 })

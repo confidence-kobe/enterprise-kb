@@ -20,7 +20,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          listConversations, createConversation, updateConversationTitle, touchConversation,
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
          countConversations, pinConversation, getKbStats, searchConversations,
-         indexDocContent, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
+         indexDocContent, indexDocContentInBatches, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
          updateDocMeta, updateDocSummary, updateDocIndexStatus, createAuditEvent, listAuditEvents,
          updateKbSystemPrompt, storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs,
          upsertFeedback, getFeedbackStats, getAllFeedbackStats,
@@ -475,7 +475,7 @@ async function processDocIndexJob(job: DocIndexJob): Promise<void> {
   try {
     const { text, indexPath } = await extractIndexableText(job)
     if (!text.trim()) throw new Error('文档没有可索引文本')
-    indexDocContent(job.docId, job.kbId, job.originalName, indexPath, text)
+    await indexDocContentInBatches(job.docId, job.kbId, job.originalName, indexPath, text)
 
     if (isEmbeddingEnabled()) {
       void generateAndStoreEmbeddings(job.docId, job.kbId, job.originalName, indexPath, text)
