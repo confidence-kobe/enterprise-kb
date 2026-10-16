@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Deleting a knowledge base now also deletes its search index and vectors. Leftover entries from earlier deletions are cleaned up on startup.
+
 ### Security
 
 - Upgraded proxy-addr to 2.0.8 (IP spoofing via IPv4-mapped IPv6 when `TRUST_PROXY` names a subnet, GHSA-jqcg-44mw-7w3h).
@@ -16,6 +20,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Faster search index bookkeeping for large knowledge bases. With 2,000 documents (11 M characters), the document list page went from about 1 s to under 1 ms, indexing went from 11.7 ms to about 2 ms per document, and deleting a document's index went from 19 ms to under 1 ms. Searches that use 2-character terms only scan the selected knowledge base. Existing databases are migrated automatically on startup. Benchmark: `npm run bench:search`.
 - Upgraded pdf-parse to 2.x (current pdf.js); table cells in PDFs are now extracted with spacing.
 - Upgraded tsx, TypeScript 6, better-sqlite3 12 and openai 6.
 - Upgraded officeparser, mammoth, p5 2 and bcryptjs 3. Existing password hashes keep working.
