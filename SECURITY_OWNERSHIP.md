@@ -46,6 +46,7 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 - Production startup rejects default `ADMIN_PASSWORD`.
 - Upload size is limited to 50 MB.
 - Upload extensions are allowlisted.
+- PDF and Office files are parsed in a worker thread with a timeout (`EXTRACT_TIMEOUT_SECONDS`, default 120) and a heap limit. A malformed or hostile file can fail its own indexing but cannot stall or crash the server process.
 - SQL calls use prepared statements.
 - LLM tools (Read/Grep/Glob/KBStats/SearchDocs) are limited to a `ToolScope`: one KB for per-KB Q&A, and only the user's accessible KBs (`listKbsForUser`) for cross-KB Q&A. The boundary is enforced in `assertParamsInScope`, because claude-tools-kit's `plan` mode does not check `allowedDirectories`.
 - Security response headers are set in Express.
