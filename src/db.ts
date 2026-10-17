@@ -313,16 +313,17 @@ function migrateDocChunks(): void {
   const chunks = (db.prepare('SELECT COUNT(*) AS n FROM doc_chunks').get() as { n: number }).n
   const fts = (db.prepare('SELECT COUNT(*) AS n FROM doc_fts').get() as { n: number }).n
   if (chunks === fts) return
-  db.transaction(() => {
+  const orphans = db.transaction(() => {
+    db.exec('DELETE FROM doc_chunks')
+    const removed = db.prepare('DELETE FROM doc_fts WHERE CAST(doc_id AS INTEGER) NOT IN (SELECT id FROM documents)').run().changes
     db.exec(`
-      DELETE FROM doc_chunks;
-      DELETE FROM doc_fts WHERE CAST(doc_id AS INTEGER) NOT IN (SELECT id FROM documents);
       INSERT INTO doc_chunks(id, doc_id, kb_id, chunk_line)
         SELECT rowid, doc_id, kb_id, chunk_line FROM doc_fts;
       DELETE FROM doc_chunk_vectors WHERE doc_id NOT IN (SELECT id FROM documents);
     `)
+    return removed
   })()
-  console.log(`[DB] 已为 ${fts} 个全文索引分块建立文档映射`)
+  console.log(`[DB] 已为 ${fts - orphans} 个全文索引分块建立文档映射${orphans ? `，清理 ${orphans} 个已删除文档的残留分块` : ''}`)
 }
 
 /** 确保 admin 账户存在（首次启动时创建） */
