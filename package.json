@@ -40,7 +40,7 @@
     "undici": "^7.30.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.1",
+    "@playwright/test": "^1.64.0",
     "@types/bcryptjs": "^3.0.0",
     "@types/better-sqlite3": "^7.6.12",
     "@types/cors": "^2.8.17",
