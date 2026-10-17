@@ -365,9 +365,10 @@ describe('knowledge base access control', () => {
       .attach('files', fs.readFileSync(path.join(__dirname, 'fixtures', 'zh-policy.pdf')), 'policy.pdf')
       .expect(201)
 
+    // 以 TypeScript 源码运行时，解析线程经 tsx 加载 pdf.js 需 2~3 秒（构建产物约 0.3 秒），CI 负载高时更慢
     let status = ''
-    for (let i = 0; i < 100 && status !== 'ready' && status !== 'error'; i++) {
-      await new Promise(resolve => setTimeout(resolve, 50))
+    for (let i = 0; i < 250 && status !== 'ready' && status !== 'error'; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100))
       const docs = await request(app).get(`/api/kbs/${kbId}/docs`).set(auth).expect(200)
       status = docs.body[0].index_status
     }
@@ -375,7 +376,7 @@ describe('knowledge base access control', () => {
 
     const hits = await request(app).get(`/api/kbs/${kbId}/search/docs`).query({ q: '带薪年假' }).set(auth).expect(200)
     expect(hits.body[0]).toMatchObject({ original_name: 'policy.pdf' })
-  })
+  }, 30_000)
 
   it('removes docs from storage and search indexes when deleted', async () => {
     const admin = await login('admin', 'Admin@123')
