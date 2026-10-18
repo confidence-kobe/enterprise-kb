@@ -3,6 +3,7 @@
  * 启动：npx tsx src/server.ts
  */
 
+import './nodeVersion.js'
 import 'dotenv/config'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'

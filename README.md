@@ -6,7 +6,7 @@ Document retrieval uses structure-aware chunks plus hybrid lexical ranking acros
 
 ## Stack
 
-- Node.js 20+ (22 LTS recommended; CI and Docker use 22)
+- Node.js 22.19+ (CI and Docker use Node 22)
 - TypeScript
 - Express 5
 - SQLite via `better-sqlite3`

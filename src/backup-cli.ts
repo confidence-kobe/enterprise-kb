@@ -8,6 +8,7 @@
  * 路径与服务端一致：DB_PATH、STORAGE_PATH、BACKUP_DIR（相对路径按项目根目录解析）。
  */
 
+import './nodeVersion.js'
 import 'dotenv/config'
 import * as fs   from 'node:fs'
 import * as path from 'node:path'

@@ -84,4 +84,15 @@ describe('LLMExecutor with an outbound proxy configured', () => {
     await expect(run('https://llm.example.test/v1')).rejects.toThrow()
     expect(proxyHits).toContain('CONNECT llm.example.test:443')
   })
+
+  // 向量化和文档摘要用的是 Node 内置 fetch，依赖 undici 把全局 dispatcher 同步给它
+  it('routes Node built-in fetch (embeddings, summaries) through the proxy too', async () => {
+    proxyHits = []
+    await expect(globalThis.fetch('https://embed.example.test/v1/embeddings')).rejects.toThrow()
+    expect(proxyHits).toContain('CONNECT embed.example.test:443')
+
+    const local = await globalThis.fetch(`http://127.0.0.1:${llmPort}/v1/models`)
+    expect(local.ok).toBe(true)
+    expect(proxyHits).toEqual(['CONNECT embed.example.test:443'])
+  })
 })
