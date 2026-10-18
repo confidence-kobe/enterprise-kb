@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-18
+
+**Upgrade notes:** requires Node.js 22.19 or newer (Docker users are unaffected). The database is migrated automatically on first start, so no manual steps are needed. Back up first with `npm run backup` as usual.
+
 ### Fixed
 
 - Deleting a knowledge base now also deletes its search index and vectors. Leftover entries from earlier deletions are cleaned up on startup.

@@ -21,7 +21,7 @@ npm run test:e2e
 3. Check that a database from the previous release upgrades cleanly. This seeds data with the previous tag, then starts the current build on the same data and verifies logins, documents, search, conversations and feedback:
 
 ```bash
-git worktree add ../kb-prev v1.1.0          # previous release tag
+git worktree add ../kb-prev v1.2.0          # the previous release tag
 (cd ../kb-prev && npm ci && npm run build)
 npm run build && npm run upgrade:check -- ../kb-prev
 git worktree remove ../kb-prev
@@ -35,7 +35,7 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-6. GitHub Actions will build the release artifact and publish a GitHub Release from the tag.
+6. GitHub Actions will build the release artifact and publish a GitHub Release from the tag. The release notes are the tag's section of `CHANGELOG.md` (for example `## [1.2.0] - …`); the workflow fails if that section is missing.
 
 ## Release Artifact
 
