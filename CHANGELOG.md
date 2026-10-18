@@ -27,6 +27,7 @@ All notable changes to this project will be documented in this file.
 - Upgraded pdf-parse to 2.x (current pdf.js); table cells in PDFs are now extracted with spacing.
 - Upgraded tsx, TypeScript 6, better-sqlite3 12 and openai 6.
 - Upgraded officeparser, mammoth, p5 2 and bcryptjs 3. Existing password hashes keep working.
+- Upgraded dotenv to 18 (`.env` parsing unchanged; startup stays quiet), Playwright to 1.64 and @types/multer to 2.3.
 
 ## [1.1.0] - 2026-10-02
 
