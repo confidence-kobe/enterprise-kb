@@ -4,7 +4,7 @@
 
 This repository is `enterprise-kb`, a Node.js/TypeScript enterprise knowledge-base app.
 
-- Runtime: Node.js 20+
+- Runtime: Node.js 22.19+
 - Server: Express 5
 - Database: SQLite via `better-sqlite3`
 - UI: static files in `public/`

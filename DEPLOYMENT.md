@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Node.js 20 or newer (22 LTS recommended).
+- Node.js 22.19 or newer. The server and backup commands refuse to start on older versions.
 - A writable SQLite data directory.
 - A writable document storage directory.
 - An OpenAI-compatible LLM endpoint. For Ollama, use `http://localhost:11434/v1`.
