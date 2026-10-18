@@ -74,7 +74,13 @@ The Compose file persists SQLite data and document storage in named volumes:
 
 ## Backup And Restore
 
-Everything the app stores lives in two places: the SQLite database (`DB_PATH`) and the document folder (`STORAGE_PATH`). One command backs up both. Run `npm run build` first if you are running from source.
+Everything the app stores lives in two places: the SQLite database (`DB_PATH`) and the document folder (`STORAGE_PATH`). A backup copies both.
+
+**Automatic backups.** Set `BACKUP_INTERVAL_HOURS=24` and the server backs up once a day while it runs. The first backup runs about a minute after startup if none is recent, and a failed run is retried an hour later. `.env.example` and `docker-compose.yml` turn this on; it is off when the variable is unset or `0`. Backups run in a worker thread, so the app stays responsive while documents are copied.
+
+**From the web.** Admins see the schedule, the last result and the backup list under 管理控制台 → 设置, and can start a backup with 立即备份. Every manual backup is recorded in the audit log (`backup.create`).
+
+**From the command line.** Run `npm run build` first if you are running from source.
 
 ```bash
 npm run backup          # snapshot DB + documents into BACKUP_DIR (default ./backups)
@@ -83,10 +89,10 @@ npm run backup:list     # list existing backups
 
 - The backup is safe to take while the server is running (it uses SQLite's online backup API) and checks the copy's integrity.
 - Each backup is a folder `backup-<UTC time>/` with `enterprise-kb.db`, `storage/` and `manifest.json`.
-- Only the newest `BACKUP_KEEP` backups (default 7) are kept.
+- Only the newest `BACKUP_KEEP` backups (default 7) are kept. Each one holds a full copy of the documents, so plan for roughly `BACKUP_KEEP` × the size of `STORAGE_PATH` in free disk space.
 - Backups sit on the same machine as the data. **Copy the backup folder somewhere else regularly** (another disk, NAS or object storage).
 
-Scheduled backup (Linux cron, every day at 02:30):
+If you prefer cron to the built-in schedule (for example to back up at a fixed time), leave `BACKUP_INTERVAL_HOURS=0` and use:
 
 ```cron
 30 2 * * * cd /opt/enterprise-kb && npm run backup >> backups/backup.log 2>&1

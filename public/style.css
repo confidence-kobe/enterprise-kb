@@ -2621,6 +2621,14 @@ html[data-theme="dark"] .user-table tr:hover td { background: #1c2128; }
 .gap-main { min-width: 0; }
 .gap-question { font-size: 13px; color: var(--text); word-break: break-word; }
 .gap-meta { font-size: 12px; color: var(--muted); margin-top: 3px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.backup-card { padding: 20px; max-width: 640px; margin-top: 16px; }
+.backup-card .gap-card-sub code, .backup-note code { font-size: 11px; padding: 1px 4px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); word-break: break-all; }
+.backup-card .gap-card-head .btn { flex-shrink: 0; }
+.backup-last { font-size: 12px; padding: 8px 10px; border-radius: 8px; margin-bottom: 6px; }
+.backup-last.ok { color: var(--green); background: rgba(22,163,74,.08); }
+.backup-last.failed { color: var(--red); background: rgba(220,38,38,.06); word-break: break-word; }
+.backup-row .gap-meta span + span::before { content: '·'; margin-right: 6px; color: var(--border); }
+.backup-note { font-size: 12px; color: var(--muted); margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); line-height: 1.7; }
 .gap-tag { padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); font-size: 11px; }
 .gap-tag-user { color: var(--red); border-color: rgba(220,38,38,.25); background: rgba(220,38,38,.06); }
 .feedback-item-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }

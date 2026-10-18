@@ -22,6 +22,8 @@ services:
       DB_PATH: /app/data/enterprise-kb.db
       LOGIN_RATE_WINDOW_MS: "${LOGIN_RATE_WINDOW_MS:-900000}"
       LOGIN_RATE_MAX: "${LOGIN_RATE_MAX:-10}"
+      BACKUP_INTERVAL_HOURS: "${BACKUP_INTERVAL_HOURS:-24}"
+      BACKUP_KEEP: "${BACKUP_KEEP:-7}"
     volumes:
       - enterprise_kb_data:/app/data
       - enterprise_kb_storage:/app/storage

@@ -116,11 +116,29 @@ test('public knowledge base is read-only for non-members', async ({ page, reques
   expect(errors).toEqual([])
 })
 
+test('admin can back up from the settings tab', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=settings]')
+
+  const card = page.locator('#backup-card')
+  await expect(card.locator('#backup-schedule')).toContainText('自动备份未开启')
+  await card.locator('#backup-now-btn').click()
+  await expect(card.locator('#backup-last')).toContainText('上次手动备份成功')
+  await expect(card.locator('.backup-row').first()).toContainText('1 个知识库')
+  await expect(card.locator('#backup-now-btn')).toBeEnabled()
+
+  const status = await (await request.get('/api/admin/backups', { headers: auth() })).json()
+  expect(status.backups.length).toBeGreaterThan(0)
+  expect(errors).toEqual([])
+})
+
 test('admin console fits a phone screen', async ({ page, request }) => {
   const errors = trackErrors(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
-  for (const tab of ['kbs', 'docs', 'feedback']) {
+  for (const tab of ['kbs', 'docs', 'feedback', 'settings']) {
     await page.goto('/manage.html')
     await page.click(`[data-tab=${tab}]`)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)

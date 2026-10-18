@@ -144,6 +144,34 @@ export function listBackups(backupDir: string): string[] {
     .map(name => path.join(backupDir, name))
 }
 
+export interface BackupSummary {
+  name: string
+  createdAt: string
+  appVersion: string
+  counts: BackupManifest['counts']
+  storageFiles: number
+  storageBytes: number
+}
+
+/** 列出已有备份的清单摘要（新的在前）；只读 manifest，不做完整性检查 */
+export function listBackupSummaries(backupDir: string): BackupSummary[] {
+  const summaries: BackupSummary[] = []
+  for (const dir of listBackups(backupDir)) {
+    try {
+      const m = JSON.parse(fs.readFileSync(path.join(dir, MANIFEST), 'utf-8')) as BackupManifest
+      summaries.push({
+        name: path.basename(dir),
+        createdAt: m.createdAt,
+        appVersion: m.appVersion,
+        counts: m.counts,
+        storageFiles: m.storageFiles,
+        storageBytes: m.storageBytes,
+      })
+    } catch { /* 清单损坏的目录不列出 */ }
+  }
+  return summaries
+}
+
 /** 只保留最新的 keep 份备份，返回被删除的目录 */
 export function pruneBackups(backupDir: string, keep: number): string[] {
   if (!(keep > 0)) return []
