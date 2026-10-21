@@ -118,6 +118,13 @@ docker compose run --rm --no-deps enterprise-kb npm run restore -- backup-202610
 docker compose start enterprise-kb
 ```
 
+## API Keys And MCP
+
+- MCP clients connect to `https://<your site>/mcp`. Use HTTPS in production, because the API key travels in the `Authorization` header.
+- If a reverse proxy sits in front of the app, give `/mcp` and `/api/kbs/*/ask` a read timeout of at least a few minutes. `ask_knowledge_base` replies only when the answer is complete.
+- Browser requests to `/mcp` must come from this site or an origin listed in `CORS_ORIGIN`. Command-line and desktop MCP clients don't send an `Origin` header and are unaffected.
+- When someone leaves, deleting their account also deletes their keys. To cut off a single tool, revoke its key in the API 接入 tab.
+
 ## Operational Notes
 
 - `data/`, `storage/`, `.env`, `node_modules/`, and `dist/` are intentionally ignored by git.

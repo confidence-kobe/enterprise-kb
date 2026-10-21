@@ -10,7 +10,7 @@
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=36">
+  <link rel="stylesheet" href="style.css?v=37">
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
 </head>
@@ -56,6 +56,10 @@
       <button class="tab-btn" data-tab="feedback" id="feedback-tab" style="display:none">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></svg>
         反馈
+      </button>
+      <button class="tab-btn" data-tab="api" id="api-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+        API 接入
       </button>
       <button class="tab-btn" data-tab="settings" id="settings-tab" style="display:none">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -246,6 +250,69 @@
       <div class="feedback-card-title feedback-list-title">差评明细</div>
       <div id="feedback-list"></div>
       <button class="conv-load-more hidden" id="feedback-load-more">加载更多</button>
+    </div>
+
+    <!-- API 接入标签 -->
+    <div class="tab-panel" id="tab-api">
+      <div class="section-header">
+        <div class="section-title">API 接入</div>
+      </div>
+      <div class="card api-card" id="api-key-card">
+        <div class="gap-card-head">
+          <div>
+            <div class="feedback-card-title">我的 API 密钥</div>
+            <div class="gap-card-sub">让 Claude、Cursor 或公司内部系统用你的身份查询知识库。密钥只能检索、阅读和提问，不能修改或删除任何内容。</div>
+          </div>
+        </div>
+        <form class="api-key-form" id="api-key-form">
+          <input class="input" id="api-key-name" maxlength="50" placeholder="密钥用途，如：Claude Code" aria-label="密钥名称">
+          <select class="input" id="api-key-expiry" aria-label="有效期">
+            <option value="90">90 天有效</option>
+            <option value="30">30 天有效</option>
+            <option value="365">1 年有效</option>
+            <option value="">永久有效</option>
+          </select>
+          <button class="btn btn-primary btn-sm" type="submit" id="api-key-create-btn">创建密钥</button>
+        </form>
+        <div class="api-key-new hidden" id="api-key-new">
+          <div class="api-key-new-title">密钥已创建，请立即复制保存。关闭页面后将无法再次查看。</div>
+          <div class="api-code-row">
+            <code id="api-key-new-value"></code>
+            <button class="btn btn-secondary btn-sm" type="button" data-copy-target="api-key-new-value">复制</button>
+          </div>
+        </div>
+        <div id="api-key-list"></div>
+      </div>
+
+      <div class="card api-card">
+        <div class="feedback-card-title">接入 AI 助手（MCP）</div>
+        <div class="gap-card-sub">支持 MCP 的 AI 工具（Claude Code、Cursor 等）可以直接检索本知识库并引用原文。</div>
+        <div class="api-field-label">服务地址</div>
+        <div class="api-code-row">
+          <code id="mcp-url"></code>
+          <button class="btn btn-secondary btn-sm" type="button" data-copy-target="mcp-url">复制</button>
+        </div>
+        <div class="api-snippet-tabs" role="tablist">
+          <button class="api-snippet-tab active" type="button" data-snippet="claude-code">Claude Code</button>
+          <button class="api-snippet-tab" type="button" data-snippet="json">配置文件</button>
+          <button class="api-snippet-tab" type="button" data-snippet="curl">命令行测试</button>
+        </div>
+        <div class="api-snippet-hint" id="mcp-snippet-hint"></div>
+        <div class="api-code-row api-code-block">
+          <pre id="mcp-snippet"></pre>
+          <button class="btn btn-secondary btn-sm" type="button" data-copy-target="mcp-snippet">复制</button>
+        </div>
+        <div class="backup-note">
+          可用工具：列出知识库、检索文档、读取原文、向知识库提问。AI 只能看到你本人有权限的知识库。
+          提问次数和网页端共用每分钟的限额。
+        </div>
+      </div>
+
+      <div class="card api-card hidden" id="admin-api-key-card">
+        <div class="feedback-card-title">全部用户的密钥</div>
+        <div class="gap-card-sub">员工离职或密钥泄露时，可以在这里撤销。</div>
+        <div id="admin-api-key-list"></div>
+      </div>
     </div>
 
     <!-- 系统设置标签 -->
@@ -532,6 +599,6 @@
   </div>
 
   <div id="toast" class="hidden"></div>
-  <script src="manage.js?v=25"></script>
+  <script src="manage.js?v=26"></script>
 </body>
 </html>
