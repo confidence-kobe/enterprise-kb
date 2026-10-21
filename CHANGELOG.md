@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Automatic backups: set `BACKUP_INTERVAL_HOURS` (for example `24`) and the server backs up the database and documents on that schedule, keeping the newest `BACKUP_KEEP` copies. A failed backup is retried an hour later. New installs get daily backups from `.env.example` and `docker-compose.yml`; existing installs stay as they are until the variable is set.
+- Version history for text documents: every save keeps a version (who and when, newest 50 per document). The 历史 button in the document list shows each version with a line-by-line diff against the one before. Anyone who can edit the document can restore an old version, and the current content stays in the history. Text documents created before this release get their original content kept as a baseline version on their first edit. API: `GET /api/kbs/:id/docs/:docId/versions[/:versionId]`, `POST …/versions/:versionId/restore` (audited as `doc.restore_version`).
 - Backups in the admin console (设置 tab): shows the schedule, the last result (including errors) and the backup list, with a 立即备份 button. Admin API: `GET`/`POST /api/admin/backups`. Manual backups are recorded in the audit log.
 
 ### Changed

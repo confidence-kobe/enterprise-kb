@@ -98,6 +98,37 @@ test('admin feedback tab shows stats, reasons and knowledge gaps', async ({ page
   expect(errors).toEqual([])
 })
 
+test('shows text document history with a diff and restores an old version', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  const kb = await (await request.post('/api/kbs', { headers: auth(), data: { name: '版本测试' } })).json()
+  const doc = await (await request.post(`/api/kbs/${kb.id}/docs/text`, { headers: auth(), data: { title: '报销制度', content: '第一条 报销需在 30 天内提交。\n第二条 需附发票。' } })).json()
+  await request.patch(`/api/kbs/${kb.id}/docs/${doc.id}/text`, { headers: auth(), data: { title: '报销制度', content: '第一条 报销需在 15 天内提交。\n第二条 需附发票。\n第三条 超期不予受理。' } })
+
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=docs]')
+  await page.selectOption('#doc-kb-select', String(kb.id))
+  await page.click(`[data-history-id="${doc.id}"]`)
+
+  const modal = page.locator('#history-modal')
+  await expect(modal.locator('.history-item')).toHaveCount(2)
+  await expect(modal.locator('.history-item').first()).toContainText('当前')
+  await expect(modal.locator('.diff-add')).toContainText(['第一条 报销需在 15 天内提交。', '第三条 超期不予受理。'])
+  await expect(modal.locator('.diff-del')).toContainText('第一条 报销需在 30 天内提交。')
+  await expect(modal.locator('#history-restore-btn')).toBeHidden()
+
+  await modal.locator('.history-item').nth(1).click()
+  page.once('dialog', dialog => dialog.accept())
+  await modal.locator('#history-restore-btn').click()
+  await expect(page.locator('#toast')).toContainText('已恢复到版本 1')
+  await expect(modal.locator('.history-item')).toHaveCount(3)
+  await expect(modal.locator('.history-item').first()).toContainText('恢复自版本 1')
+
+  const preview = await (await request.get(`/api/kbs/${kb.id}/docs/${doc.id}/preview`, { headers: auth() })).json()
+  expect(preview.content).toBe('第一条 报销需在 30 天内提交。\n第二条 需附发票。')
+  expect(errors).toEqual([])
+})
+
 test('public knowledge base is read-only for non-members', async ({ page, request }) => {
   const errors = trackErrors(page)
   await request.patch(`/api/kbs/${kbId}/public`, { headers: auth(), data: { is_public: true } })
@@ -113,6 +144,10 @@ test('public knowledge base is read-only for non-members', async ({ page, reques
   await expect(page.locator('[data-preview-id]').first()).toBeVisible()
   await expect(page.locator('[data-doc-id]')).toHaveCount(0)
   await expect(page.locator('[data-edit-id]')).toHaveCount(0)
+  // 只读用户可以查看历史版本，但不能恢复
+  await page.locator('[data-history-id]').first().click()
+  await expect(page.locator('#history-modal .history-item').first()).toBeVisible()
+  await expect(page.locator('#history-restore-btn')).toBeHidden()
   expect(errors).toEqual([])
 })
 
@@ -126,7 +161,7 @@ test('admin can back up from the settings tab', async ({ page, request }) => {
   await expect(card.locator('#backup-schedule')).toContainText('自动备份未开启')
   await card.locator('#backup-now-btn').click()
   await expect(card.locator('#backup-last')).toContainText('上次手动备份成功')
-  await expect(card.locator('.backup-row').first()).toContainText('1 个知识库')
+  await expect(card.locator('.backup-row').first()).toContainText(/\d+ 个知识库 · \d+ 份文档/)
   await expect(card.locator('#backup-now-btn')).toBeEnabled()
 
   const status = await (await request.get('/api/admin/backups', { headers: auth() })).json()

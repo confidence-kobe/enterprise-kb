@@ -17,6 +17,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          updateKbSyncSource, updateKbSyncResult,
          canUserAccessKb, canUserWriteKb, grantKbAccess, revokeKbAccess, listKbMembers,
          listDocs, listDocsWithCounts, listDocsBySourceType, createDoc, updateDocFromSync, deleteDoc, getDocById,
+         addDocVersion, listDocVersions, getDocVersion, countDocVersions,
          updateUserPassword, updateUserRole,
          listConversations, createConversation, updateConversationTitle, touchConversation,
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
@@ -1025,6 +1026,8 @@ app.post('/api/kbs/:id/docs/text', requireAuth, async (req: AuthRequest, res) =>
     console.warn('[FTS5] 索引失败:', (e as Error).message)
   }
 
+  addDocVersion({ docId: doc.id, title: origName, content, userId: req.user!.userId, username: req.user!.username })
+
   audit(req, 'doc.create_text', 'doc', {
     entityId: doc.id,
     kbId,
@@ -1033,46 +1036,113 @@ app.post('/api/kbs/:id/docs/text', requireAuth, async (req: AuthRequest, res) =>
   res.status(201).json(doc)
 })
 
-// ── 编辑现有文本文档 ─────────────────────────────────────
-app.patch('/api/kbs/:id/docs/:docId/text', requireAuth, async (req: AuthRequest, res) => {
-  const kbId  = Number(req.params.id)
-  const docId = Number(req.params.docId)
-  if (!canWriteKb(kbId, req.user)) {
-    res.status(403).json({ error: '无权限编辑该知识库的文档' }); return
-  }
-  const doc = getDocById(docId)
-  if (!doc || doc.kb_id !== kbId) { res.status(404).json({ error: '文档不存在' }); return }
-  if (doc.source_type !== 'text') { res.status(400).json({ error: '只能编辑文本文档' }); return }
+// ── 编辑现有文本文档（每次保存都记录一个历史版本） ─────────────
 
-  const kb = getKbById(kbId)
-  if (!kb) { res.status(404).json({ error: '知识库不存在' }); return }
+function textDocTitle(title: string | undefined, fallback: string): string {
+  if (!title?.trim()) return fallback
+  const safeName = title.trim().replace(/[\\/:*?"<>|]/g, '_').slice(0, 80)
+  return safeName.endsWith('.md') ? safeName : `${safeName}.md`
+}
 
-  const { title, content } = req.body as { title?: string; content?: string }
-  if (!content?.trim()) { res.status(400).json({ error: '内容不能为空' }); return }
-
+/**
+ * 写入文本文档的新内容并重建索引，同时记录版本。
+ * 启用版本记录前创建的文档，第一次保存时先把原内容存为基线版本，保证随时可以找回。
+ * 返回 false 表示内容与标题都没有变化。
+ */
+function saveTextDoc(doc: Document, kb: KnowledgeBase, title: string, content: string, user: NonNullable<AuthRequest['user']>, note?: string): boolean {
   const kbDir    = kb.storage_path || path.join(STORAGE_PATH, `kb_${kb.id}`)
   const filePath = path.join(kbDir, doc.filename)
+  const previous = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : ''
+  if (previous === content && title === doc.original_name) return false
 
-  let origName = doc.original_name
-  if (title?.trim()) {
-    const safeName = title.trim().replace(/[\\/:*?"<>|]/g, '_').slice(0, 80)
-    origName = safeName.endsWith('.md') ? safeName : `${safeName}.md`
+  if (countDocVersions(doc.id) === 0 && previous) {
+    addDocVersion({ docId: doc.id, title: doc.original_name, content: previous, note: 'baseline', createdAt: doc.indexed_at ?? doc.uploaded_at })
   }
 
   fs.writeFileSync(filePath, content, 'utf-8')
   const size = Buffer.byteLength(content, 'utf-8')
-  updateDocMeta(docId, origName, size)
-  updateDocIndexStatus(docId, 'processing')
-
+  updateDocMeta(doc.id, title, size)
+  updateDocIndexStatus(doc.id, 'processing')
   try {
-    indexDocContent(docId, kbId, origName, filePath, content)
+    indexDocContent(doc.id, kb.id, title, filePath, content)
   } catch (e) {
-    updateDocIndexStatus(docId, 'error', (e as Error).message.slice(0, 500))
+    updateDocIndexStatus(doc.id, 'error', (e as Error).message.slice(0, 500))
     console.warn('[FTS5] 索引失败:', (e as Error).message)
   }
+  addDocVersion({ docId: doc.id, title, content, userId: user.userId, username: user.username, note })
+  return true
+}
 
-  audit(req, 'doc.update_text', 'doc', { entityId: docId, kbId, detail: { title: origName, size } })
-  res.json({ ok: true })
+/** 校验并取出可写的文本文档；失败时已写好响应并返回 null */
+function requireWritableTextDoc(req: AuthRequest, res: Response): { doc: Document; kb: KnowledgeBase } | null {
+  const kbId  = Number(req.params.id)
+  const docId = Number(req.params.docId)
+  if (!canWriteKb(kbId, req.user)) {
+    res.status(403).json({ error: '无权限编辑该知识库的文档' }); return null
+  }
+  const doc = getDocById(docId)
+  if (!doc || doc.kb_id !== kbId) { res.status(404).json({ error: '文档不存在' }); return null }
+  if (doc.source_type !== 'text') { res.status(400).json({ error: '只能编辑文本文档' }); return null }
+  const kb = getKbById(kbId)
+  if (!kb) { res.status(404).json({ error: '知识库不存在' }); return null }
+  return { doc, kb }
+}
+
+app.patch('/api/kbs/:id/docs/:docId/text', requireAuth, async (req: AuthRequest, res) => {
+  const target = requireWritableTextDoc(req, res)
+  if (!target) return
+  const { doc, kb } = target
+
+  const { title, content } = req.body as { title?: string; content?: string }
+  if (!content?.trim()) { res.status(400).json({ error: '内容不能为空' }); return }
+
+  const origName = textDocTitle(title, doc.original_name)
+  const changed = saveTextDoc(doc, kb, origName, content, req.user!)
+  if (changed) {
+    audit(req, 'doc.update_text', 'doc', { entityId: doc.id, kbId: kb.id, detail: { title: origName, size: Buffer.byteLength(content, 'utf-8') } })
+  }
+  res.json({ ok: true, changed })
+})
+
+/** 判断当前用户能否查看该知识库的文档；失败时已写好响应并返回 null */
+function requireReadableDoc(req: AuthRequest, res: Response): Document | null {
+  const kbId  = Number(req.params.id)
+  const docId = Number(req.params.docId)
+  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
+    res.status(403).json({ error: '无权限' }); return null
+  }
+  const doc = getDocById(docId)
+  if (!doc || doc.kb_id !== kbId) { res.status(404).json({ error: '文档不存在' }); return null }
+  return doc
+}
+
+app.get('/api/kbs/:id/docs/:docId/versions', requireAuth, (req: AuthRequest, res) => {
+  const doc = requireReadableDoc(req, res)
+  if (!doc) return
+  res.json({ items: listDocVersions(doc.id) })
+})
+
+app.get('/api/kbs/:id/docs/:docId/versions/:versionId', requireAuth, (req: AuthRequest, res) => {
+  const doc = requireReadableDoc(req, res)
+  if (!doc) return
+  const version = getDocVersion(doc.id, Number(req.params.versionId))
+  if (!version) { res.status(404).json({ error: '版本不存在' }); return }
+  res.json(version)
+})
+
+/** 恢复旧版本：把旧内容另存为最新版本，历史记录不会被删除 */
+app.post('/api/kbs/:id/docs/:docId/versions/:versionId/restore', requireAuth, (req: AuthRequest, res) => {
+  const target = requireWritableTextDoc(req, res)
+  if (!target) return
+  const { doc, kb } = target
+  const version = getDocVersion(doc.id, Number(req.params.versionId))
+  if (!version) { res.status(404).json({ error: '版本不存在' }); return }
+
+  const changed = saveTextDoc(doc, kb, version.title, version.content, req.user!, `restore:${version.id}`)
+  audit(req, 'doc.restore_version', 'doc', {
+    entityId: doc.id, kbId: kb.id, detail: { title: version.title, versionId: version.id, changed },
+  })
+  res.json({ ok: true, changed })
 })
 
 const PREVIEW_MAX_CHARS = 10_000
