@@ -4,7 +4,7 @@ import path from 'node:path'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Express } from 'express'
-import { createConversation, insertMessages, isDocIndexed, removeDocFromIndex } from '../src/db.ts'
+import { addDocVersion, countDocVersions, createConversation, insertMessages, isDocIndexed, MAX_DOC_VERSIONS, removeDocFromIndex } from '../src/db.ts'
 
 let app: Express
 let testRoot: string
@@ -604,6 +604,105 @@ describe('audit log', () => {
 
     await request(app).delete(`/api/kbs/${kb.body.id}`).set(adminAuth).expect(200)
     await request(app).delete(`/api/admin/users/${createdUser.body.id}`).set(adminAuth).expect(200)
+  })
+})
+
+describe('text document versions', () => {
+  async function setup(name: string) {
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    const kb = await request(app).post('/api/kbs').set(auth).send({ name }).expect(201)
+    const doc = await request(app).post(`/api/kbs/${kb.body.id}/docs/text`).set(auth)
+      .send({ title: '请假制度', content: '年假为每年 10 天。' }).expect(201)
+    return { auth, kbId: kb.body.id as number, docId: doc.body.id as number }
+  }
+
+  it('records a version on every save and restores an old one without losing history', async () => {
+    const { auth, kbId, docId } = await setup('Versions KB')
+    const base = `/api/kbs/${kbId}/docs/${docId}`
+
+    await request(app).patch(`${base}/text`).set(auth).send({ title: '请假制度', content: '年假调整为每年 15 天。' }).expect(200)
+    const unchanged = await request(app).patch(`${base}/text`).set(auth).send({ title: '请假制度', content: '年假调整为每年 15 天。' }).expect(200)
+    expect(unchanged.body.changed).toBe(false)
+
+    const list = await request(app).get(`${base}/versions`).set(auth).expect(200)
+    expect(list.body.items).toHaveLength(2)
+    expect(list.body.items[0]).toMatchObject({ title: '请假制度.md', username: 'admin' })
+    expect(list.body.items[0]).not.toHaveProperty('content')
+    const first = list.body.items[1]
+
+    const old = await request(app).get(`${base}/versions/${first.id}`).set(auth).expect(200)
+    expect(old.body.content).toBe('年假为每年 10 天。')
+
+    const restored = await request(app).post(`${base}/versions/${first.id}/restore`).set(auth).expect(200)
+    expect(restored.body.changed).toBe(true)
+
+    const after = await request(app).get(`${base}/versions`).set(auth).expect(200)
+    expect(after.body.items).toHaveLength(3)
+    expect(after.body.items[0].note).toBe(`restore:${first.id}`)
+    const preview = await request(app).get(`${base}/preview`).set(auth).expect(200)
+    expect(preview.body.content).toBe('年假为每年 10 天。')
+    // 恢复后检索到的是恢复后的内容
+    const hits = await request(app).get(`/api/kbs/${kbId}/search/docs`).query({ q: '10 天' }).set(auth).expect(200)
+    expect(hits.body).toHaveLength(1)
+    const stale = await request(app).get(`/api/kbs/${kbId}/search/docs`).query({ q: '调整为' }).set(auth).expect(200)
+    expect(stale.body).toHaveLength(0)
+
+    const audit = await request(app).get('/api/admin/audit?action=doc.restore_version').set(auth).expect(200)
+    expect(audit.body.items[0]).toMatchObject({ action: 'doc.restore_version', entity_id: docId })
+  })
+
+  it('lets readers see history but only writers restore', async () => {
+    const { auth, kbId, docId } = await setup('Versions Public KB')
+    const base = `/api/kbs/${kbId}/docs/${docId}`
+    await request(app).patch(`/api/kbs/${kbId}/public`).set(auth).send({ is_public: true }).expect(200)
+    await request(app).post('/api/admin/users').set(auth).send({ username: 'version-reader', password: 'User@123', role: 'user' }).expect(201)
+    await request(app).post('/api/admin/users').set(auth).send({ username: 'version-outsider', password: 'User@123', role: 'user' }).expect(201)
+    const reader = { Authorization: `Bearer ${(await login('version-reader', 'User@123')).token}` }
+
+    const list = await request(app).get(`${base}/versions`).set(reader).expect(200)
+    await request(app).get(`${base}/versions/${list.body.items[0].id}`).set(reader).expect(200)
+    await request(app).post(`${base}/versions/${list.body.items[0].id}/restore`).set(reader).expect(403)
+
+    await request(app).patch(`/api/kbs/${kbId}/public`).set(auth).send({ is_public: false }).expect(200)
+    const outsider = { Authorization: `Bearer ${(await login('version-outsider', 'User@123')).token}` }
+    await request(app).get(`${base}/versions`).set(outsider).expect(403)
+    await request(app).get(`${base}/versions/${list.body.items[0].id}`).set(outsider).expect(403)
+
+    // 版本必须属于这篇文档
+    const other = await setup('Versions Other KB')
+    const otherVersions = await request(app).get(`/api/kbs/${other.kbId}/docs/${other.docId}/versions`).set(auth).expect(200)
+    await request(app).get(`${base}/versions/${otherVersions.body.items[0].id}`).set(auth).expect(404)
+    await request(app).post(`${base}/versions/${otherVersions.body.items[0].id}/restore`).set(auth).expect(404)
+  })
+
+  it('keeps the original content of documents created before versioning', async () => {
+    const { auth, kbId, docId } = await setup('Versions Legacy KB')
+    // 模拟升级前创建的文档：没有任何版本记录
+    const { default: Database } = await import('better-sqlite3')
+    const raw = new Database(process.env.DB_PATH!)
+    raw.prepare('DELETE FROM doc_versions WHERE doc_id = ?').run(docId)
+    raw.close()
+    expect(countDocVersions(docId)).toBe(0)
+
+    await request(app).patch(`/api/kbs/${kbId}/docs/${docId}/text`).set(auth).send({ content: '全部改掉了' }).expect(200)
+    const list = await request(app).get(`/api/kbs/${kbId}/docs/${docId}/versions`).set(auth).expect(200)
+    expect(list.body.items.map((v: { note: string | null }) => v.note)).toEqual([null, 'baseline'])
+    const baseline = await request(app).get(`/api/kbs/${kbId}/docs/${docId}/versions/${list.body.items[1].id}`).set(auth).expect(200)
+    expect(baseline.body.content).toBe('年假为每年 10 天。')
+  })
+
+  it(`keeps only the newest ${MAX_DOC_VERSIONS} versions`, async () => {
+    const { auth, kbId, docId } = await setup('Versions Limit KB')
+    for (let i = 0; i < MAX_DOC_VERSIONS + 5; i++) addDocVersion({ docId, title: 'x.md', content: `v${i}` })
+    expect(countDocVersions(docId)).toBe(MAX_DOC_VERSIONS)
+    const list = await request(app).get(`/api/kbs/${kbId}/docs/${docId}/versions`).set(auth).expect(200)
+    const newest = await request(app).get(`/api/kbs/${kbId}/docs/${docId}/versions/${list.body.items[0].id}`).set(auth).expect(200)
+    expect(newest.body.content).toBe(`v${MAX_DOC_VERSIONS + 4}`)
+
+    // 删除文档时一并删除历史版本
+    await request(app).delete(`/api/kbs/${kbId}/docs/${docId}`).set(auth).expect(200)
+    expect(countDocVersions(docId)).toBe(0)
   })
 })
 

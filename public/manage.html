@@ -10,7 +10,7 @@
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=35">
+  <link rel="stylesheet" href="style.css?v=36">
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
 </head>
@@ -461,6 +461,34 @@
     </div>
   </div>
 
+  <!-- 文本文档历史版本弹层 -->
+  <div class="modal hidden" id="history-modal">
+    <div class="modal-box preview-modal-box history-modal-box">
+      <div class="modal-header">
+        <span id="history-modal-title">历史版本</span>
+        <button class="modal-close" id="history-modal-close" aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="history-layout">
+        <aside class="history-list" id="history-list" aria-label="版本列表"></aside>
+        <div class="history-main">
+          <div class="history-toolbar">
+            <div class="history-meta" id="history-meta"></div>
+            <div class="history-actions">
+              <div class="history-view-toggle" role="group" aria-label="显示方式">
+                <button class="active" data-history-view="diff">与上一版对比</button>
+                <button data-history-view="full">完整内容</button>
+              </div>
+              <button class="btn btn-primary btn-sm hidden" id="history-restore-btn">恢复此版本</button>
+            </div>
+          </div>
+          <div class="history-content" id="history-content"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 新建/编辑文本文档弹层 -->
   <div class="modal hidden" id="text-doc-modal">
     <div class="modal-box text-doc-modal-box">
@@ -504,6 +532,6 @@
   </div>
 
   <div id="toast" class="hidden"></div>
-  <script src="manage.js?v=24"></script>
+  <script src="manage.js?v=25"></script>
 </body>
 </html>

@@ -258,6 +258,22 @@ export function initDb(dbPath: string): void {
     try { db.exec(`ALTER TABLE response_feedback ADD COLUMN ${col}`) } catch { /* column already exists */ }
   }
 
+  // 文本文档的历史版本：内容存在数据库里（不放进知识库目录，避免被检索和 AI 工具读到）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS doc_versions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      title      TEXT    NOT NULL,
+      content    TEXT    NOT NULL,
+      size       INTEGER NOT NULL,
+      user_id    INTEGER,
+      username   TEXT,
+      note       TEXT,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_doc_versions_doc ON doc_versions(doc_id, id);
+  `)
+
   // Migration: unicode61 → trigram for CJK support (trigram handles 3+ char Chinese terms;
   // 2-char terms continue to be served by the existing LIKE substring fallback)
   try {
@@ -732,6 +748,72 @@ export function updateDocIndexStatus(
 
 export function deleteDoc(id: number): void {
   db.prepare('DELETE FROM documents WHERE id = ?').run(id)
+}
+
+// ── 文本文档历史版本 ─────────────────────────────────
+
+/** 每篇文档最多保留的历史版本数，超出时删除最旧的 */
+export const MAX_DOC_VERSIONS = 50
+
+export interface DocVersion {
+  id: number
+  doc_id: number
+  title: string
+  size: number
+  username: string | null
+  /** 'restore:<版本号>' 表示由旧版本恢复而来；'baseline' 表示启用版本记录前的原始内容 */
+  note: string | null
+  created_at: number
+}
+
+export interface DocVersionWithContent extends DocVersion {
+  content: string
+}
+
+export function addDocVersion(data: {
+  docId: number
+  title: string
+  content: string
+  userId?: number | null
+  username?: string | null
+  note?: string | null
+  createdAt?: number
+}): DocVersion {
+  const id = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO doc_versions (doc_id, title, content, size, user_id, username, note, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%s','now')))
+    `).run(
+      data.docId, data.title, data.content, Buffer.byteLength(data.content, 'utf-8'),
+      data.userId ?? null, data.username ?? null, data.note ?? null, data.createdAt ?? null,
+    )
+    db.prepare(`
+      DELETE FROM doc_versions WHERE doc_id = ? AND id NOT IN (
+        SELECT id FROM doc_versions WHERE doc_id = ? ORDER BY id DESC LIMIT ?
+      )
+    `).run(data.docId, data.docId, MAX_DOC_VERSIONS)
+    return result.lastInsertRowid as number
+  })()
+  return getDocVersion(data.docId, id)!
+}
+
+/** 版本列表（新的在前，不含正文） */
+export function listDocVersions(docId: number): DocVersion[] {
+  return db.prepare(`
+    SELECT id, doc_id, title, size, username, note, created_at
+    FROM doc_versions WHERE doc_id = ? ORDER BY id DESC
+  `).all(docId) as DocVersion[]
+}
+
+export function getDocVersion(docId: number, versionId: number): DocVersionWithContent | undefined {
+  return db.prepare(`
+    SELECT id, doc_id, title, content, size, username, note, created_at
+    FROM doc_versions WHERE doc_id = ? AND id = ?
+  `).get(docId, versionId) as DocVersionWithContent | undefined
+}
+
+export function countDocVersions(docId: number): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM doc_versions WHERE doc_id = ?').get(docId) as { n: number }).n
 }
 
 // ── 对话操作 ──────────────────────────────────────────
