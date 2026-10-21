@@ -2,6 +2,7 @@
  * 浏览器端到端测试：覆盖单元测试发现不了的前端问题
  *（例如回答完成后 👍/👎 被覆盖、管理页脚本初始化顺序错误导致整页失效）。
  */
+import path from 'node:path'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { ADMIN_PASSWORD } from '../playwright.config'
 
@@ -126,6 +127,26 @@ test('shows text document history with a diff and restores an old version', asyn
 
   const preview = await (await request.get(`/api/kbs/${kb.id}/docs/${doc.id}/preview`, { headers: auth() })).json()
   expect(preview.content).toBe('第一条 报销需在 30 天内提交。\n第二条 需附发票。')
+  expect(errors).toEqual([])
+})
+
+test('uploads a photo of a paper document and finds it through OCR', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  const kb = await (await request.post('/api/kbs', { headers: auth(), data: { name: '扫描件测试' } })).json()
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=docs]')
+  await page.selectOption('#doc-kb-select', String(kb.id))
+  await page.setInputFiles('#file-input', path.resolve('test/fixtures/zh-scanned.png'))
+
+  const row = page.locator('.doc-row', { hasText: 'zh-scanned.png' })
+  await expect(row.locator('.doc-status')).toHaveText('已索引', { timeout: 60_000 })
+  await expect(row.locator('.doc-source-ocr')).toHaveAttribute('title', /这张图片的文字由 OCR 识别/)
+  await row.locator('[data-preview-id]').click()
+  await expect(page.locator('#preview-content')).toContainText('住宿标准为每晚四百五十元')
+
+  const hits = await (await request.get(`/api/kbs/${kb.id}/search/docs?q=${encodeURIComponent('报销申请')}`, { headers: auth() })).json()
+  expect(hits[0]).toMatchObject({ original_name: 'zh-scanned.png' })
   expect(errors).toEqual([])
 })
 

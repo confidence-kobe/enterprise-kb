@@ -118,6 +118,16 @@ docker compose run --rm --no-deps enterprise-kb npm run restore -- backup-202610
 docker compose start enterprise-kb
 ```
 
+## Scanned Documents (OCR)
+
+- Scanned PDFs and uploaded photos (JPG, PNG, WebP, BMP) are read with built-in OCR (Tesseract, Chinese + English) and become searchable like any other document. In the document list they carry an **OCR** tag; preview them to check the recognized text.
+- OCR runs on this server in a background thread. Nothing is sent to the model provider or downloaded at runtime: the language data ships with the npm packages (about 5 MB).
+- Only PDF pages with almost no text (fewer than 20 characters) are OCR'd, so ordinary PDFs are not slowed down. Expect roughly 1–2 seconds per scanned page on a 4-core server. Other uploads wait in the same queue while a long scan is being read.
+- `OCR_MAX_PAGES` (default 100) caps the scanned pages read per PDF. `OCR_ENABLED=false` turns OCR off; scanned PDFs and photos then fail indexing with a message saying so.
+- Accuracy is good on clear printed text, weaker on blurry photos, complex tables and handwriting.
+- Scanned PDFs that failed to index before this feature ("文档没有可索引文本") are retried automatically on the next start.
+- Folder sync does not import images, so logos and screenshots in shared folders are not pulled in.
+
 ## API Keys And MCP
 
 - MCP clients connect to `https://<your site>/mcp`. Use HTTPS in production, because the API key travels in the `Authorization` header.

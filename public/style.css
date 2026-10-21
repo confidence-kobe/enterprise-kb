@@ -2427,6 +2427,7 @@ html[data-theme="dark"] .doc-item { background: var(--surface); border-color: va
 }
 .doc-source-sync { border-color: rgba(217,119,6,.28); color: #b45309; background: rgba(217,119,6,.08); }
 .doc-source-text { border-color: rgba(5,150,105,.28); color: #047857; background: rgba(5,150,105,.08); }
+.doc-source-ocr { border-color: rgba(124,58,237,.28); color: #6d28d9; background: rgba(124,58,237,.08); cursor: help; }
 .doc-status {
   flex-shrink: 0;
   min-width: 56px;

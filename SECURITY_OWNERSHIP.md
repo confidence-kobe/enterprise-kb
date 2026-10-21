@@ -51,8 +51,8 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 - Production startup rejects weak/default `JWT_SECRET`.
 - Production startup rejects default `ADMIN_PASSWORD`.
 - Upload size is limited to 50 MB.
-- Upload extensions are allowlisted.
-- PDF and Office files are parsed in a worker thread with a timeout (`EXTRACT_TIMEOUT_SECONDS`, default 120) and a heap limit. A malformed or hostile file can fail its own indexing but cannot stall or crash the server process.
+- Upload extensions are allowlisted. Web uploads also accept images (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`) for OCR; folder sync does not.
+- PDF and Office files are parsed in a worker thread with a timeout (`EXTRACT_TIMEOUT_SECONDS`, default 120) and a heap limit. A malformed or hostile file can fail its own indexing but cannot stall or crash the server process. OCR (scanned PDF pages and images) runs in the same kind of worker, with a time limit of `EXTRACT_TIMEOUT_SECONDS` plus 60 seconds per page and at most `OCR_MAX_PAGES` pages per PDF. Tesseract runs locally with bundled language data and makes no network calls; it writes its language files only to a folder under the OS temp directory.
 - SQL calls use prepared statements.
 - LLM tools (Read/Grep/Glob/KBStats/SearchDocs) are limited to a `ToolScope`: one KB for per-KB Q&A, and only the user's accessible KBs (`listKbsForUser`) for cross-KB Q&A. The boundary is enforced in `assertParamsInScope`, because claude-tools-kit's `plan` mode does not check `allowedDirectories`.
 - Security response headers are set in Express.

@@ -53,6 +53,7 @@ export interface Document {
   index_error: string | null
   indexed_at: number | null
   summary: string | null
+  ocr_pages: number | null
   chunk_count?: number
   vec_count?: number
 }
@@ -238,6 +239,10 @@ export function initDb(dbPath: string): void {
   } catch { /* column already exists */ }
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN summary TEXT`)
+  } catch { /* column already exists */ }
+  try {
+    // 通过 OCR 识别出文字的页数（图片记为 1）；NULL 表示没有用到 OCR
+    db.exec(`ALTER TABLE documents ADD COLUMN ocr_pages INTEGER`)
   } catch { /* column already exists */ }
 
   db.exec(`
@@ -759,6 +764,10 @@ export function updateDocIndexStatus(
         indexed_at = CASE WHEN ? = 'ready' THEN strftime('%s','now') ELSE indexed_at END
     WHERE id = ?
   `).run(status, error, status, id)
+}
+
+export function updateDocOcrPages(id: number, ocrPages: number | null): void {
+  db.prepare('UPDATE documents SET ocr_pages = ? WHERE id = ?').run(ocrPages, id)
 }
 
 export function deleteDoc(id: number): void {
