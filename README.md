@@ -94,6 +94,7 @@ Use `.env.example` as the template. Important variables:
 - `SYNC_MAX_TOTAL_MB`
 - `BACKUP_DIR`, `BACKUP_KEEP`, `BACKUP_INTERVAL_HOURS` (backup location, how many backups to keep, and automatic backup interval; default `./backups`, 7, off)
 - `EXTRACT_TIMEOUT_SECONDS` (default 120; PDF/Office files that take longer to parse are marked as failed)
+- `OCR_ENABLED`, `OCR_MAX_PAGES` (default on, 100; built-in OCR for scanned PDF pages and uploaded photos, see `DEPLOYMENT.md`)
 - `SYNC_ALLOWED_ROOTS` (optional; comma-separated folders that sync sources must be inside. Only admins can set a sync folder.)
 - `STORAGE_PATH`
 - `DB_PATH`

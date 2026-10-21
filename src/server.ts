@@ -23,7 +23,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
          countConversations, pinConversation, getKbStats, searchConversations,
          indexDocContent, indexDocContentInBatches, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
-         updateDocMeta, updateDocSummary, updateDocIndexStatus, createAuditEvent, listAuditEvents,
+         updateDocMeta, updateDocSummary, updateDocIndexStatus, updateDocOcrPages, createAuditEvent, listAuditEvents,
          updateKbSystemPrompt, storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs,
          upsertFeedback, getFeedbackStats, getAllFeedbackStats,
          getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS, listKnowledgeGapRows,
@@ -42,7 +42,8 @@ import type { QAEvent } from './tools.js'
 import { buildTrustedHistory } from './conversationHistory.js'
 import { configureProxyFromEnv } from './proxy.js'
 import { BINARY_DOCUMENT_EXTS } from './documentText.js'
-import { extractDocumentTextInWorker } from './extractInWorker.js'
+import { extractDocumentTextInWorker, extractPdfInWorker, ocrInWorker } from './extractInWorker.js'
+import { OCR_IMAGE_EXTS, isScannedPageText } from './ocr.js'
 import { BackupBusyError, BackupScheduler } from './backupScheduler.js'
 import { groupKnowledgeGaps } from './knowledgeGaps.js'
 import { createKnowledgeBaseTools, handleMcpMessage, McpToolError, MCP_PROTOCOL_VERSIONS } from './mcp.js'
@@ -159,6 +160,8 @@ const ALLOWED_EXTS = new Set([
 ])
 
 const OFFICE_EXTS = new Set(['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt'])
+/** 网页上传额外接受图片（通过 OCR 识别文字）；文件夹同步不收图片，避免把图标、截图之类一起导入 */
+const UPLOAD_EXTS = new Set([...ALLOWED_EXTS, ...OCR_IMAGE_EXTS])
 
 const SYNC_SKIP_DIRS = new Set([
   '.git', '.svn', '.hg',
@@ -170,6 +173,12 @@ const SYNC_MAX_TOTAL_BYTES = parsePositiveInt(envValue('SYNC_MAX_TOTAL_MB'), 500
 /** 单个 PDF / Office 文件的解析超时，超时的文档标记为索引失败 */
 const EXTRACT_TIMEOUT_MS = parsePositiveInt(envValue('EXTRACT_TIMEOUT_SECONDS'), 120, 'EXTRACT_TIMEOUT_SECONDS') * 1000
 const SYNC_MAX_FILE_BYTES = 50 * 1024 * 1024
+/** 扫描件文字识别：默认开启，OCR_ENABLED=false 关闭 */
+const OCR_ENABLED = !/^(0|false|no|off)$/i.test(envValue('OCR_ENABLED') ?? '')
+/** 每个 PDF 最多识别的扫描页数，超出的页不识别 */
+const OCR_MAX_PAGES = parsePositiveInt(envValue('OCR_MAX_PAGES'), 100, 'OCR_MAX_PAGES')
+/** 识别超时：基础解析时间 + 每页 60 秒 */
+const OCR_PAGE_TIMEOUT_MS = 60_000
 
 interface SyncFile {
   absolutePath: string
@@ -256,9 +265,10 @@ function removeStoredDocument(kbId: number, doc: Document): void {
   const kbDir = path.join(STORAGE_PATH, `kb_${kbId}`)
   const filePath = path.join(kbDir, doc.filename)
   try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath) } catch {}
-  const txtPath = filePath.replace(/\.pdf$/i, '.txt')
-  if (txtPath !== filePath) {
-    try { if (fs.existsSync(txtPath)) fs.unlinkSync(txtPath) } catch {}
+  // PDF、Office、图片旁边还有一份提取出的 .txt
+  const { readPath, extracted } = docTextFile(kbId, doc)
+  if (extracted) {
+    try { if (fs.existsSync(readPath)) fs.unlinkSync(readPath) } catch {}
   }
   removeDocFromIndex(doc.id)
   deleteDoc(doc.id)
@@ -413,7 +423,7 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },   // 50MB
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase()
-    cb(null, ALLOWED_EXTS.has(ext))
+    cb(null, UPLOAD_EXTS.has(ext))
   },
 })
 
@@ -427,16 +437,45 @@ interface DocIndexJob {
 const docIndexQueue: DocIndexJob[] = []
 let docIndexWorkerRunning = false
 
-async function extractIndexableText(job: DocIndexJob): Promise<{ text: string; indexPath: string }> {
+function ocrTimeoutMs(pages: number): number {
+  return EXTRACT_TIMEOUT_MS + pages * OCR_PAGE_TIMEOUT_MS
+}
+
+/** PDF：先提取文字层，文字太少的页（扫描页）再用 OCR 识别 */
+async function extractPdfWithOcr(filePath: string): Promise<{ text: string; ocrPages: number }> {
+  const pdf = await extractPdfInWorker(filePath, { timeoutMs: EXTRACT_TIMEOUT_MS })
+  const scanned = pdf.pages.flatMap((text, i) => (isScannedPageText(text) ? [i + 1] : []))
+  if (!OCR_ENABLED || !scanned.length) return { text: pdf.text, ocrPages: 0 }
+
+  const pages = scanned.slice(0, OCR_MAX_PAGES)
+  const texts = await ocrInWorker(filePath, 'pdf', pages, { timeoutMs: ocrTimeoutMs(pages.length) })
+  const merged = [...pdf.pages]
+  pages.forEach((num, i) => { if (texts[i]?.trim()) merged[num - 1] = texts[i] })
+  if (scanned.length > pages.length) {
+    console.warn(`[ocr] ${path.basename(filePath)} 有 ${scanned.length} 页扫描页，只识别了前 ${pages.length} 页（OCR_MAX_PAGES）`)
+  }
+  return { text: merged.join('\n\n'), ocrPages: texts.filter(t => t.trim()).length }
+}
+
+async function extractIndexableText(job: DocIndexJob): Promise<{ text: string; indexPath: string; ocrPages: number }> {
   const ext = path.extname(job.originalName).toLowerCase()
   const txtPath = job.filePath.replace(/\.[^.]+$/i, '.txt')
 
-  if (BINARY_DOCUMENT_EXTS.has(ext)) {
-    const text = await extractDocumentTextInWorker(job.filePath, ext, { timeoutMs: EXTRACT_TIMEOUT_MS })
-    fs.writeFileSync(txtPath, text, 'utf-8')
-    return { text, indexPath: txtPath }
+  let extracted: { text: string; ocrPages: number }
+  if (OCR_IMAGE_EXTS.has(ext)) {
+    if (!OCR_ENABLED) throw new Error('图片需要文字识别，但服务器关闭了 OCR（OCR_ENABLED=false）')
+    const [text] = await ocrInWorker(job.filePath, 'image', [], { timeoutMs: ocrTimeoutMs(1) })
+    if (!text?.trim()) throw new Error('图片中没有识别到文字')
+    extracted = { text, ocrPages: 1 }
+  } else if (ext === '.pdf') {
+    extracted = await extractPdfWithOcr(job.filePath)
+  } else if (BINARY_DOCUMENT_EXTS.has(ext)) {
+    extracted = { text: await extractDocumentTextInWorker(job.filePath, ext, { timeoutMs: EXTRACT_TIMEOUT_MS }), ocrPages: 0 }
+  } else {
+    return { text: fs.readFileSync(job.filePath, 'utf-8'), indexPath: job.filePath, ocrPages: 0 }
   }
-  return { text: fs.readFileSync(job.filePath, 'utf-8'), indexPath: job.filePath }
+  fs.writeFileSync(txtPath, extracted.text, 'utf-8')
+  return { ...extracted, indexPath: txtPath }
 }
 
 async function processDocIndexJob(job: DocIndexJob): Promise<void> {
@@ -444,8 +483,11 @@ async function processDocIndexJob(job: DocIndexJob): Promise<void> {
   updateDocIndexStatus(job.docId, 'processing')
 
   try {
-    const { text, indexPath } = await extractIndexableText(job)
-    if (!text.trim()) throw new Error('文档没有可索引文本')
+    const { text, indexPath, ocrPages } = await extractIndexableText(job)
+    if (!text.trim()) {
+      throw new Error(OCR_ENABLED ? '文档没有可索引文本' : '文档没有可索引文本（可能是扫描件，服务器关闭了 OCR）')
+    }
+    updateDocOcrPages(job.docId, ocrPages || null)
     await indexDocContentInBatches(job.docId, job.kbId, job.originalName, indexPath, text)
 
     if (isEmbeddingEnabled()) {
@@ -1211,7 +1253,7 @@ const TEXT_PREVIEWABLE_EXTS = new Set([
 function docTextFile(kbId: number, doc: Document): { readPath: string; origExt: string; displayExt: string; extracted: boolean } {
   const origExt = path.extname(doc.original_name).toLowerCase()
   const kbDir   = path.join(STORAGE_PATH, `kb_${kbId}`)
-  const extracted = origExt === '.pdf' || OFFICE_EXTS.has(origExt)
+  const extracted = origExt === '.pdf' || OFFICE_EXTS.has(origExt) || OCR_IMAGE_EXTS.has(origExt)
   return extracted
     ? { readPath: path.join(kbDir, doc.filename.replace(/\.[^.]+$/i, '.txt')), origExt, displayExt: '.txt', extracted }
     : { readPath: path.join(kbDir, doc.filename), origExt, displayExt: origExt, extracted }

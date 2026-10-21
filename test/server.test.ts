@@ -379,6 +379,41 @@ describe('knowledge base access control', () => {
     expect(hits.body[0]).toMatchObject({ original_name: 'policy.pdf' })
   }, 30_000)
 
+  it('reads scanned PDFs and photos with OCR so they become searchable', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    const kbId = (await request(app).post('/api/kbs').set(auth).send({ name: 'OCR KB' }).expect(201)).body.id as number
+
+    await request(app).post(`/api/kbs/${kbId}/docs`).set(auth)
+      .attach('files', fs.readFileSync(path.join(__dirname, 'fixtures', 'zh-scanned.pdf')), '差旅制度扫描件.pdf')
+      .attach('files', fs.readFileSync(path.join(__dirname, 'fixtures', 'zh-scanned.png')), '手机拍照.png')
+      .expect(201)
+
+    type Doc = { id: number; original_name: string; index_status: string; index_error: string | null; ocr_pages: number | null; filename: string }
+    let docs: Doc[] = []
+    for (let i = 0; i < 600 && !(docs.length === 2 && docs.every(d => d.index_status === 'ready' || d.index_status === 'error')); i++) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      docs = (await request(app).get(`/api/kbs/${kbId}/docs`).set(auth).expect(200)).body
+    }
+    const pdf = docs.find(d => d.original_name.endsWith('.pdf'))!
+    const photo = docs.find(d => d.original_name.endsWith('.png'))!
+    expect(pdf).toMatchObject({ index_status: 'ready', ocr_pages: 1 })
+    expect(photo).toMatchObject({ index_status: 'ready', ocr_pages: 1 })
+
+    const hits = await request(app).get(`/api/kbs/${kbId}/search/docs`).query({ q: '住宿标准' }).set(auth).expect(200)
+    expect(hits.body.map((h: { original_name: string }) => h.original_name).sort()).toEqual(['差旅制度扫描件.pdf', '手机拍照.png'])
+    // 扫描页的识别结果和文字页的原文合在一起
+    const preview = await request(app).get(`/api/kbs/${kbId}/docs/${pdf.id}/preview`).set(auth).expect(200)
+    expect(preview.body.content).toContain('出差结束后十五日内提交报销申请')
+    expect(preview.body.content).toContain('meal allowance is 100 yuan per day')
+
+    // 删除时连同识别出的文字一起删掉
+    const txtPath = path.join(testRoot, 'storage', `kb_${kbId}`, photo.filename.replace(/\.png$/, '.txt'))
+    expect(fs.existsSync(txtPath)).toBe(true)
+    await request(app).delete(`/api/kbs/${kbId}/docs/${photo.id}`).set(auth).expect(200)
+    expect(fs.existsSync(txtPath)).toBe(false)
+  }, 90_000)
+
   it('removes docs from storage and search indexes when deleted', async () => {
     const admin = await login('admin', 'Admin@123')
 

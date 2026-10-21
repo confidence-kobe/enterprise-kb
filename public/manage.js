@@ -456,7 +456,7 @@ function docStatusBadge(doc) {
   const status = doc.index_status ?? 'ready'
   const labels = {
     pending: '待解析',
-    processing: '解析中',
+    processing: isImageDoc(doc) ? '识别中' : '解析中',
     ready: doc.index_version ? '已索引' : '未索引',
     error: '失败',
   }
@@ -464,6 +464,18 @@ function docStatusBadge(doc) {
     ? ` title="${escHtml(doc.index_error)}"`
     : ''
   return `<span class="doc-status doc-status-${status}"${title}>${labels[status] ?? status}</span>`
+}
+
+const OCR_IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.bmp']
+
+function isImageDoc(doc) {
+  return OCR_IMAGE_EXTS.some(ext => doc.original_name.toLowerCase().endsWith(ext))
+}
+
+function ocrBadge(doc) {
+  if (!doc.ocr_pages) return ''
+  const what = isImageDoc(doc) ? '这张图片' : `${doc.ocr_pages} 页扫描内容`
+  return ` <span class="doc-source doc-source-ocr" title="${what}的文字由 OCR 识别，可能有个别错字，可点「预览」核对">OCR</span>`
 }
 
 function docSourceBadge(doc) {
@@ -522,7 +534,7 @@ async function loadDocs(append = false) {
     const vecBadge = vectorBadge(doc)
     item.innerHTML = `
       <input type="checkbox" class="doc-cb" data-cb-id="${doc.id}">
-      <span class="doc-name" title="${escHtml(doc.original_name)}">${escHtml(doc.original_name)}${doc.source_type === 'sync' ? ' <span class="doc-source doc-source-sync" title="本地同步">同步</span>' : doc.source_type === 'text' ? ' <span class="doc-source doc-source-text" title="内联文本文档">文本</span>' : ''}</span>
+      <span class="doc-name" title="${escHtml(doc.original_name)}">${escHtml(doc.original_name)}${doc.source_type === 'sync' ? ' <span class="doc-source doc-source-sync" title="本地同步">同步</span>' : doc.source_type === 'text' ? ' <span class="doc-source doc-source-text" title="内联文本文档">文本</span>' : ''}${ocrBadge(doc)}</span>
       ${docStatusBadge(doc)}
       <span class="doc-size">${fmtSize(doc.size)}</span>
       <span>${vecBadge}</span>
