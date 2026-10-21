@@ -169,11 +169,64 @@ test('admin can back up from the settings tab', async ({ page, request }) => {
   expect(errors).toEqual([])
 })
 
+test('creates an API key and uses it from an MCP client', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=api]')
+
+  const card = page.locator('#api-key-card')
+  await expect(card.locator('#api-key-list')).toContainText('还没有密钥')
+  await expect(page.locator('#mcp-snippet')).toContainText('<你的 API 密钥>')
+  await page.fill('#api-key-name', 'Claude Code')
+  await page.click('#api-key-create-btn')
+
+  const keyEl = card.locator('#api-key-new-value')
+  await expect(keyEl).toHaveText(/^ekb_/)
+  const key = (await keyEl.textContent())!
+  await expect(card.locator('.api-key-row')).toHaveCount(1)
+  await expect(card.locator('.api-key-row')).toContainText('Claude Code')
+  await expect(card.locator('.api-key-row')).toContainText('从未使用')
+  // 接入示例自动填入刚创建的密钥
+  await expect(page.locator('#mcp-snippet')).toContainText(`claude mcp add --transport http enterprise-kb ${new URL(page.url()).origin}/mcp`)
+  await expect(page.locator('#mcp-snippet')).toContainText(key)
+  await page.click('[data-snippet=json]')
+  expect(JSON.parse((await page.locator('#mcp-snippet').textContent())!).mcpServers['enterprise-kb'].headers.Authorization).toBe(`Bearer ${key}`)
+  await expect(page.locator('#admin-api-key-card .api-key-row')).toContainText('admin')
+
+  // 像 MCP 客户端一样调用：列出知识库、检索、向知识库提问
+  const rpc = async (method: string, params: unknown) => {
+    const res = await request.post('/mcp', {
+      headers: { Authorization: `Bearer ${key}`, Accept: 'application/json, text/event-stream' },
+      data: { jsonrpc: '2.0', id: 1, method, params },
+    })
+    expect(res.ok()).toBeTruthy()
+    return (await res.json()).result
+  }
+  const call = async (name: string, args: Record<string, unknown>) => (await rpc('tools/call', { name, arguments: args })).content[0].text as string
+  expect((await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e', version: '1' } })).serverInfo.name).toBe('enterprise-kb')
+  expect(await call('list_knowledge_bases', {})).toContain(`kb_id=${kbId}  人事制度`)
+  expect(await call('search_documents', { query: '年假', kb_id: kbId })).toContain('请假制度')
+  expect(await call('ask_knowledge_base', { kb_id: kbId, question: '年假有几天？' })).toBe('年假为每年 10 天。')
+
+  // 撤销后立即失效
+  await page.click('[data-tab=kbs]')
+  await page.click('[data-tab=api]')
+  await expect(card.locator('.api-key-row')).not.toContainText('从未使用')
+  page.once('dialog', dialog => dialog.accept())
+  await card.locator('[data-revoke-key]').click()
+  await expect(page.locator('#toast')).toContainText('密钥已撤销')
+  await expect(card.locator('.api-key-row')).toHaveCount(0)
+  const denied = await request.post('/mcp', { headers: { Authorization: `Bearer ${key}` }, data: { jsonrpc: '2.0', id: 1, method: 'ping' } })
+  expect(denied.status()).toBe(401)
+  expect(errors).toEqual([])
+})
+
 test('admin console fits a phone screen', async ({ page, request }) => {
   const errors = trackErrors(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
-  for (const tab of ['kbs', 'docs', 'feedback', 'settings']) {
+  for (const tab of ['kbs', 'docs', 'feedback', 'api', 'settings']) {
     await page.goto('/manage.html')
     await page.click(`[data-tab=${tab}]`)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)

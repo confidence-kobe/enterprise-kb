@@ -10,6 +10,7 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 
 - User accounts and password hashes in SQLite.
 - JWT signing secret.
+- API key hashes (`api_keys`); the plain key is only returned once, at creation.
 - Knowledge-base metadata, conversations, and messages.
 - Uploaded documents under `STORAGE_PATH`.
 - SQLite database under `DB_PATH`.
@@ -24,6 +25,8 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 | Public HTTP to Express | `src/server.ts` routes | Helmet-style headers, CORS policy, JSON size limits, auth middleware | Backend owner |
 | Anonymous to authenticated user | `/api/auth/login` | Password verification, login rate limit, JWT issuance | Backend owner |
 | User to admin actions | `/api/admin/*`, model config | `requireAdmin` | Backend owner |
+| API key holders (scripts, AI tools) | `Authorization: Bearer ekb_…` on any `requireAuth` route, `POST /mcp` | `requireAuth` hashes the key and acts as its owner; `isApiKeyAllowed` limits keys to `GET`, the two ask routes and `/mcp`; `requireAdmin` and `/api/me/api-keys` refuse keys | Backend owner |
+| MCP clients | `POST /mcp` (`src/mcp.ts`) | same auth as above, `Origin` must be this site or `CORS_ORIGIN`, tools re-check `canUserAccessKb` per call, `ask_knowledge_base` uses the per-user Q&A rate limit | Backend owner |
 | User to KB data | `/api/kbs/*`, conversations, docs | owner/member/public checks through DB helpers | Backend owner |
 | Browser to uploaded files | document preview routes | route auth checks and stored filename lookup | Backend owner |
 | App to SQLite | `src/db.ts` | parameterized queries, foreign keys, WAL | Backend owner |
@@ -39,6 +42,8 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 - JWT auth is centralized in `src/auth.ts`.
 - `requireAuth` re-reads the user on every request: deleted users are rejected, the role comes from the database (not the token), and tokens whose `tv` no longer matches `users.token_version` are rejected. Password changes and role changes increment `token_version`, so existing tokens stop working immediately.
 - Admin-only routes use `requireAdmin`.
+- API keys (`ekb_` + 192 random bits) are stored as SHA-256 hashes and act with their owner's current role and KB access. They are read-only by route allowlist (`isApiKeyAllowed` in `src/auth.ts`): `GET`/`HEAD`, `POST /api/kbs/:id/ask`, `POST /api/ask` and `POST /mcp`. Admin routes and key management refuse keys even for admin owners, so a leaked key cannot mint more keys or change data. Keys survive password changes (they are not tied to `token_version`); revoke them in the API 接入 tab or, as an admin, through `/api/admin/api-keys`. Deleting a user deletes their keys.
+- `/mcp` exposes read-only tools only. Each tool call checks KB access again, so knowledge bases the owner cannot read never appear in results.
 - KB access checks use `canUserAccessKb`, owner checks, or admin checks.
 - Document writes (upload, create/edit text docs) require `canUserWriteKb`: owner, explicit member, or admin. Public visibility grants read and Q&A only. The upload check runs before multer writes the file.
 - Text document versions are stored in the database (`doc_versions`), not under `STORAGE_PATH`, so LLM tools and search never see old content. Anyone who can read the knowledge base can list and read versions; restoring requires `canUserWriteKb` and is audited. Versions are deleted with their document.
@@ -204,6 +209,22 @@ Controls:
 Owner:
 
 - Platform owner.
+
+### Leaked API Key
+
+Risk:
+
+- Anyone holding a key can read everything its owner can read and spend the model budget through Q&A.
+
+Controls:
+
+- Keys cannot write, administer or create keys; Q&A is rate-limited per user.
+- Optional expiry; last-used time shown to the owner and admins; admins can revoke any key.
+- Key creation and revocation are audited, and audited actions taken with a key record its prefix.
+
+Owner:
+
+- Backend owner.
 
 ## Recommended Next Controls
 

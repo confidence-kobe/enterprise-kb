@@ -27,14 +27,15 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          updateKbSystemPrompt, storeChunkVectors, hasVectors, getDocVectorCount, getRelatedDocs,
          upsertFeedback, getFeedbackStats, getAllFeedbackStats,
          getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS, listKnowledgeGapRows,
-         getConfig, setConfig } from './db.js'
+         getConfig, setConfig,
+         createApiKey, getApiKeyById, listApiKeys, countApiKeys, deleteApiKey, MAX_API_KEYS_PER_USER } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
 import { chunkDocument } from './documentChunker.js'
-import { requireAuth, requireAdmin, signToken, verifyPassword, hashPassword } from './auth.js'
+import { requireAuth, requireAdmin, signToken, verifyPassword, hashPassword, generateApiKey } from './auth.js'
 import type { AuthRequest } from './auth.js'
 import { LLMExecutor } from './executor.js'
-import { ALL_TOOLS, collectKbStats, scopeForKbPath } from './tools.js'
+import { ALL_TOOLS, collectKbStats, scopeForKbPath, searchAcrossKbs } from './tools.js'
 import type { ToolScope } from './tools.js'
 import { buildSystemPrompt } from './prompt.js'
 import type { QAEvent } from './tools.js'
@@ -44,6 +45,7 @@ import { BINARY_DOCUMENT_EXTS } from './documentText.js'
 import { extractDocumentTextInWorker } from './extractInWorker.js'
 import { BackupBusyError, BackupScheduler } from './backupScheduler.js'
 import { groupKnowledgeGaps } from './knowledgeGaps.js'
+import { createKnowledgeBaseTools, handleMcpMessage, McpToolError, MCP_PROTOCOL_VERSIONS } from './mcp.js'
 
 const activeProxy = configureProxyFromEnv()
 if (activeProxy) console.log(`[proxy] 出站请求使用代理：${activeProxy}`)
@@ -295,6 +297,11 @@ function audit(
   } = {},
 ): void {
   const authUser = (req as AuthRequest).user
+  const apiKey = (req as AuthRequest).apiKey
+  // 通过接口密钥发起的操作在详情里注明用的是哪把密钥
+  const detail = apiKey && (data.detail === undefined || (typeof data.detail === 'object' && data.detail && !Array.isArray(data.detail)))
+    ? { ...(data.detail as object | undefined), via: 'api_key', apiKey: apiKey.prefix }
+    : data.detail
   createAuditEvent({
     userId: data.userId ?? authUser?.userId ?? null,
     username: data.username ?? authUser?.username ?? null,
@@ -302,7 +309,7 @@ function audit(
     entityType,
     entityId: data.entityId ?? null,
     kbId: data.kbId ?? null,
-    detail: data.detail,
+    detail,
     ip: req.ip,
   })
 }
@@ -686,19 +693,24 @@ const QA_WINDOW_MS  = parsePositiveInt(envValue('QA_RATE_WINDOW_MS'), 60_000, 'Q
 const QA_MAX        = parsePositiveInt(envValue('QA_RATE_MAX'), 20, 'QA_RATE_MAX')
 const qaAttempts    = new Map<number, { count: number; resetAt: number }>()
 
-function qaRateLimit(req: AuthRequest, res: Response, next: NextFunction): void {
-  const userId = req.user?.userId
-  if (!userId) { next(); return }
+/** 按用户计数的问答次数限制（网页、接口和 MCP 共用同一份额度）；超限返回 false */
+function takeQaQuota(userId: number): boolean {
   const now = Date.now()
   const state = qaAttempts.get(userId)
   if (!state || state.resetAt <= now) {
     qaAttempts.set(userId, { count: 1, resetAt: now + QA_WINDOW_MS })
-    next(); return
+    return true
   }
-  if (state.count >= QA_MAX) {
+  if (state.count >= QA_MAX) return false
+  state.count++
+  return true
+}
+
+function qaRateLimit(req: AuthRequest, res: Response, next: NextFunction): void {
+  const userId = req.user?.userId
+  if (userId && !takeQaQuota(userId)) {
     res.status(429).json({ error: '请求过于频繁，请稍后再试' }); return
   }
-  state.count++
   next()
 }
 
@@ -751,6 +763,50 @@ app.patch('/api/me/password', requireAuth, (req: AuthRequest, res) => {
   const updated = getUserById(req.user!.userId)!
   const token = signToken({ userId: updated.id, username: updated.username, role: updated.role, tv: updated.token_version })
   res.json({ ok: true, token })
+})
+
+// ── 接口密钥（只能用登录 Token 管理，密钥本身不能管理密钥） ──────
+
+const API_KEY_EXPIRY_DAYS_MAX = 3650
+
+function publicApiKey(key: ReturnType<typeof listApiKeys>[number]) {
+  const { id, user_id, username, name, prefix, created_at, expires_at, last_used_at } = key
+  return { id, user_id, username, name, prefix, created_at, expires_at, last_used_at }
+}
+
+app.get('/api/me/api-keys', requireAuth, (req: AuthRequest, res) => {
+  res.json({ items: listApiKeys(req.user!.userId).map(publicApiKey), max: MAX_API_KEYS_PER_USER })
+})
+
+app.post('/api/me/api-keys', requireAuth, (req: AuthRequest, res) => {
+  const { name, expiresInDays } = (req.body ?? {}) as { name?: unknown; expiresInDays?: unknown }
+  const keyName = typeof name === 'string' ? name.trim() : ''
+  if (!keyName || keyName.length > 50) {
+    res.status(400).json({ error: '请填写密钥名称（最多 50 字），例如「Claude 桌面版」' }); return
+  }
+  if (expiresInDays != null && (!Number.isInteger(expiresInDays) || (expiresInDays as number) < 1 || (expiresInDays as number) > API_KEY_EXPIRY_DAYS_MAX)) {
+    res.status(400).json({ error: `有效期必须是 1–${API_KEY_EXPIRY_DAYS_MAX} 天，或不填表示永久有效` }); return
+  }
+  if (countApiKeys(req.user!.userId) >= MAX_API_KEYS_PER_USER) {
+    res.status(400).json({ error: `每人最多 ${MAX_API_KEYS_PER_USER} 个密钥，请先撤销不用的密钥` }); return
+  }
+  const generated = generateApiKey()
+  const expiresAt = expiresInDays == null ? null : Math.floor(Date.now() / 1000) + (expiresInDays as number) * 86400
+  const item = createApiKey({
+    userId: req.user!.userId, name: keyName, prefix: generated.prefix, keyHash: generated.hash, expiresAt,
+  })
+  audit(req, 'apikey.create', 'api_key', {
+    entityId: item.id, detail: { name: keyName, prefix: item.prefix, expiresAt },
+  })
+  res.status(201).json({ key: generated.key, item: publicApiKey(item) })
+})
+
+app.delete('/api/me/api-keys/:keyId', requireAuth, (req: AuthRequest, res) => {
+  const key = getApiKeyById(Number(req.params.keyId))
+  if (!key || key.user_id !== req.user!.userId) { res.status(404).json({ error: '密钥不存在' }); return }
+  deleteApiKey(key.id)
+  audit(req, 'apikey.revoke', 'api_key', { entityId: key.id, detail: { name: key.name, prefix: key.prefix } })
+  res.json({ ok: true })
 })
 
 // ── 知识库路由 ────────────────────────────────────────
@@ -1151,6 +1207,16 @@ const TEXT_PREVIEWABLE_EXTS = new Set([
   '.rs', '.json', '.yaml', '.yml', '.toml', '.csv', '.html', '.xml', '.sh',
 ])
 
+/** 文档对应的可读文本文件：PDF、Office 读提取出的 .txt，其他读原文件 */
+function docTextFile(kbId: number, doc: Document): { readPath: string; origExt: string; displayExt: string; extracted: boolean } {
+  const origExt = path.extname(doc.original_name).toLowerCase()
+  const kbDir   = path.join(STORAGE_PATH, `kb_${kbId}`)
+  const extracted = origExt === '.pdf' || OFFICE_EXTS.has(origExt)
+  return extracted
+    ? { readPath: path.join(kbDir, doc.filename.replace(/\.[^.]+$/i, '.txt')), origExt, displayExt: '.txt', extracted }
+    : { readPath: path.join(kbDir, doc.filename), origExt, displayExt: origExt, extracted }
+}
+
 app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res) => {
   const kbId  = Number(req.params.id)
   const docId = Number(req.params.docId)
@@ -1161,25 +1227,12 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
   if (!doc || doc.kb_id !== kbId) {
     res.status(404).json({ error: '文档不存在' }); return
   }
-  const origExt = path.extname(doc.original_name).toLowerCase()
-  const kbDir   = path.join(STORAGE_PATH, `kb_${kbId}`)
-  let readPath: string
-  let displayExt: string
-  if (origExt === '.pdf' || OFFICE_EXTS.has(origExt)) {
-    readPath   = path.join(kbDir, doc.filename.replace(/\.[^.]+$/i, '.txt'))
-    displayExt = '.txt'
-  } else {
-    readPath   = path.join(kbDir, doc.filename)
-    displayExt = origExt
-  }
+  const { readPath, origExt, displayExt, extracted } = docTextFile(kbId, doc)
   if (!TEXT_PREVIEWABLE_EXTS.has(displayExt)) {
     res.status(415).json({ error: '该文件类型不支持预览', type: origExt }); return
   }
   if (!fs.existsSync(readPath)) {
-    const notReadyMsg = (origExt === '.pdf' || OFFICE_EXTS.has(origExt))
-      ? '文档文本提取失败或尚未完成'
-      : '文件不存在'
-    res.status(404).json({ error: notReadyMsg }); return
+    res.status(404).json({ error: extracted ? '文档文本提取失败或尚未完成' : '文件不存在' }); return
   }
   const totalBytes = fs.statSync(readPath).size
   const fd  = fs.openSync(readPath, 'r')
@@ -1426,6 +1479,21 @@ function generateTitle(question: string): string {
   return firstLine.slice(0, 30) + (firstLine.length > 30 ? '…' : '')
 }
 
+/** 单个知识库的问答执行器：工具只能读取该知识库目录 */
+function kbExecutor(kb: KnowledgeBase, onEvent: (e: QAEvent) => void): LLMExecutor {
+  const kbPath = path.join(STORAGE_PATH, `kb_${kb.id}`)
+  return new LLMExecutor({
+    baseUrl:      LLM_BASE_URL,
+    apiKey:       LLM_API_KEY,
+    model:        currentModel,
+    kbPath,
+    scope:        scopeForKbPath(kbPath, kb.id),
+    systemPrompt: buildSystemPrompt(kb.name, kbPath, kb.system_prompt),
+    maxTurns:     MAX_TURNS,
+    onEvent,
+  })
+}
+
 app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => {
   const kbId = Number(req.params.id)
   if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
@@ -1479,19 +1547,8 @@ app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, async (req: AuthRequest, 
     clearInterval(keepalive)
   })
 
-  const kbPath = path.join(STORAGE_PATH, `kb_${kb.id}`)
-
-  const executor = new LLMExecutor({
-    baseUrl:      LLM_BASE_URL,
-    apiKey:       LLM_API_KEY,
-    model:        currentModel,
-    kbPath,
-    scope:        scopeForKbPath(kbPath, kb.id),
-    systemPrompt: buildSystemPrompt(kb.name, kbPath, kb.system_prompt),
-    maxTurns:     MAX_TURNS,
-    onEvent:      (e: QAEvent) => {
-      if (!abortCtrl.signal.aborted) send(e)
-    },
+  const executor = kbExecutor(kb, (e: QAEvent) => {
+    if (!abortCtrl.signal.aborted) send(e)
   })
 
   try {
@@ -1668,7 +1725,102 @@ app.get('/api/search/conversations', requireAuth, (req: AuthRequest, res) => {
   res.json(result)
 })
 
+// ── MCP 服务（Model Context Protocol） ─────────────────────
+
+const MCP_INFO = {
+  name: 'enterprise-kb',
+  title: '企业知识库',
+  version: APP_VERSION,
+  instructions: [
+    '这是企业内部知识库。回答公司制度、流程、产品资料等问题时，先用 search_documents 检索，',
+    '再用 read_document 阅读原文核实，引用时注明文档名和行号。知识库里没有的内容要明确说明，不要猜测。',
+  ].join(''),
+}
+const MCP_READ_MAX_BYTES = 20 * 1024 * 1024
+
+/** 防 DNS 重绑定：浏览器发来的请求必须来自本站或 CORS_ORIGIN 白名单；命令行和桌面客户端不带 Origin */
+function isAllowedMcpOrigin(req: Request): boolean {
+  const origin = req.headers.origin
+  if (!origin) return true
+  if (corsOrigins.includes(origin)) return true
+  try { return new URL(origin).host === req.headers.host } catch { return false }
+}
+
+function mcpMethodNotAllowed(_req: Request, res: Response): void {
+  res.status(405).set('Allow', 'POST').json({ error: 'MCP 接口只接受 POST 请求' })
+}
+app.get('/mcp', mcpMethodNotAllowed)
+app.delete('/mcp', mcpMethodNotAllowed)
+
+app.post('/mcp', (req, res, next) => {
+  if (!isAllowedMcpOrigin(req)) { res.status(403).json({ error: '不允许的来源' }); return }
+  const version = req.headers['mcp-protocol-version']
+  if (typeof version === 'string' && !MCP_PROTOCOL_VERSIONS.includes(version)) {
+    res.status(400).json({ error: `不支持的 MCP 协议版本：${version}` }); return
+  }
+  if (!req.headers.authorization) {
+    res.status(401).set('WWW-Authenticate', 'Bearer realm="enterprise-kb"')
+      .json({ error: '请在请求头中提供 Authorization: Bearer <API 密钥>' })
+    return
+  }
+  next()
+}, requireAuth, async (req: AuthRequest, res) => {
+  const user = req.user!
+  const abortCtrl = new AbortController()
+  res.on('close', () => abortCtrl.abort())
+  const canRead = (kbId: number) => user.role === 'admin' ? Boolean(getKbById(kbId)) : canUserAccessKb(user.userId, kbId)
+
+  const tools = createKnowledgeBaseTools({
+    listKbs: () => (user.role === 'admin' ? getAllKbs() : listKbsForUser(user.userId))
+      .map(kb => ({ id: kb.id, name: kb.name, description: kb.description, docCount: countDocs(kb.id) })),
+    canRead,
+    search: (kbIds, query, limit) => searchAcrossKbs(kbIds, query, limit),
+    readDoc: (kbId, docId) => {
+      const doc = getDocById(docId)
+      if (!doc || doc.kb_id !== kbId) throw new McpToolError(`知识库 ${kbId} 中没有 doc_id=${docId} 的文档`)
+      const { readPath, displayExt, extracted } = docTextFile(kbId, doc)
+      if (!TEXT_PREVIEWABLE_EXTS.has(displayExt)) throw new McpToolError(`《${doc.original_name}》不是文本类文档，无法读取`)
+      if (!fs.existsSync(readPath)) {
+        throw new McpToolError(extracted ? `《${doc.original_name}》的文字还在提取中或提取失败` : `《${doc.original_name}》的文件不存在`)
+      }
+      if (fs.statSync(readPath).size > MCP_READ_MAX_BYTES) throw new McpToolError(`《${doc.original_name}》太大，请用 search_documents 定位后再读`)
+      return { name: doc.original_name, text: fs.readFileSync(readPath, 'utf-8') }
+    },
+    ask: async (kbId, question) => {
+      if (!takeQaQuota(user.userId)) throw new McpToolError('提问过于频繁，请稍后再试')
+      const kb = getKbById(kbId)!
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await kbExecutor(kb, () => {}).run(question, ALL_TOOLS, [] as any, abortCtrl.signal)
+      audit(req, 'qa.ask', 'kb', {
+        entityId: kbId, kbId, detail: { question: question.slice(0, 200), turns: result.turns, channel: 'mcp' },
+      })
+      return result.response.trim() || '（模型没有给出回答）'
+    },
+  })
+
+  const body = req.body as unknown
+  const messages = Array.isArray(body) ? body : [body]
+  const replies = (await Promise.all(messages.map(m => handleMcpMessage(m, MCP_INFO, tools)))).filter(Boolean)
+  if (!replies.length) { res.status(202).end(); return }
+  res.json(Array.isArray(body) ? replies : replies[0])
+})
+
 // ── 管理员路由 ────────────────────────────────────────
+
+app.get('/api/admin/api-keys', requireAdmin, (_req, res) => {
+  res.json({ items: listApiKeys().map(publicApiKey) })
+})
+
+/** 员工离职或密钥泄露时，管理员可以撤销任何人的密钥 */
+app.delete('/api/admin/api-keys/:keyId', requireAdmin, (req: AuthRequest, res) => {
+  const key = getApiKeyById(Number(req.params.keyId))
+  if (!key) { res.status(404).json({ error: '密钥不存在' }); return }
+  deleteApiKey(key.id)
+  audit(req, 'apikey.revoke', 'api_key', {
+    entityId: key.id, detail: { name: key.name, prefix: key.prefix, owner: key.username },
+  })
+  res.json({ ok: true })
+})
 
 app.get('/api/admin/feedback', requireAdmin, (_req, res) => {
   const items = getAllFeedbackStats()

@@ -40,6 +40,8 @@ export default defineConfig({
         LLM_BASE_URL: `http://127.0.0.1:${LLM_PORT}/v1`,
         LLM_API_KEY: 'mock',
         LLM_MODEL: 'mock',
+        // 每个用例都会登录，默认的每 15 分钟 10 次限制不够用
+        LOGIN_RATE_MAX: '100',
         NO_PROXY: '127.0.0.1,localhost',
         no_proxy: '127.0.0.1,localhost',
       },

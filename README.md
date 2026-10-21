@@ -136,6 +136,19 @@ npm ci
 npm run check
 ```
 
+## API And MCP
+
+Each user can create API keys in the admin console's **API 接入** tab. A key has the same knowledge-base access as its owner but can only read and ask questions. Send it as `Authorization: Bearer ekb_…` to the regular API, for example `GET /api/kbs` or `POST /api/kbs/:id/ask`.
+
+The same key connects AI tools over MCP (Model Context Protocol). The server address is `<your site>/mcp`. For Claude Code:
+
+```bash
+claude mcp add --transport http enterprise-kb https://kb.example.com/mcp \
+  --header "Authorization: Bearer ekb_..."
+```
+
+Tools: `list_knowledge_bases`, `search_documents`, `read_document` and `ask_knowledge_base`. The API 接入 tab also shows a JSON config (for Cursor and similar clients) and a curl test command.
+
 ## Release
 
 See [RELEASE.md](RELEASE.md) for the tag-based release process and artifact contents.

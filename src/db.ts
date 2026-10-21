@@ -274,6 +274,21 @@ export function initDb(dbPath: string): void {
     CREATE INDEX IF NOT EXISTS idx_doc_versions_doc ON doc_versions(doc_id, id);
   `)
 
+  // 对外接口密钥：只存 SHA-256 哈希，明文只在创建时返回一次
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name         TEXT    NOT NULL,
+      prefix       TEXT    NOT NULL,
+      key_hash     TEXT    NOT NULL UNIQUE,
+      created_at   INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      expires_at   INTEGER,
+      last_used_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+  `)
+
   // Migration: unicode61 → trigram for CJK support (trigram handles 3+ char Chinese terms;
   // 2-char terms continue to be served by the existing LIKE substring fallback)
   try {
@@ -816,6 +831,77 @@ export function countDocVersions(docId: number): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM doc_versions WHERE doc_id = ?').get(docId) as { n: number }).n
 }
 
+// ── 接口密钥 ──────────────────────────────────────────
+
+/** 每个用户最多保留的接口密钥数 */
+export const MAX_API_KEYS_PER_USER = 20
+
+export interface ApiKey {
+  id: number
+  user_id: number
+  username: string
+  name: string
+  /** 密钥开头几位，用于在列表里辨认，不能用来登录 */
+  prefix: string
+  created_at: number
+  expires_at: number | null
+  last_used_at: number | null
+}
+
+const API_KEY_COLUMNS = `
+  k.id, k.user_id, u.username, k.name, k.prefix, k.created_at, k.expires_at, k.last_used_at
+`
+
+export function createApiKey(data: {
+  userId: number
+  name: string
+  prefix: string
+  keyHash: string
+  expiresAt?: number | null
+}): ApiKey {
+  const result = db.prepare(`
+    INSERT INTO api_keys (user_id, name, prefix, key_hash, expires_at) VALUES (?, ?, ?, ?, ?)
+  `).run(data.userId, data.name, data.prefix, data.keyHash, data.expiresAt ?? null)
+  return getApiKeyById(result.lastInsertRowid as number)!
+}
+
+export function getApiKeyById(id: number): ApiKey | undefined {
+  return db.prepare(`
+    SELECT ${API_KEY_COLUMNS} FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.id = ?
+  `).get(id) as ApiKey | undefined
+}
+
+export function getApiKeyByHash(keyHash: string): ApiKey | undefined {
+  return db.prepare(`
+    SELECT ${API_KEY_COLUMNS} FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.key_hash = ?
+  `).get(keyHash) as ApiKey | undefined
+}
+
+/** 不传 userId 时列出全部用户的密钥（管理员视图） */
+export function listApiKeys(userId?: number): ApiKey[] {
+  return db.prepare(`
+    SELECT ${API_KEY_COLUMNS} FROM api_keys k JOIN users u ON u.id = k.user_id
+    WHERE ? IS NULL OR k.user_id = ?
+    ORDER BY k.id DESC
+  `).all(userId ?? null, userId ?? null) as ApiKey[]
+}
+
+export function countApiKeys(userId: number): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM api_keys WHERE user_id = ?').get(userId) as { n: number }).n
+}
+
+export function deleteApiKey(id: number): void {
+  db.prepare('DELETE FROM api_keys WHERE id = ?').run(id)
+}
+
+/** 记录最近使用时间；一分钟内重复调用不再写库 */
+export function touchApiKey(id: number): void {
+  db.prepare(`
+    UPDATE api_keys SET last_used_at = strftime('%s','now')
+    WHERE id = ? AND (last_used_at IS NULL OR last_used_at < strftime('%s','now') - 60)
+  `).run(id)
+}
+
 // ── 对话操作 ──────────────────────────────────────────
 
 export function listConversations(
@@ -1002,6 +1088,7 @@ export async function indexDocContentInBatches(
 }
 
 export interface DocSearchResult {
+  doc_id:        number
   original_name: string
   file_path:     string
   snippet:       string
@@ -1172,6 +1259,7 @@ export function searchDocContent(
     })
     .slice(0, limit)
     .map(candidate => ({
+      doc_id: candidate.doc_id,
       original_name: candidate.original_name,
       file_path: candidate.file_path,
       snippet: makeSnippet(candidate.content, query, terms),

@@ -1102,3 +1102,147 @@ describe('conversation search and pinning', () => {
     await request(app).get('/api/admin/gaps').set('Authorization', `Bearer ${user.token}`).expect(403)
   })
 })
+
+describe('api keys and MCP', () => {
+  async function waitIndexed(docId: number) {
+    for (let i = 0; i < 200 && !isDocIndexed(docId); i++) await new Promise(r => setTimeout(r, 10))
+    expect(isDocIndexed(docId)).toBe(true)
+  }
+
+  /** id 为 null 时发送通知（不需要回复的消息） */
+  async function mcp(key: string, method: string, params?: unknown, id: number | null = 1) {
+    return request(app).post('/mcp').set('Authorization', `Bearer ${key}`)
+      .send({ jsonrpc: '2.0', ...(id === null ? {} : { id }), method, params })
+  }
+
+  it('creates read-only keys that act with the owner permissions', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: 'key-user', password: 'Keyuser@123', role: 'user' }).expect(201)
+    const user = await login('key-user', 'Keyuser@123')
+    const userAuth = { Authorization: `Bearer ${user.token}` }
+
+    const mine = (await request(app).post('/api/kbs').set(userAuth).send({ name: '密钥测试库' }).expect(201)).body.id as number
+    const secret = (await request(app).post('/api/kbs').set(adminAuth).send({ name: '管理员私有库' }).expect(201)).body.id as number
+
+    await request(app).post('/api/me/api-keys').set(userAuth).send({ name: '' }).expect(400)
+    await request(app).post('/api/me/api-keys').set(userAuth).send({ name: 'x', expiresInDays: 0 }).expect(400)
+    const created = await request(app).post('/api/me/api-keys').set(userAuth).send({ name: 'Claude 桌面版' }).expect(201)
+    const key = created.body.key as string
+    expect(key).toMatch(/^ekb_[\w-]{32}$/)
+    expect(created.body.item).toMatchObject({ name: 'Claude 桌面版', username: 'key-user', expires_at: null, last_used_at: null })
+    expect(key.startsWith(created.body.item.prefix)).toBe(true)
+    // 列表里只有前缀，不会再次返回完整密钥
+    const listed = await request(app).get('/api/me/api-keys').set(userAuth).expect(200)
+    expect(JSON.stringify(listed.body)).not.toContain(key)
+    expect(listed.body.items).toHaveLength(1)
+
+    const keyAuth = { Authorization: `Bearer ${key}` }
+    const kbs = await request(app).get('/api/kbs').set(keyAuth).expect(200)
+    expect(kbs.body.map((kb: { id: number }) => kb.id)).toContain(mine)
+    expect(kbs.body.map((kb: { id: number }) => kb.id)).not.toContain(secret)
+    await request(app).get(`/api/kbs/${secret}`).set(keyAuth).expect(403)
+    expect((await request(app).get('/api/me/api-keys').set(userAuth)).body.items[0].last_used_at).toBeGreaterThan(0)
+
+    // 只读：不能写入、删除、改密码，也不能管理密钥
+    await request(app).post('/api/kbs').set(keyAuth).send({ name: 'nope' }).expect(403)
+    await request(app).post(`/api/kbs/${mine}/docs/text`).set(keyAuth).send({ title: 't', content: 'c' }).expect(403)
+    await request(app).delete(`/api/kbs/${mine}`).set(keyAuth).expect(403)
+    await request(app).patch('/api/me/password').set(keyAuth).send({ currentPassword: 'Keyuser@123', newPassword: 'Other@123' }).expect(403)
+    await request(app).get('/api/me/api-keys').set(keyAuth).expect(403)
+    await request(app).get('/API/ME/API-KEYS/').set(keyAuth).expect(403)
+    await request(app).post('/api/me/api-keys').set(keyAuth).send({ name: 'chain' }).expect(403)
+
+    await request(app).delete(`/api/me/api-keys/${created.body.item.id}`).set(adminAuth).expect(404)
+    await request(app).delete(`/api/me/api-keys/${created.body.item.id}`).set(userAuth).expect(200)
+    await request(app).get('/api/kbs').set(keyAuth).expect(401)
+
+    const log = await request(app).get('/api/admin/audit?action=apikey.create').set(adminAuth).expect(200)
+    expect(log.body.items[0]).toMatchObject({ username: 'key-user' })
+    expect(JSON.stringify(log.body)).not.toContain(key)
+  })
+
+  it('keeps admin keys out of admin routes and lets admins revoke any key', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    const adminKey = (await request(app).post('/api/me/api-keys').set(adminAuth).send({ name: 'admin key' }).expect(201)).body.key
+    await request(app).get('/api/admin/users').set('Authorization', `Bearer ${adminKey}`).expect(403)
+    await request(app).get('/api/admin/api-keys').set('Authorization', `Bearer ${adminKey}`).expect(403)
+
+    const user = await login('key-user', 'Keyuser@123')
+    const userKey = await request(app).post('/api/me/api-keys').set('Authorization', `Bearer ${user.token}`)
+      .send({ name: '离职前的密钥', expiresInDays: 30 }).expect(201)
+    expect(userKey.body.item.expires_at - Math.floor(Date.now() / 1000)).toBeGreaterThan(29 * 86400)
+
+    await request(app).get('/api/admin/api-keys').set('Authorization', `Bearer ${user.token}`).expect(403)
+    const all = await request(app).get('/api/admin/api-keys').set(adminAuth).expect(200)
+    expect(all.body.items.map((k: { username: string }) => k.username)).toEqual(expect.arrayContaining(['admin', 'key-user']))
+    await request(app).delete(`/api/admin/api-keys/${userKey.body.item.id}`).set(adminAuth).expect(200)
+    await request(app).get('/api/kbs').set('Authorization', `Bearer ${userKey.body.key}`).expect(401)
+    await request(app).get('/api/kbs').set('Authorization', 'Bearer ekb_not-a-real-key').expect(401)
+  })
+
+  it('serves knowledge base tools over MCP within the key owner permissions', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: 'mcp-user', password: 'Mcpuser@123', role: 'user' }).expect(201)
+    const user = await login('mcp-user', 'Mcpuser@123')
+    const userAuth = { Authorization: `Bearer ${user.token}` }
+    const kb = (await request(app).post('/api/kbs').set(userAuth).send({ name: 'MCP 制度库', description: '人事制度' }).expect(201)).body.id as number
+    const doc = await request(app).post(`/api/kbs/${kb}/docs/text`).set(userAuth)
+      .send({ title: '差旅制度', content: '第一条 适用范围。\n第二条 出差住宿标准为每晚 450 元。\n第三条 需提前审批。' }).expect(201)
+    await waitIndexed(doc.body.id)
+    const other = (await request(app).post('/api/kbs').set(adminAuth).send({ name: 'MCP 私有库' }).expect(201)).body.id as number
+    const otherDoc = await request(app).post(`/api/kbs/${other}/docs/text`).set(adminAuth)
+      .send({ title: '机密', content: '出差住宿标准机密条款' }).expect(201)
+    const key = (await request(app).post('/api/me/api-keys').set(userAuth).send({ name: 'mcp' }).expect(201)).body.key as string
+
+    await request(app).post('/mcp').send({ jsonrpc: '2.0', id: 1, method: 'ping' })
+      .expect(401).expect('WWW-Authenticate', /Bearer/)
+    await request(app).get('/mcp').set('Authorization', `Bearer ${key}`).expect(405)
+    await request(app).post('/mcp').set('Authorization', `Bearer ${key}`).set('Origin', 'https://evil.example')
+      .send({ jsonrpc: '2.0', id: 1, method: 'ping' }).expect(403)
+
+    const init = await mcp(key, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+    expect(init.status).toBe(200)
+    expect(init.body.result).toMatchObject({ protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'enterprise-kb' } })
+    expect((await mcp(key, 'notifications/initialized', undefined, null)).status).toBe(202)
+
+    const list = await mcp(key, 'tools/list')
+    expect(list.body.result.tools.map((t: { name: string }) => t.name))
+      .toEqual(['list_knowledge_bases', 'search_documents', 'read_document', 'ask_knowledge_base'])
+
+    const call = async (name: string, args: Record<string, unknown>) =>
+      (await mcp(key, 'tools/call', { name, arguments: args })).body.result as { content: Array<{ text: string }>; isError: boolean }
+
+    const kbs = await call('list_knowledge_bases', {})
+    expect(kbs.content[0].text).toContain(`kb_id=${kb}  MCP 制度库（1 份文档）：人事制度`)
+    expect(kbs.content[0].text).not.toContain('MCP 私有库')
+
+    const found = await call('search_documents', { query: '住宿标准' })
+    expect(found.isError).toBe(false)
+    expect(found.content[0].text).toContain(`kb_id=${kb}, doc_id=${doc.body.id}, 第 1 行）`)
+    expect(found.content[0].text).toContain('>>>住宿标准<<<')
+    expect(found.content[0].text).not.toContain('机密')
+
+    const read = await call('read_document', { kb_id: kb, doc_id: doc.body.id, start_line: 2, max_lines: 1 })
+    expect(read.content[0].text).toContain('第 2–2 行（共 3 行）')
+    expect(read.content[0].text).toContain('2\t第二条 出差住宿标准为每晚 450 元。')
+    expect(read.content[0].text).toContain('start_line=3')
+
+    // 越权访问会被拒绝，并作为工具错误返回给模型
+    expect(await call('search_documents', { query: '机密', kb_id: other })).toMatchObject({ isError: true })
+    expect(await call('read_document', { kb_id: other, doc_id: otherDoc.body.id })).toMatchObject({ isError: true })
+    expect(await call('read_document', { kb_id: kb, doc_id: otherDoc.body.id })).toMatchObject({ isError: true })
+    expect(await call('search_documents', {})).toMatchObject({ isError: true })
+
+    expect((await mcp(key, 'tools/call', { name: 'delete_everything' })).body.error.code).toBe(-32602)
+    expect((await mcp(key, 'resources/list')).body.error.code).toBe(-32601)
+
+    const batch = await request(app).post('/mcp').set('Authorization', `Bearer ${key}`)
+      .send([{ jsonrpc: '2.0', id: 1, method: 'ping' }, { jsonrpc: '2.0', method: 'notifications/initialized' }])
+    expect(batch.body).toEqual([{ jsonrpc: '2.0', id: 1, result: {} }])
+  })
+})

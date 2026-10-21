@@ -15,6 +15,7 @@ import * as path from 'node:path'
 import { READ_ONLY_TOOLS } from '../packages/claude-tools-kit/dist/index.js'
 import { adaptTools }      from './toolAdapter.js'
 import { searchDocContent } from './db.js'
+import type { DocSearchResult } from './db.js'
 import { isEmbeddingEnabled, generateEmbedding } from './embedding.js'
 import type OpenAI         from 'openai'
 import { isWithinDirs } from './toolScope.js'
@@ -137,6 +138,23 @@ const KBStatsTool: LLMTool = {
 
 // ── SearchDocs 工具（FTS5 全文检索） ─────────────────────
 
+export type KbSearchResult = DocSearchResult & { kb_id: number }
+
+/** 在多个知识库中检索（配置了向量模型时走混合检索），轮流取各库的靠前结果，避免单个库占满名额 */
+export async function searchAcrossKbs(kbIds: number[], query: string, max: number): Promise<KbSearchResult[]> {
+  let queryEmbedding: Float32Array | undefined
+  if (isEmbeddingEnabled()) {
+    const emb = await generateEmbedding(query)
+    if (emb) queryEmbedding = emb
+  }
+  const perKb = kbIds.map(kbId => searchDocContent(kbId, query, max, queryEmbedding).map(r => ({ ...r, kb_id: kbId })))
+  const results: KbSearchResult[] = []
+  for (let i = 0; results.length < max && perKb.some(r => i < r.length); i++) {
+    for (const r of perKb) if (i < r.length && results.length < max) results.push(r[i])
+  }
+  return results
+}
+
 const SearchDocsTool: LLMTool = {
   definition: {
     name: 'SearchDocs',
@@ -164,20 +182,7 @@ const SearchDocsTool: LLMTool = {
   async execute({ query, limit }, scope) {
     if (!scope.kbIds.length) return '无法识别知识库 ID'
 
-    const queryStr = String(query)
-    const max = Math.min(Number(limit ?? 8), 20)
-    let queryEmbedding: Float32Array | undefined
-    if (isEmbeddingEnabled()) {
-      const emb = await generateEmbedding(queryStr)
-      if (emb) queryEmbedding = emb
-    }
-
-    // 多个知识库时轮流取各库的靠前结果，避免单个库占满名额
-    const perKb = scope.kbIds.map(kbId => searchDocContent(kbId, queryStr, max, queryEmbedding))
-    const results: typeof perKb[number] = []
-    for (let i = 0; results.length < max && perKb.some(r => i < r.length); i++) {
-      for (const r of perKb) if (i < r.length && results.length < max) results.push(r[i])
-    }
+    const results = await searchAcrossKbs(scope.kbIds, String(query), Math.min(Number(limit ?? 8), 20))
     if (!results.length) return '未找到匹配内容，请尝试换用其他关键词或使用 Grep 工具'
 
     return results
