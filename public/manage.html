@@ -10,7 +10,7 @@
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=34">
+  <link rel="stylesheet" href="style.css?v=35">
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
 </head>
@@ -253,7 +253,7 @@
       <div class="section-header">
         <div class="section-title">系统设置</div>
       </div>
-      <div class="card" style="padding:20px;max-width:480px">
+      <div class="card" style="padding:20px;max-width:640px">
         <div class="form-group">
           <label class="form-label">问答模型</label>
           <div style="display:flex;gap:8px">
@@ -263,6 +263,21 @@
           <div style="font-size:12px;color:var(--muted);margin-top:6px">
             切换后新对话立即生效，进行中的流式响应不受影响
           </div>
+        </div>
+      </div>
+      <div class="card backup-card" id="backup-card">
+        <div class="gap-card-head">
+          <div>
+            <div class="feedback-card-title">数据备份</div>
+            <div class="gap-card-sub" id="backup-schedule">加载中…</div>
+          </div>
+          <button class="btn btn-primary btn-sm" id="backup-now-btn">立即备份</button>
+        </div>
+        <div class="backup-last hidden" id="backup-last"></div>
+        <div id="backup-list"></div>
+        <div class="backup-note">
+          备份包含数据库和全部文档，保存在服务器上。建议定期把备份目录复制到另一台机器。
+          恢复需要先停止服务，再在服务器上运行 <code>npm run restore -- 备份名称 --yes</code>，当前数据会被改名保留，不会删除。
         </div>
       </div>
     </div>
@@ -489,6 +504,6 @@
   </div>
 
   <div id="toast" class="hidden"></div>
-  <script src="manage.js?v=23"></script>
+  <script src="manage.js?v=24"></script>
 </body>
 </html>

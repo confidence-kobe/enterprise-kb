@@ -30,6 +30,7 @@ beforeAll(async () => {
   process.env.LOGIN_RATE_WINDOW_MS = '600000'
   process.env.DB_PATH = path.join(testRoot, 'data', 'enterprise-kb-test.db')
   process.env.STORAGE_PATH = path.join(testRoot, 'storage')
+  process.env.BACKUP_DIR = path.join(testRoot, 'backups')
   process.env.LLM_BASE_URL = 'https://example.test/v1'
   process.env.LLM_API_KEY = 'test'
   process.env.LLM_MODEL = 'test-model'
@@ -604,6 +605,52 @@ describe('audit log', () => {
     await request(app).delete(`/api/kbs/${kb.body.id}`).set(adminAuth).expect(200)
     await request(app).delete(`/api/admin/users/${createdUser.body.id}`).set(adminAuth).expect(200)
   })
+})
+
+describe('admin backups', () => {
+  it('lets admins back up from the web and see the backup list', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: 'backup-user', password: 'User@123', role: 'user' }).expect(201)
+    const user = await login('backup-user', 'User@123')
+
+    // 普通用户不能查看或触发备份
+    await request(app).get('/api/admin/backups').set('Authorization', `Bearer ${user.token}`).expect(403)
+    await request(app).post('/api/admin/backups').set('Authorization', `Bearer ${user.token}`).expect(403)
+
+    const before = await request(app).get('/api/admin/backups').set(adminAuth).expect(200)
+    expect(before.body).toMatchObject({ enabled: false, running: false, keep: 7 })
+
+    const created = await request(app).post('/api/admin/backups').set(adminAuth).expect(201)
+    expect(created.body.name).toMatch(/^backup-/)
+    expect(created.body.status.last).toMatchObject({ trigger: 'manual', ok: true, name: created.body.name })
+    expect(created.body.status.backups[0]).toMatchObject({ name: created.body.name })
+    expect(created.body.status.backups[0].counts.users).toBeGreaterThanOrEqual(2)
+    // 列表中不出现服务器上的路径
+    expect(JSON.stringify(created.body)).not.toContain(testRoot)
+
+    // 备份是完整可恢复的：清单 + 通过完整性检查的数据库
+    const { readBackup } = await import('../src/backup.ts')
+    expect(readBackup(path.join(testRoot, 'backups', created.body.name)).counts.users).toBeGreaterThanOrEqual(2)
+
+    const audit = await request(app).get('/api/admin/audit?action=backup.create').set(adminAuth).expect(200)
+    expect(audit.body.items[0]).toMatchObject({ action: 'backup.create', username: 'admin' })
+  }, 30_000)
+
+  it('rejects a second backup while one is running', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    const first = request(app).post('/api/admin/backups').set(adminAuth).then(r => r)
+    // 等第一份备份真正开始后再发第二个请求
+    for (let i = 0; i < 200; i++) {
+      if ((await request(app).get('/api/admin/backups').set(adminAuth)).body.running) break
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const second = await request(app).post('/api/admin/backups').set(adminAuth)
+    expect(second.status).toBe(409)
+    expect((await first).status).toBe(201)
+  }, 30_000)
 })
 
 describe('conversation search and pinning', () => {

@@ -41,6 +41,7 @@ import { buildTrustedHistory } from './conversationHistory.js'
 import { configureProxyFromEnv } from './proxy.js'
 import { BINARY_DOCUMENT_EXTS } from './documentText.js'
 import { extractDocumentTextInWorker } from './extractInWorker.js'
+import { BackupBusyError, BackupScheduler } from './backupScheduler.js'
 import { groupKnowledgeGaps } from './knowledgeGaps.js'
 
 const activeProxy = configureProxyFromEnv()
@@ -109,6 +110,16 @@ function resolveFromProject(envVal: string | undefined, fallback: string): strin
 }
 const STORAGE_PATH = resolveFromProject(process.env.STORAGE_PATH, 'storage')
 const DB_PATH      = resolveFromProject(process.env.DB_PATH,      'data/enterprise-kb.db')
+const BACKUP_DIR   = resolveFromProject(envValue('BACKUP_DIR'), 'backups')
+const BACKUP_KEEP  = parsePositiveInt(envValue('BACKUP_KEEP'), 7, 'BACKUP_KEEP')
+/** 自动备份间隔（小时），0 或不设置表示关闭 */
+const BACKUP_INTERVAL_HOURS = envValue('BACKUP_INTERVAL_HOURS') === '0'
+  ? 0
+  : parsePositiveInt(envValue('BACKUP_INTERVAL_HOURS'), 0, 'BACKUP_INTERVAL_HOURS')
+const APP_VERSION  = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf-8')).version as string }
+  catch { return 'unknown' }
+})()
 const ADMIN_USER   = process.env.ADMIN_USERNAME   ?? 'admin'
 const ADMIN_PASS   = process.env.ADMIN_PASSWORD   ?? 'Admin@123'
 const CORS_ORIGIN  = envValue('CORS_ORIGIN')
@@ -1607,6 +1618,35 @@ app.get('/api/admin/gaps', requireAdmin, (req, res) => {
   res.json({ days, total: rows.length, items: groupKnowledgeGaps(rows) })
 })
 
+/* ── 数据备份 ─────────────────────────────────────── */
+
+export const backupScheduler = new BackupScheduler({
+  paths: { dbPath: DB_PATH, storagePath: STORAGE_PATH, backupDir: BACKUP_DIR },
+  keep: BACKUP_KEEP,
+  intervalHours: BACKUP_INTERVAL_HOURS,
+  appVersion: APP_VERSION,
+})
+
+/** 备份状态与已有备份列表（不返回服务器上的绝对路径） */
+app.get('/api/admin/backups', requireAdmin, (_req, res) => {
+  res.json(backupScheduler.status())
+})
+
+/** 立即备份；备份在后台线程中进行，完成后返回结果 */
+app.post('/api/admin/backups', requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const result = await backupScheduler.runNow('manual')
+    audit(req, 'backup.create', 'backup', {
+      detail: { name: result.name, documents: result.manifest.counts.documents, removed: result.removed.length },
+    })
+    res.status(201).json({ name: result.name, removed: result.removed, status: backupScheduler.status() })
+  } catch (err) {
+    if (err instanceof BackupBusyError) { res.status(409).json({ error: err.message }); return }
+    audit(req, 'backup.failed', 'backup', { detail: { error: (err as Error).message } })
+    res.status(500).json({ error: `备份失败：${(err as Error).message}` })
+  }
+})
+
 app.get('/api/admin/feedback/negative', requireAdmin, (req, res) => {
   const limit  = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
   const offset = Math.max(Number(req.query.offset) || 0, 0)
@@ -1840,6 +1880,10 @@ export function startServer(): void {
   console.log(`管理员账户：${ADMIN_USER}\n`)
   await checkLLM()
   reindexExistingDocs().catch(e => console.warn('[FTS5] 补建索引出错:', e.message))
+  if (backupScheduler.enabled) {
+    backupScheduler.start()
+    console.log(`[backup] 自动备份已开启：每 ${BACKUP_INTERVAL_HOURS} 小时一次，保留最近 ${BACKUP_KEEP} 份（${BACKUP_DIR}）`)
+  }
   })
 }
 

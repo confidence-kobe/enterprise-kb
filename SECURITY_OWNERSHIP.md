@@ -52,7 +52,7 @@ The app is an Express/TypeScript service that serves a static UI, authenticates 
 - Security response headers are set in Express.
 - `.env`, `data/`, `storage/`, database files, logs, and dependency/build output are ignored by git.
 - Docker runtime uses the `node` user and persists data/storage through volumes.
-- Backups (`npm run backup`) contain the full database, including password hashes, and every document. Protect `BACKUP_DIR` and any off-site copies like the live data. `BACKUP_DIR` may not sit inside `STORAGE_PATH`, where LLM tools could read it.
+- Backups (`npm run backup`, the automatic schedule, or 立即备份 in the admin console) contain the full database, including password hashes, and every document. The backup API (`GET`/`POST /api/admin/backups`) is admin-only, returns backup names and counts but never file paths, and offers no download or restore. Protect `BACKUP_DIR` and any off-site copies like the live data. `BACKUP_DIR` may not sit inside `STORAGE_PATH`, where LLM tools could read it.
 - CI runs build, API tests, and dependency audit.
 
 ## Ownership Details

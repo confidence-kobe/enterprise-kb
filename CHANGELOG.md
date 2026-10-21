@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Automatic backups: set `BACKUP_INTERVAL_HOURS` (for example `24`) and the server backs up the database and documents on that schedule, keeping the newest `BACKUP_KEEP` copies. A failed backup is retried an hour later. New installs get daily backups from `.env.example` and `docker-compose.yml`; existing installs stay as they are until the variable is set.
+- Backups in the admin console (设置 tab): shows the schedule, the last result (including errors) and the backup list, with a 立即备份 button. Admin API: `GET`/`POST /api/admin/backups`. Manual backups are recorded in the audit log.
+
+### Changed
+
+- Backups started by the server run in a worker thread, so the app stays responsive while documents are copied (live check with 200 MB of documents: slowest `/healthz` 42 ms).
+
 ## [1.2.0] - 2026-10-18
 
 **Upgrade notes:** requires Node.js 22.19 or newer (Docker users are unaffected). The database is migrated automatically on first start, so no manual steps are needed. Back up first with `npm run backup` as usual.
