@@ -15,10 +15,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Citations in answers are clickable again for Chinese file names (`请假制度.md:12`). Before, only ASCII file names were recognized. Citations that use the stored file name (`1729_ab3.txt:12`) now open the right document and show its original name. Ranges such as `手册.md:12-15` work too.
+- Clicking a citation in a long document jumps to the cited line, even past the first 10,000 characters the preview used to stop at (`GET …/preview?line=N`). The built-in search tool now numbers lines from 1, like the preview and the Read tool, so cited lines are no longer off by one.
+- Uploads say which files were skipped and why: unsupported format, or over 50 MB. More than 20 files are uploaded in batches instead of failing, and upload errors are in Chinese. Before, unsupported files were dropped silently while the message counted them as uploaded.
 - Deleting a Word, Excel or PowerPoint document now also deletes its extracted text file. Previously this was only done for PDFs.
 
 ### Changed
 
+- Audit log is easier to read. Every action has a Chinese label, including Q&A, text edits, version restores and backups. Detail fields are labelled in Chinese, and knowledge bases are shown by name. The action filter is a drop-down. A full action code in `GET /api/admin/audit?action=` now matches exactly, while a keyword still matches loosely. Audit items include `kb_name`.
+- Upgraded vitest to 4.1.12 (vite 8.3), which clears the remaining development-only audit warning. `npm audit` now reports 0 vulnerabilities, including dev dependencies.
 - Document search results now include `doc_id`.
 - Backups started by the server run in a worker thread, so the app stays responsive while documents are copied (live check with 200 MB of documents: slowest `/healthz` 42 ms).
 

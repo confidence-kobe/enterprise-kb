@@ -1876,6 +1876,7 @@ html[data-theme="dark"] .preview-related-pane { background: var(--surface); }
 }
 
 .src-line-highlight { background: #fef9c3; display: block; margin: 0 -16px; padding: 0 16px; }
+.src-gap { color: var(--muted); font-style: italic; }
 
 .preview-modal-body {
   flex: 1;

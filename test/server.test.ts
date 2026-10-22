@@ -323,7 +323,7 @@ describe('knowledge base access control', () => {
       .attach('files', Buffer.from('malware-like payload'), 'bad.exe')
       .expect(400)
       .expect(res => {
-        expect(res.body).toMatchObject({ error: '未接收到文件' })
+        expect(res.body).toMatchObject({ error: '不支持的文件格式：bad.exe' })
       })
   })
 
@@ -413,6 +413,45 @@ describe('knowledge base access control', () => {
     await request(app).delete(`/api/kbs/${kbId}/docs/${photo.id}`).set(auth).expect(200)
     expect(fs.existsSync(txtPath)).toBe(false)
   }, 90_000)
+
+  it('previews long documents around a cited line', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    const kbId = (await request(app).post('/api/kbs').set(auth).send({ name: 'Long Doc KB' }).expect(201)).body.id as number
+    const body = Array.from({ length: 3000 }, (_, i) => `第 ${i + 1} 行：员工手册条款内容`).join('\n')
+    const [doc] = (await request(app).post(`/api/kbs/${kbId}/docs`).set(auth)
+      .attach('files', Buffer.from(body, 'utf-8'), '员工手册.md').expect(201)).body
+
+    const head = await request(app).get(`/api/kbs/${kbId}/docs/${doc.id}/preview`).set(auth).expect(200)
+    expect(head.body).toMatchObject({ startLine: 1, truncated: true })
+    expect(head.body.content).not.toContain('第 2500 行')
+
+    const around = await request(app).get(`/api/kbs/${kbId}/docs/${doc.id}/preview`).query({ line: 2500 }).set(auth).expect(200)
+    expect(around.body.startLine).toBe(2470)
+    expect(around.body.content.split('\n')[30]).toBe('第 2500 行：员工手册条款内容')
+    expect(around.body.truncatedHint).toMatch(/显示第 2470–\d+ 行（共 3000 行）/)
+
+    // 短文档忽略行号，照常返回全文
+    const [short] = (await request(app).post(`/api/kbs/${kbId}/docs`).set(auth)
+      .attach('files', Buffer.from('一\n二\n三', 'utf-8'), 'short.md').expect(201)).body
+    const whole = await request(app).get(`/api/kbs/${kbId}/docs/${short.id}/preview`).query({ line: 3 }).set(auth).expect(200)
+    expect(whole.body).toMatchObject({ startLine: 1, content: '一\n二\n三', truncated: false })
+  })
+
+  it('names unsupported files when nothing in an upload can be used', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    const kbId = (await request(app).post('/api/kbs').set(auth).send({ name: 'Upload Errors KB' }).expect(201)).body.id as number
+    const res = await request(app).post(`/api/kbs/${kbId}/docs`).set(auth)
+      .attach('files', Buffer.from('PK'), '资料包.zip')
+      .attach('files', Buffer.from('MZ'), 'setup.exe')
+      .expect(400)
+    expect(res.body.error).toBe('不支持的文件格式：资料包.zip、setup.exe')
+
+    const tooMany = request(app).post(`/api/kbs/${kbId}/docs`).set(auth)
+    for (let i = 0; i < 21; i++) tooMany.attach('files', Buffer.from('x'), `n${i}.txt`)
+    expect((await tooMany.expect(400)).body.error).toBe('一次最多上传 20 个文件')
+  })
 
   it('removes docs from storage and search indexes when deleted', async () => {
     const admin = await login('admin', 'Admin@123')
@@ -633,12 +672,27 @@ describe('audit log', () => {
       .expect(200)
 
     expect(audit.body.total).toBeGreaterThan(0)
-    expect(audit.body.items.some((item: { action: string; kb_id: number; username: string }) =>
-      item.action === 'kb.create' && item.kb_id === kb.body.id && item.username === 'admin',
+    expect(audit.body.items.some((item: { action: string; kb_id: number; username: string; kb_name: string }) =>
+      item.action === 'kb.create' && item.kb_id === kb.body.id && item.username === 'admin' && item.kb_name === 'Audit KB',
     )).toBe(true)
 
     await request(app).delete(`/api/kbs/${kb.body.id}`).set(adminAuth).expect(200)
     await request(app).delete(`/api/admin/users/${createdUser.body.id}`).set(adminAuth).expect(200)
+
+    // 知识库删除后仍能看到记录，只是没有名称
+    const afterDelete = await request(app).get('/api/admin/audit?action=kb.create').set(adminAuth).expect(200)
+    expect(afterDelete.body.items.find((item: { kb_id: number }) => item.kb_id === kb.body.id)).toMatchObject({ kb_name: null })
+  })
+
+  it('matches full action codes exactly and keywords loosely', async () => {
+    const { createAuditEvent } = await import('../src/db.ts')
+    createAuditEvent({ action: 'qa.ask', entityType: 'kb' })
+    createAuditEvent({ action: 'qa.ask_global', entityType: 'global' })
+    const admin = await login('admin', 'Admin@123')
+    const actions = async (q: string) => (await request(app).get('/api/admin/audit').query({ action: q, limit: 100 })
+      .set('Authorization', `Bearer ${admin.token}`).expect(200)).body.items.map((i: { action: string }) => i.action) as string[]
+    expect(new Set(await actions('qa.ask'))).toEqual(new Set(['qa.ask']))
+    expect(new Set(await actions('qa'))).toEqual(new Set(['qa.ask', 'qa.ask_global']))
   })
 })
 

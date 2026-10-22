@@ -68,8 +68,24 @@ let convBulkMode          = false
 const selectedConvIds     = new Set()
 const LAST_KB_KEY         = 'kb_last_selected_id'
 
-// 文档名 → docId 映射，用于 source-ref 点击预览
-const kbDocMap = new Map()  // originalName (lower) → docId
+// 文件名 → 文档，用于 source-ref 点击预览。AI 引用时可能用原始文件名，
+// 也可能用工具读到的存储文件名（如 1729_ab3.txt），两种都要能对上
+const kbDocMap = new Map()  // 文件名（小写）→ { id, name }
+
+function indexKbDocs(docs) {
+  kbDocMap.clear()
+  for (const d of docs) {
+    const entry = { id: d.id, name: d.original_name }
+    kbDocMap.set(d.original_name.toLowerCase(), entry)
+    if (d.filename) {
+      kbDocMap.set(d.filename.toLowerCase(), entry)
+      kbDocMap.set(d.filename.replace(/\.[^.]+$/, '.txt').toLowerCase(), entry)
+    }
+  }
+}
+
+/** 引用格式 `文件名:行号` 或 `文件名:起-止`；文件名可以是中文或带路径 */
+const SOURCE_REF_RE = /^(.+\.[\w]+):(\d+)(?:[-–]\d+)?$/
 
 /* ── DOM ──────────────────────────────────────────── */
 const messagesEl   = document.getElementById('messages')
@@ -338,7 +354,7 @@ async function selectKb(kb) {
   kbDocMap.clear()
   fetch(`/api/kbs/${kb.id}/docs`, { headers: auth() })
     .then(r => r.json())
-    .then(docs => { docs.forEach(d => kbDocMap.set(d.original_name.toLowerCase(), d.id)) })
+    .then(docs => indexKbDocs(docs))
     .catch(() => {})
 
   // 显示对话历史区块并加载
@@ -825,7 +841,7 @@ function renderMd(el, raw, streaming) {
       .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
         `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`)
       .replace(/`([^`\n]+)`/g, (_, c) =>
-        /[\w.\-/\\]+\.\w+:\d+/.test(c)
+        !c.includes('://') && SOURCE_REF_RE.test(c)
           ? `<span class="source-ref">${c}</span>`
           : `<code>${c}</code>`)
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -842,15 +858,18 @@ function renderMd(el, raw, streaming) {
   // source-ref 补标 + 点击跳转
   el.querySelectorAll('code').forEach(c => {
     const text = c.textContent ?? ''
-    const m = text.match(/^([\w.\-/ \\]+\.\w+):(\d+)$/)
+    const m = text.includes('://') ? null : text.trim().match(SOURCE_REF_RE)
     if (!m) return
     c.className = 'source-ref'
     const basename = m[1].split(/[/\\]/).pop()?.toLowerCase() ?? ''
     const line = Number(m[2])
-    const docId = kbDocMap.get(m[1].toLowerCase()) ?? kbDocMap.get(basename)
-    if (docId) {
-      c.dataset.docId = docId
-      c.addEventListener('click', () => openSrcPreview(docId, m[1], line))
+    const doc = kbDocMap.get(m[1].toLowerCase()) ?? kbDocMap.get(basename)
+    if (doc) {
+      // 存储文件名对用户没有意义，显示成原始文件名
+      if (basename !== doc.name.toLowerCase()) c.textContent = `${doc.name}:${text.trim().slice(m[1].length + 1)}`
+      c.dataset.docId = doc.id
+      c.title = '点击查看原文'
+      c.addEventListener('click', () => openSrcPreview(doc.id, doc.name, line))
     } else {
       c.addEventListener('click', () => showToast(`文档 "${m[1]}" 暂无预览`, 'error'))
     }
@@ -1677,24 +1696,37 @@ async function openSrcPreview(docId, label, targetLine) {
   srcModal.classList.remove('hidden')
 
   try {
-    const res = await fetch(`/api/kbs/${currentKb.id}/docs/${docId}/preview`, { headers: auth() })
-    if (!res.ok) { srcContent.textContent = '加载失败'; return }
+    const res = await fetch(`/api/kbs/${currentKb.id}/docs/${docId}/preview?line=${targetLine}`, { headers: auth() })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      srcContent.textContent = data.error ? `无法预览：${data.error}` : '加载失败'
+      return
+    }
     const data = await res.json()
 
-    // 高亮目标行
+    // 长文档只返回目标行附近的内容，startLine 是返回内容第一行的行号
+    const startLine = data.startLine ?? 1
     const lines = data.content.split('\n')
     const frag  = document.createDocumentFragment()
+    let target = null
+    if (startLine > 1) frag.appendChild(Object.assign(document.createElement('span'), { className: 'src-gap', textContent: `…… 前 ${startLine - 1} 行未显示\n` }))
     lines.forEach((ln, i) => {
       const span = document.createElement('span')
       span.textContent = ln + '\n'
-      if (i + 1 === targetLine) span.className = 'src-line-highlight'
+      if (i + startLine === targetLine) { span.className = 'src-line-highlight'; target = span }
       frag.appendChild(span)
     })
+    if (data.truncated && data.truncatedHint) frag.appendChild(Object.assign(document.createElement('span'), { className: 'src-gap', textContent: `\n…… ${data.truncatedHint}` }))
     srcContent.textContent = ''
     srcContent.appendChild(frag)
 
-    // 滚动到目标行（行高约 19px）
-    srcContent.scrollTop = Math.max(0, (targetLine - 6)) * 19
+    // 滚动到目标行，让它出现在中间
+    if (target) {
+      const offset = target.getBoundingClientRect().top - srcContent.getBoundingClientRect().top + srcContent.scrollTop
+      srcContent.scrollTop = Math.max(0, offset - srcContent.clientHeight / 2)
+    } else {
+      srcContent.scrollTop = 0
+    }
   } catch (e) {
     srcContent.textContent = `错误：${e.message}`
   }

@@ -79,6 +79,22 @@ test('answers a question and records a thumbs-down reason', async ({ page, reque
   expect(errors).toEqual([])
 })
 
+test('opens the cited line when a source with a Chinese file name is clicked', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/')
+  await page.locator('.kb-item', { hasText: '人事制度' }).click()
+  await page.fill('#question-input', '年假有几天？请给出处')
+  await page.keyboard.press('Enter')
+
+  const ref = page.locator('.msg-assistant').last().locator('.source-ref')
+  await expect(ref).toHaveText('请假制度.md:1')
+  await ref.click()
+  await expect(page.locator('#src-modal')).toBeVisible()
+  await expect(page.locator('#src-modal-content .src-line-highlight')).toHaveText('年假为每年 10 天。')
+  expect(errors).toEqual([])
+})
+
 test('admin feedback tab shows stats, reasons and knowledge gaps', async ({ page, request }) => {
   const errors = trackErrors(page)
   const session = await apiLogin(request, 'admin', ADMIN_PASSWORD)
@@ -147,6 +163,37 @@ test('uploads a photo of a paper document and finds it through OCR', async ({ pa
 
   const hits = await (await request.get(`/api/kbs/${kb.id}/search/docs?q=${encodeURIComponent('报销申请')}`, { headers: auth() })).json()
   expect(hits[0]).toMatchObject({ original_name: 'zh-scanned.png' })
+  expect(errors).toEqual([])
+})
+
+test('tells which files were skipped when uploading', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  const kb = await (await request.post('/api/kbs', { headers: auth(), data: { name: '上传提示测试' } })).json()
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=docs]')
+  await page.selectOption('#doc-kb-select', String(kb.id))
+  // 拖放或在文件对话框里选"所有文件"时，不支持的格式也会进来
+  await page.setInputFiles('#file-input', [
+    { name: '会议纪要.txt', mimeType: 'text/plain', buffer: Buffer.from('周会纪要') },
+    { name: '资料包.zip', mimeType: 'application/zip', buffer: Buffer.from('PK') },
+  ])
+  await expect(page.locator('#toast')).toContainText('已上传 1 个文件，正在后台解析；跳过 1 个：资料包.zip（不支持的格式）')
+  await expect(page.locator('.doc-row')).toHaveCount(1)
+  expect(errors).toEqual([])
+})
+
+test('audit log shows readable actions and knowledge base names', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=audit]')
+  await page.selectOption('#audit-action-filter', 'qa.ask')
+  const row = page.locator('#audit-list tr').first()
+  await expect(row).toContainText('知识库问答')
+  await expect(row).toContainText('人事制度')
+  await expect(row).toContainText('问题：')
+  await expect(page.locator('#audit-list')).not.toContainText('qa.ask')
   expect(errors).toEqual([])
 })
 

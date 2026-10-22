@@ -186,7 +186,8 @@ const SearchDocsTool: LLMTool = {
     if (!results.length) return '未找到匹配内容，请尝试换用其他关键词或使用 Grep 工具'
 
     return results
-      .map(r => `【${r.original_name}】（行 ${r.chunk_line}）\n文件路径：${r.file_path}\n${r.snippet}`)
+      // 索引里的行号从 0 开始；给模型看的行号从 1 开始，与 Read 的行号和网页预览一致
+      .map(r => `【${r.original_name}】（第 ${r.chunk_line + 1} 行起）\n文件路径：${r.file_path}\n${r.snippet}`)
       .join('\n\n────\n\n')
   },
 }
