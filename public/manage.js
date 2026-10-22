@@ -919,64 +919,99 @@ function initUpload() {
   })
 }
 
-function uploadFiles(files) {
-  if (!currentDocKbId || !files.length) return
+const UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+/** 服务器每次请求最多接收的文件数 */
+const UPLOAD_BATCH_SIZE = 20
 
-  const form = new FormData()
-  for (const f of files) form.append('files', f)
+/** 上传前检查格式和大小（支持的格式以上传框的 accept 为准），不合格的列出原因 */
+function checkUploadFiles(files) {
+  const accepted = new Set(fileInput.accept.split(',').map(ext => ext.trim().toLowerCase()))
+  const ok = []
+  const skipped = []
+  for (const f of files) {
+    const ext = (f.name.match(/\.[^.]+$/)?.[0] ?? '').toLowerCase()
+    if (!accepted.has(ext)) skipped.push(`${f.name}（不支持的格式）`)
+    else if (f.size > UPLOAD_MAX_BYTES) skipped.push(`${f.name}（超过 50 MB）`)
+    else ok.push(f)
+  }
+  return { ok, skipped }
+}
+
+async function uploadFiles(files) {
+  if (!currentDocKbId || !files.length) return
+  const { ok, skipped } = checkUploadFiles(files)
+  const skippedNote = skipped.length ? `跳过 ${skipped.length} 个：${skipped.slice(0, 3).join('、')}${skipped.length > 3 ? ' 等' : ''}` : ''
+  if (!ok.length) { showToast(skippedNote, 'error'); return }
 
   const progressWrap = document.getElementById('upload-progress-wrap')
+  const progressText = document.getElementById('upload-progress-text')
+  const progressBar  = document.getElementById('upload-progress-bar')
+  uploadZone.style.opacity = '.5'
+  progressWrap.classList.remove('hidden')
+  progressBar.style.background = ''
+
+  const batches = []
+  for (let i = 0; i < ok.length; i += UPLOAD_BATCH_SIZE) batches.push(ok.slice(i, i + UPLOAD_BATCH_SIZE))
+  let uploaded = 0
+  let error = ''
+  for (const [i, batch] of batches.entries()) {
+    const label = batches.length > 1 ? `上传第 ${i + 1}/${batches.length} 批（${batch.length} 个文件）…` : `上传 ${batch.length} 个文件…`
+    try {
+      await sendUploadBatch(batch, label)
+      uploaded += batch.length
+    } catch (e) {
+      error = e.message
+      break
+    }
+  }
+
+  uploadZone.style.opacity = '1'
+  if (uploaded) loadDocs()
+  const parts = []
+  if (uploaded) parts.push(`已上传 ${uploaded} 个文件，正在后台解析`)
+  if (error) parts.push(`${ok.length - uploaded} 个上传失败：${error}`)
+  if (skippedNote) parts.push(skippedNote)
+  const failed = Boolean(error || skippedNote)
+  progressText.textContent = parts.join('；')
+  progressBar.style.width = '100%'
+  if (failed) progressBar.style.background = error ? 'var(--red)' : 'var(--amber, #d97706)'
+  showToast(parts.join('；'), failed ? 'error' : 'success')
+  // 有文件被跳过时多停留一会儿，方便看清是哪些文件
+  setTimeout(() => {
+    progressWrap.classList.add('hidden')
+    progressBar.style.background = ''
+  }, failed ? 8000 : 2000)
+}
+
+function sendUploadBatch(files, label) {
+  const form = new FormData()
+  for (const f of files) form.append('files', f)
   const progressBar  = document.getElementById('upload-progress-bar')
   const progressPct  = document.getElementById('upload-progress-pct')
   const progressText = document.getElementById('upload-progress-text')
-
-  uploadZone.style.opacity = '.5'
-  progressWrap.classList.remove('hidden')
   progressBar.style.width = '0%'
-  progressBar.style.background = ''
   progressPct.textContent = '0%'
-  progressText.textContent = `上传 ${files.length} 个文件…`
+  progressText.textContent = label
 
-  const xhr = new XMLHttpRequest()
-  xhr.open('POST', `/api/kbs/${currentDocKbId}/docs`)
-  xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-
-  xhr.upload.onprogress = (e) => {
-    if (e.lengthComputable) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `/api/kbs/${currentDocKbId}/docs`)
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.upload.onprogress = e => {
+      if (!e.lengthComputable) return
       const pct = Math.round((e.loaded / e.total) * 100)
       progressBar.style.width = pct + '%'
       progressPct.textContent = pct + '%'
     }
-  }
-
-  xhr.onload = () => {
-    uploadZone.style.opacity = '1'
-    progressBar.style.width = '100%'
-    if (xhr.status >= 200 && xhr.status < 300) {
-      progressText.textContent = '上传成功，已加入解析队列'
-      progressPct.textContent = '100%'
-      showToast(`成功上传 ${files.length} 个文件，正在后台解析`, 'success')
-      loadDocs()
-    } else {
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(); return }
       let errMsg = '上传失败'
       try { errMsg = JSON.parse(xhr.responseText)?.error ?? errMsg } catch {}
-      progressText.textContent = errMsg
-      progressBar.style.background = 'var(--red)'
-      showToast(errMsg, 'error')
+      reject(new Error(errMsg))
     }
-    setTimeout(() => {
-      progressWrap.classList.add('hidden')
-      progressBar.style.background = ''
-    }, 2000)
-  }
-
-  xhr.onerror = () => {
-    uploadZone.style.opacity = '1'
-    progressWrap.classList.add('hidden')
-    showToast('网络错误，上传失败', 'error')
-  }
-
-  xhr.send(form)
+    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.send(form)
+  })
 }
 
 /* ── 用户管理 ──────────────────────────────────────── */
@@ -1093,6 +1128,35 @@ const auditActionLabels = {
   'config.model_update': '切换模型',
   'apikey.create': '创建 API 密钥',
   'apikey.revoke': '撤销 API 密钥',
+  'doc.update_text': '编辑文档',
+  'doc.restore_version': '恢复历史版本',
+  'qa.ask': '知识库问答',
+  'qa.ask_global': '跨库问答',
+  'backup.create': '创建备份',
+  'backup.failed': '备份失败',
+}
+
+const auditEntityLabels = {
+  auth: '登录', user: '用户', kb: '知识库', kb_member: '成员', doc: '文档', conversation: '对话',
+  config: '配置', backup: '备份', api_key: 'API 密钥', global: '全部知识库',
+}
+
+/** 详情里常见字段的中文名；没列出的字段原样显示 */
+const auditDetailLabels = {
+  question: '问题', turns: '检索轮数', convId: '对话', kbCount: '知识库数', channel: '渠道',
+  title: '标题', name: '名称', names: '文件', count: '数量', size: '大小', original_name: '文件',
+  username: '用户名', role: '角色', is_public: '公开', model: '模型',
+  requested: '请求数', deleted: '已删除', indexed: '已索引', failed: '失败', total: '总数',
+  added: '新增', updated: '更新', removed: '移除', queued: '排队', unchanged: '未变', scanned: '扫描', skipped: '跳过',
+  errors: '错误', error: '错误', documents: '文档数', versionId: '版本', changed: '有改动',
+  path: '路径', sourcePath: '同步目录', prefix: '密钥', owner: '所属用户', expiresAt: '过期时间',
+  via: '方式', apiKey: '密钥',
+}
+
+const auditDetailValues = {
+  via: { api_key: 'API 密钥' },
+  channel: { mcp: 'MCP' },
+  role: { admin: '管理员', user: '普通用户' },
 }
 
 function initAuditLog() {
@@ -1104,7 +1168,8 @@ function initAuditLog() {
 
   refreshBtn.addEventListener('click', () => loadAuditLog(false))
   loadMoreBtn.addEventListener('click', () => loadAuditLog(true))
-  ;[actionInput, userInput].filter(Boolean).forEach(input => {
+  actionInput?.addEventListener('change', () => loadAuditLog(false))
+  ;[userInput].filter(Boolean).forEach(input => {
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter') loadAuditLog(false)
     })
@@ -1113,6 +1178,12 @@ function initAuditLog() {
 
 async function loadAuditLog(append = false) {
   if (!isAdmin || auditLoading || !auditList) return
+  // 操作下拉框在第一次打开审计页时填充（页面初始化时操作名称表还没定义）
+  const actionSelect = document.getElementById('audit-action-filter')
+  if (actionSelect && actionSelect.options.length <= 1) {
+    actionSelect.insertAdjacentHTML('beforeend', Object.entries(auditActionLabels)
+      .map(([code, label]) => `<option value="${escHtml(code)}">${escHtml(label)}</option>`).join(''))
+  }
   auditLoading = true
   if (!append) {
     auditOffset = 0
@@ -1312,11 +1383,21 @@ function renderAuditRow(item) {
     <td style="white-space:nowrap;color:var(--muted)">${fmtDateTime(item.created_at)}</td>
     <td>${escHtml(item.username || '系统')}</td>
     <td><span class="audit-action">${escHtml(auditActionLabels[item.action] || item.action)}</span></td>
-    <td>${escHtml(item.entity_type)}${item.entity_id ? ` #${item.entity_id}` : ''}</td>
-    <td>${item.kb_id ? `#${item.kb_id}` : ''}</td>
+    <td>${escHtml(auditEntityLabels[item.entity_type] || item.entity_type)}${item.entity_id ? ` #${item.entity_id}` : ''}</td>
+    <td>${item.kb_id ? (item.kb_name ? escHtml(item.kb_name) : `<span style="color:var(--muted)">#${item.kb_id}（已删除）</span>`) : ''}</td>
     <td class="audit-detail" title="${escHtml(detail)}">${escHtml(detail)}</td>
   `
   return tr
+}
+
+function formatAuditValue(key, val) {
+  if (auditDetailValues[key]?.[val]) return auditDetailValues[key][val]
+  if (typeof val === 'boolean') return val ? '是' : '否'
+  if (key === 'size' && typeof val === 'number') return fmtBytes(val)
+  if (key === 'expiresAt' && typeof val === 'number') return fmtTime(val)
+  if (Array.isArray(val)) return val.map(v => (typeof v === 'object' ? JSON.stringify(v) : v)).join('、')
+  if (val && typeof val === 'object') return JSON.stringify(val)
+  return String(val)
 }
 
 function formatAuditDetail(detail) {
@@ -1325,7 +1406,8 @@ function formatAuditDetail(detail) {
     const value = JSON.parse(detail)
     if (value && typeof value === 'object') {
       return Object.entries(value)
-        .map(([key, val]) => `${key}: ${typeof val === 'object' ? JSON.stringify(val) : val}`)
+        .filter(([, val]) => val !== null && val !== undefined && val !== '')
+        .map(([key, val]) => `${auditDetailLabels[key] || key}：${formatAuditValue(key, val)}`)
         .join(' · ')
         .slice(0, 240)
     }

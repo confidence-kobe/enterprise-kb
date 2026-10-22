@@ -405,6 +405,11 @@ function scanSyncDirectory(root: string): { files: SyncFile[]; skipped: SyncSkip
   return { files, skipped, errors }
 }
 
+/** multer 在 Windows 上把中文文件名按 Latin-1 读取，需转回 UTF-8 */
+function uploadName(originalname: string): string {
+  return Buffer.from(originalname, 'latin1').toString('utf8')
+}
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => {
@@ -421,8 +426,13 @@ const upload = multer({
     },
   }),
   limits: { fileSize: 50 * 1024 * 1024 },   // 50MB
-  fileFilter: (_req, file, cb) => {
+  fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase()
+    if (!UPLOAD_EXTS.has(ext)) {
+      // 记下被跳过的文件，全部不支持时在错误信息里说明
+      const r = req as Request & { skippedFiles?: string[] }
+      ;(r.skippedFiles ??= []).push(uploadName(file.originalname))
+    }
     cb(null, UPLOAD_EXTS.has(ext))
   },
 })
@@ -1076,11 +1086,16 @@ app.post('/api/kbs/:id/docs', requireAuth, requireKbUploadAccess, upload.array('
   const kbId = Number(req.params.id)
 
   const files = req.files as Express.Multer.File[] | undefined
-  if (!files?.length) { res.status(400).json({ error: '未接收到文件' }); return }
+  if (!files?.length) {
+    const skipped = (req as AuthRequest & { skippedFiles?: string[] }).skippedFiles ?? []
+    res.status(400).json({
+      error: skipped.length ? `不支持的文件格式：${skipped.slice(0, 5).join('、')}` : '未接收到文件',
+    })
+    return
+  }
 
   const docs = files.map(f => {
-    // multer 在 Windows 上把中文文件名按 Latin-1 读取，需转回 UTF-8
-    const origName = Buffer.from(f.originalname, 'latin1').toString('utf8')
+    const origName = uploadName(f.originalname)
     const doc = createDoc({ kbId, filename: f.filename, originalName: origName, size: f.size, indexStatus: 'pending' })
     enqueueDocIndex({ docId: doc.id, kbId, originalName: origName, filePath: f.path })
     return doc
@@ -1244,6 +1259,10 @@ app.post('/api/kbs/:id/docs/:docId/versions/:versionId/restore', requireAuth, (r
 })
 
 const PREVIEW_MAX_CHARS = 10_000
+/** 按行号预览时，目标行之前保留的行数 */
+const PREVIEW_LINES_BEFORE = 30
+/** 超过这个大小的文本不做按行号定位，只预览开头 */
+const PREVIEW_AROUND_MAX_BYTES = 64 * 1024 * 1024
 const TEXT_PREVIEWABLE_EXTS = new Set([
   '.txt', '.md', '.markdown', '.ts', '.js', '.py', '.java', '.go',
   '.rs', '.json', '.yaml', '.yml', '.toml', '.csv', '.html', '.xml', '.sh',
@@ -1277,6 +1296,24 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
     res.status(404).json({ error: extracted ? '文档文本提取失败或尚未完成' : '文件不存在' }); return
   }
   const totalBytes = fs.statSync(readPath).size
+  const line = Number(req.query.line)
+  // 引用跳转：长文档里被引用的行不在开头时，返回那一行附近的内容
+  if (Number.isInteger(line) && line > 0 && totalBytes > PREVIEW_MAX_CHARS * 3 && totalBytes <= PREVIEW_AROUND_MAX_BYTES) {
+    const lines = fs.readFileSync(readPath, 'utf-8').split('\n')
+    const startLine = Math.max(1, Math.min(line, lines.length) - PREVIEW_LINES_BEFORE)
+    let end = startLine - 1
+    let chars = 0
+    while (end < lines.length && (end === startLine - 1 || chars + lines[end].length < PREVIEW_MAX_CHARS)) {
+      chars += lines[end].length + 1
+      end++
+    }
+    res.json({
+      filename: doc.original_name, ext: origExt, displayExt, totalBytes,
+      content: lines.slice(startLine - 1, end).join('\n'), startLine, truncated: true,
+      truncatedHint: `内容过长，显示第 ${startLine}–${end} 行（共 ${lines.length} 行）`,
+    })
+    return
+  }
   const fd  = fs.openSync(readPath, 'r')
   const buf = Buffer.alloc(Math.min(totalBytes, PREVIEW_MAX_CHARS * 3))
   const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0)
@@ -1285,7 +1322,7 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
   if (content.length > PREVIEW_MAX_CHARS) content = content.slice(0, PREVIEW_MAX_CHARS)
   const truncated = totalBytes > PREVIEW_MAX_CHARS * 3 || content.length >= PREVIEW_MAX_CHARS
   res.json({
-    filename: doc.original_name, ext: origExt, displayExt, totalBytes, content, truncated,
+    filename: doc.original_name, ext: origExt, displayExt, totalBytes, content, startLine: 1, truncated,
     truncatedHint: truncated
       ? `内容过长，仅显示前 ${(content.length / 1024).toFixed(1)} KB（共 ${(totalBytes / 1024).toFixed(1)} KB）`
       : null,
@@ -2124,7 +2161,12 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (res.headersSent) return
   if (err instanceof multer.MulterError) {
     const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400
-    res.status(status).json({ error: err.message })
+    const messages: Partial<Record<multer.ErrorCode, string>> = {
+      LIMIT_FILE_SIZE: '文件超过 50 MB，本次上传未保存',
+      LIMIT_FILE_COUNT: '一次最多上传 20 个文件',
+      LIMIT_UNEXPECTED_FILE: '一次最多上传 20 个文件',
+    }
+    res.status(status).json({ error: messages[err.code] ?? `上传失败：${err.message}` })
     return
   }
   if (err instanceof SyntaxError && 'body' in err) {

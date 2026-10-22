@@ -90,6 +90,8 @@ export interface AuditEvent {
   detail: string | null
   ip: string | null
   created_at: number
+  /** 知识库当前名称；知识库已删除时为 null */
+  kb_name?: string | null
 }
 
 // ── 初始化 ────────────────────────────────────────────
@@ -562,28 +564,35 @@ export function listAuditEvents(data: {
   const where: string[] = []
   const params: Array<string | number> = []
   if (data.action) {
-    where.push('action LIKE ?')
-    params.push(`%${data.action}%`)
+    // 完整的操作代码（如 qa.ask）精确匹配，避免把 qa.ask_global 也查出来；其余按关键字模糊匹配
+    if (/^[a-z_]+\.[a-z_]+$/.test(data.action)) {
+      where.push('e.action = ?')
+      params.push(data.action)
+    } else {
+      where.push('e.action LIKE ?')
+      params.push(`%${data.action}%`)
+    }
   }
   if (data.username) {
-    where.push('username LIKE ?')
+    where.push('e.username LIKE ?')
     params.push(`%${data.username}%`)
   }
   if (data.kbId != null) {
-    where.push('kb_id = ?')
+    where.push('e.kb_id = ?')
     params.push(data.kbId)
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const limit = data.limit ?? 50
   const offset = data.offset ?? 0
   const items = db.prepare(`
-    SELECT * FROM audit_events
+    SELECT e.*, kb.name AS kb_name FROM audit_events e
+    LEFT JOIN knowledge_bases kb ON kb.id = e.kb_id
     ${whereSql}
-    ORDER BY created_at DESC, id DESC
+    ORDER BY e.created_at DESC, e.id DESC
     LIMIT ? OFFSET ?
   `).all(...params, limit, offset) as AuditEvent[]
   const totalRow = db.prepare(`
-    SELECT COUNT(*) AS cnt FROM audit_events
+    SELECT COUNT(*) AS cnt FROM audit_events e
     ${whereSql}
   `).get(...params) as { cnt: number }
   return { items, total: totalRow.cnt }

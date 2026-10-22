@@ -194,7 +194,9 @@
       <div class="section-header">
         <div class="section-title">审计日志</div>
         <div class="audit-filter-bar">
-          <input class="input input-sm" id="audit-action-filter" placeholder="操作">
+          <select class="input input-sm" id="audit-action-filter" aria-label="按操作筛选">
+            <option value="">全部操作</option>
+          </select>
           <input class="input input-sm" id="audit-user-filter" placeholder="用户">
           <button class="btn btn-secondary btn-sm" id="audit-refresh-btn">刷新</button>
         </div>

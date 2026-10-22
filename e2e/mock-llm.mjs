@@ -1,6 +1,6 @@
 /**
  * 端到端测试用的 OpenAI 兼容模型（流式）。
- * 问题里含"补贴"时回答"未找到相关内容"，用于知识空白测试；其他问题给出固定回答。
+ * 问题里含"补贴"时回答"未找到相关内容"，用于知识空白测试；含"出处"时回答带引用；其他问题给出固定回答。
  */
 import http from 'node:http'
 
@@ -19,7 +19,9 @@ http.createServer((req, res) => {
     }
     const messages = JSON.parse(body || '{}').messages ?? []
     const question = String(messages[messages.length - 1]?.content ?? '')
-    const answer = question.includes('补贴') ? '抱歉，知识库中未找到相关内容。' : '年假为每年 10 天。'
+    const answer = question.includes('补贴') ? '抱歉，知识库中未找到相关内容。'
+      : question.includes('出处') ? '年假为每年 10 天，见 `请假制度.md:1`。'
+      : '年假为每年 10 天。'
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.write(chunk({ content: answer }))
     res.write(chunk({}, 'stop'))
