@@ -10,7 +10,7 @@
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=38">
+  <link rel="stylesheet" href="style.css?v=39">
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
 </head>
@@ -174,14 +174,16 @@
           新建用户
         </button>
       </div>
-      <div class="card" style="padding:0;overflow:hidden">
+      <div class="card user-table-wrap" style="padding:0">
         <table class="user-table">
           <thead>
             <tr>
               <th>用户名</th>
               <th>角色</th>
+              <th>最近活动</th>
+              <th title="网页、API 和 MCP 的提问次数">近 30 天提问</th>
               <th>创建时间</th>
-              <th style="width:230px">操作</th>
+              <th style="width:190px">操作</th>
             </tr>
           </thead>
           <tbody id="user-list"></tbody>
@@ -429,7 +431,8 @@
         <div class="form-group" style="margin-bottom:0">
           <label class="form-label">添加成员（输入用户名）</label>
           <div style="display:flex;gap:8px">
-            <input class="input" id="member-username" placeholder="用户名" style="flex:1">
+            <input class="input" id="member-username" placeholder="用户名" style="flex:1" list="member-suggestions" autocomplete="off">
+            <datalist id="member-suggestions"></datalist>
             <button class="btn btn-primary btn-sm" id="member-add-btn" style="white-space:nowrap">添加</button>
           </div>
         </div>
@@ -601,6 +604,6 @@
   </div>
 
   <div id="toast" class="hidden"></div>
-  <script src="manage.js?v=28"></script>
+  <script src="manage.js?v=29"></script>
 </body>
 </html>

@@ -663,6 +663,59 @@ describe('knowledge base access control', () => {
   })
 })
 
+describe('knowledge base health and user activity', () => {
+  it('summarizes documents, recent questions, satisfaction and gaps', async () => {
+    const { createAuditEvent, createConversation, upsertFeedback } = await import('../src/db.ts')
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    const kbId = (await request(app).post('/api/kbs').set(auth).send({ name: 'Health KB' }).expect(201)).body.id as number
+    await request(app).post(`/api/kbs/${kbId}/docs/text`).set(auth).send({ title: '制度', content: '第一条 内容。' }).expect(201)
+    await request(app).post(`/api/kbs/${kbId}/docs`).set(auth)
+      .attach('files', Buffer.from('a,b\n1,2'), 'data.csv')
+      .attach('files', Buffer.from('not a pdf'), 'broken.pdf')
+      .expect(201)
+
+    createAuditEvent({ userId: admin.user.id, action: 'qa.ask', entityType: 'kb', kbId })
+    createAuditEvent({ userId: admin.user.id, action: 'qa.ask', entityType: 'kb', kbId })
+    const conv = createConversation(admin.user.id, kbId, 'q')
+    upsertFeedback(conv.id, admin.user.id, 1)
+
+    let health: { docs: Record<string, unknown>; qa: Record<string, number>; gaps: number; canManage: boolean } | undefined
+    for (let i = 0; i < 100; i++) {
+      const res = await request(app).get(`/api/kbs/${kbId}/stats`).set(auth).expect(200)
+      health = res.body.health
+      if ((health!.docs.processing as number) === 0) break
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    expect(health).toMatchObject({
+      docs: { total: 3, ready: 2, error: 1, processing: 0, ocr: 0 },
+      qa: { questions: 2, activeUsers: 1, positive: 1, negative: 0 },
+      gaps: 0,
+      canManage: true,
+    })
+    expect((health!.docs.byType as Array<{ ext: string }>).map(t => t.ext).sort()).toEqual(['.csv', '.md', '.pdf'])
+  }, 30_000)
+
+  it('shows when each user was last active and how much they asked', async () => {
+    const { createAuditEvent } = await import('../src/db.ts')
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    const created = await request(app).post('/api/admin/users').set(auth)
+      .send({ username: 'activity-user', password: 'Activity@123', role: 'user' }).expect(201)
+    const idle = await request(app).post('/api/admin/users').set(auth)
+      .send({ username: 'idle-user', password: 'Idle@1234', role: 'user' }).expect(201)
+    await login('activity-user', 'Activity@123')
+    createAuditEvent({ userId: created.body.id, action: 'qa.ask', entityType: 'kb' })
+    createAuditEvent({ userId: created.body.id, action: 'qa.ask_global', entityType: 'global' })
+    // 登录失败不算活跃
+    createAuditEvent({ userId: idle.body.id, action: 'auth.login_failed', entityType: 'auth' })
+
+    const users = (await request(app).get('/api/admin/users').set(auth).expect(200)).body as Array<{ username: string; last_active_at: number | null; questions_30d: number }>
+    expect(users.find(u => u.username === 'activity-user')).toMatchObject({ questions_30d: 2, last_active_at: expect.any(Number) })
+    expect(users.find(u => u.username === 'idle-user')).toMatchObject({ questions_30d: 0, last_active_at: null })
+  })
+})
+
 describe('audit log', () => {
   it('records administrative actions and restricts audit reads to admins', async () => {
     const adminLogin = await request(app)

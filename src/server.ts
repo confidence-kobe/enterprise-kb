@@ -28,7 +28,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          upsertFeedback, getFeedbackStats, getAllFeedbackStats,
          getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS, listKnowledgeGapRows,
          getConfig, setConfig,
-         recordGapEvent, NOT_FOUND_MARKER,
+         recordGapEvent, NOT_FOUND_MARKER, getKbHealth, listUserActivity,
          createApiKey, getApiKeyById, listApiKeys, countApiKeys, deleteApiKey, MAX_API_KEYS_PER_USER } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
@@ -1450,6 +1450,9 @@ app.delete('/api/kbs/:id/docs/:docId', requireAuth, (req: AuthRequest, res) => {
 
 // ── 统计路由 ──────────────────────────────────────────
 
+/** 统计面板和用户列表里"近期"的天数 */
+const STATS_DAYS = 30
+
 app.get('/api/kbs/:id/stats', requireAuth, (req: AuthRequest, res) => {
   const kbId = Number(req.params.id)
   if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
@@ -1482,6 +1485,8 @@ app.get('/api/kbs/:id/stats', requireAuth, (req: AuthRequest, res) => {
   }
 
   const vectoredDocs = docs.filter(d => getDocVectorCount(d.id) > 0).length
+  const since = Math.floor(Date.now() / 1000) - STATS_DAYS * 86400
+  const health = getKbHealth(kbId, since)
   if (isEmbeddingEnabled()) {
     lines.push(``, `向量覆盖：${vectoredDocs}/${docs.length} 个文档已向量化`)
   }
@@ -1496,6 +1501,13 @@ app.get('/api/kbs/:id/stats', requireAuth, (req: AuthRequest, res) => {
     byExtension: fileStats.byExtension,
     vectoredDocs,
     embeddingEnabled: isEmbeddingEnabled(),
+    days: STATS_DAYS,
+    health: {
+      ...health,
+      // 只给数量：知识空白里是其他人的提问，公开知识库的读者不应看到原文
+      gaps: groupKnowledgeGaps(listKnowledgeGapRows(since, kbId)).length,
+      canManage: canManageKb(kb, req.user),
+    },
   })
 })
 
@@ -2059,7 +2071,12 @@ app.get('/api/admin/audit', requireAdmin, (req, res) => {
 })
 
 app.get('/api/admin/users', requireAdmin, (_req, res) => {
-  res.json(listUsers())
+  const activity = listUserActivity(Math.floor(Date.now() / 1000) - STATS_DAYS * 86400)
+  res.json(listUsers().map(u => ({
+    ...u,
+    last_active_at: activity.get(u.id)?.last_active_at ?? null,
+    questions_30d: activity.get(u.id)?.questions ?? 0,
+  })))
 })
 
 app.post('/api/admin/users', requireAdmin, (req, res) => {

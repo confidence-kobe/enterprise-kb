@@ -1031,13 +1031,17 @@ async function loadUsers() {
           <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理员</option>
         </select>
       </td>
+      <td style="color:var(--muted)" title="${u.last_active_at ? escHtml(fmtDateTime(u.last_active_at)) : ''}">${u.last_active_at ? fmtRelativeTime(u.last_active_at) : '从未使用'}</td>
+      <td class="user-num">${u.questions_30d ?? 0}</td>
       <td style="color:var(--muted)">${fmtTime(u.created_at)}</td>
-      <td style="display:flex;gap:6px;align-items:center">
-        ${isSelf
-          ? '<span style="color:var(--muted);font-size:12px">当前用户</span>'
-          : `<button class="btn btn-secondary btn-sm" data-action="reset-pwd" data-uid="${u.id}">重置密码</button>
-             <button class="btn btn-danger btn-sm" data-action="del-user" data-uid="${u.id}">删除</button>`
-        }
+      <td>
+        <div class="user-actions">
+          ${isSelf
+            ? '<span style="color:var(--muted);font-size:12px">当前用户</span>'
+            : `<button class="btn btn-secondary btn-sm" data-action="reset-pwd" data-uid="${u.id}">重置密码</button>
+               <button class="btn btn-danger btn-sm" data-action="del-user" data-uid="${u.id}">删除</button>`
+          }
+        </div>
       </td>
     `
     if (!isSelf) {
@@ -1458,6 +1462,24 @@ async function openMembersModal(kb) {
   await loadMembers(kb.id)
 }
 
+/** 管理员添加成员时提示可选的用户名（不含所有者和已有成员）；普通用户看不到用户列表 */
+async function fillMemberSuggestions(kbId, members) {
+  const datalist = document.getElementById('member-suggestions')
+  datalist.innerHTML = ''
+  if (!isAdmin) return
+  try {
+    const res = await fetch('/api/admin/users', { headers: auth() })
+    if (!res.ok) return
+    const users = await res.json()
+    const ownerId = allKbs.find(k => k.id === kbId)?.owner_id
+    const taken = new Set(members.map(m => m.id))
+    datalist.innerHTML = users
+      .filter(u => u.id !== ownerId && !taken.has(u.id))
+      .map(u => `<option value="${escHtml(u.username)}">${u.role === 'admin' ? '管理员' : ''}</option>`)
+      .join('')
+  } catch { /* 提示不可用时仍可手动输入 */ }
+}
+
 async function loadMembers(kbId) {
   const list = document.getElementById('member-list')
   list.innerHTML = '<div style="color:var(--muted);font-size:13px">加载中…</div>'
@@ -1465,6 +1487,7 @@ async function loadMembers(kbId) {
   const members = await res.json()
 
   list.innerHTML = ''
+  fillMemberSuggestions(kbId, members)
   if (!members.length) {
     list.innerHTML = '<div style="color:var(--muted);font-size:13px">暂无额外成员（仅限公开访问或创建者）</div>'
     return
@@ -2072,6 +2095,20 @@ function escHtml(s) {
 
 function fmtTime(ts) {
   return new Date(ts * 1000).toLocaleDateString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit' })
+}
+
+/** 最近活动时间：今天显示时刻，一周内显示几天前，更早显示日期 */
+function fmtRelativeTime(ts) {
+  const date = new Date(ts * 1000)
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  if (date.getTime() >= startOfToday) {
+    return `今天 ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
+  }
+  const days = Math.ceil((startOfToday - date.getTime()) / 86400000)
+  if (days === 1) return '昨天'
+  if (days < 7) return `${days} 天前`
+  return fmtTime(ts)
 }
 
 function fmtDateTime(ts) {

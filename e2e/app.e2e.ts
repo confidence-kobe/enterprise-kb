@@ -95,6 +95,20 @@ test('opens the cited line when a source with a Chinese file name is clicked', a
   expect(errors).toEqual([])
 })
 
+test('shows a knowledge base overview instead of a text dump', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/')
+  await page.locator('.kb-item', { hasText: '人事制度' }).click()
+  await page.click('#stats-btn')
+  const panel = page.locator('#stats-content')
+  await expect(panel.locator('.health-card')).toHaveCount(4)
+  await expect(panel.locator('.health-card').nth(1)).toContainText('近 30 天提问')
+  await expect(panel.locator('.health-type')).toContainText('MD')
+  await expect(panel.locator('.health-link')).toHaveAttribute('href', `/manage.html?tab=docs&kb=${kbId}`)
+  expect(errors).toEqual([])
+})
+
 test('admin feedback tab shows stats, reasons and knowledge gaps', async ({ page, request }) => {
   const errors = trackErrors(page)
   const session = await apiLogin(request, 'admin', ADMIN_PASSWORD)
@@ -300,11 +314,23 @@ test('creates an API key and uses it from an MCP client', async ({ page, request
   expect(errors).toEqual([])
 })
 
+test('user list shows recent activity and question counts', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=users]')
+  const adminRow = page.locator('#user-list tr', { hasText: 'admin' }).first()
+  await expect(adminRow).toContainText('今天')
+  await expect(page.locator('#tab-users thead')).toContainText('近 30 天提问')
+  expect(Number(await adminRow.locator('.user-num').textContent())).toBeGreaterThan(0)
+  expect(errors).toEqual([])
+})
+
 test('admin console fits a phone screen', async ({ page, request }) => {
   const errors = trackErrors(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
-  for (const tab of ['kbs', 'docs', 'feedback', 'api', 'settings']) {
+  for (const tab of ['kbs', 'docs', 'users', 'feedback', 'api', 'settings']) {
     await page.goto('/manage.html')
     await page.click(`[data-tab=${tab}]`)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
