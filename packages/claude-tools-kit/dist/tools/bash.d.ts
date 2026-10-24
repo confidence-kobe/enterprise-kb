@@ -2,7 +2,7 @@
  * BashTool — Shell 命令执行工具
  * 核心逻辑提取自 claude-code BashTool.tsx
  */
-import { z } from 'zod';
+import { z } from 'zod/v3';
 declare const inputSchema: z.ZodObject<{
     command: z.ZodString;
     timeout: z.ZodOptional<z.ZodNumber>;

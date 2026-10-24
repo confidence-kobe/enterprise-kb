@@ -20,8 +20,22 @@ All notable changes to this project will be documented in this file.
 - Uploads say which files were skipped and why: unsupported format, or over 50 MB. More than 20 files are uploaded in batches instead of failing, and upload errors are in Chinese. Before, unsupported files were dropped silently while the message counted them as uploaded.
 - Deleting a Word, Excel or PowerPoint document now also deletes its extracted text file. Previously this was only done for PDFs.
 
+### Security
+
+- Upgraded dependencies for advisories published this week:
+  - body-parser 2.4.0: denial of service via trailing bytes after a compressed body (GHSA-27r3-jxmh-p828)
+  - multer 2.5.0: denial of service via a pending async file filter (GHSA-q7qp-rjg7-q26m)
+  - DOMPurify 3.4.17: three sanitizer bypasses (GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr, GHSA-c6gr-qvv4-5v3f)
+  - zod 4.6.7: memory exhaustion on oversized collections (GHSA-mrhx-c7xc-m3w5)
+- zod 3 has no patched release, so the bundled `claude-tools-kit` now uses zod 4's `zod/v3` API. The tool definitions sent to the model are byte-for-byte unchanged.
+
 ### Changed
 
+- Knowledge gaps now cover every channel. These are recorded in a new `gap_events` table and appear in the admin 反馈 tab:
+  - questions asked through MCP (`ask_knowledge_base`) whose answer is "未找到相关内容"
+  - cross-knowledge-base questions on the web with the same answer; these are not saved as conversations and show as 全部知识库
+  - MCP searches that return nothing, shown with a new 检索无结果 tag
+- Scanned documents are read in their own queue. Other uploads are parsed and searchable right away instead of waiting behind a long scan.
 - Audit log is easier to read. Every action has a Chinese label, including Q&A, text edits, version restores and backups. Detail fields are labelled in Chinese, and knowledge bases are shown by name. The action filter is a drop-down. A full action code in `GET /api/admin/audit?action=` now matches exactly, while a keyword still matches loosely. Audit items include `kb_name`.
 - Upgraded vitest to 4.1.12 (vite 8.3), which clears the remaining development-only audit warning. `npm audit` now reports 0 vulnerabilities, including dev dependencies.
 - Document search results now include `doc_id`.
