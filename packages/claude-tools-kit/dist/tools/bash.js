@@ -4,7 +4,7 @@
  */
 import { exec as execCallback } from 'node:child_process';
 import { promisify } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { buildTool } from '../buildTool.js';
 const exec = promisify(execCallback);
 const DEFAULT_TIMEOUT_MS = 120_000; // 2 分钟

@@ -4,7 +4,7 @@
  */
 import { writeFile, mkdir } from 'node:fs/promises';
 import * as path from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { buildTool } from '../buildTool.js';
 import { isPathAllowed } from '../utils/path.js';
 const inputSchema = z.object({

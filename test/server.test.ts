@@ -453,6 +453,34 @@ describe('knowledge base access control', () => {
     expect((await tooMany.expect(400)).body.error).toBe('一次最多上传 20 个文件')
   })
 
+  it('keeps parsing other documents while a scan is being read', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    const kbId = (await request(app).post('/api/kbs').set(auth).send({ name: 'OCR Queue KB' }).expect(201)).body.id as number
+    // 图片先进队列，文本文档在它后面
+    await request(app).post(`/api/kbs/${kbId}/docs`).set(auth)
+      .attach('files', fs.readFileSync(path.join(__dirname, 'fixtures', 'zh-scanned.png')), 'scan.png')
+      .attach('files', Buffer.from('会议纪要：下周三发布新版本。'), 'notes.md')
+      .expect(201)
+
+    type Doc = { original_name: string; index_status: string }
+    let docs: Doc[] = []
+    const status = (name: string) => docs.find(d => d.original_name === name)?.index_status
+    for (let i = 0; i < 300 && status('notes.md') !== 'ready'; i++) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+      docs = (await request(app).get(`/api/kbs/${kbId}/docs`).set(auth).expect(200)).body
+    }
+    // 文本文档已经可以检索，图片还在识别
+    expect(status('notes.md')).toBe('ready')
+    expect(status('scan.png')).toBe('processing')
+
+    for (let i = 0; i < 600 && status('scan.png') === 'processing'; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      docs = (await request(app).get(`/api/kbs/${kbId}/docs`).set(auth).expect(200)).body
+    }
+    expect(status('scan.png')).toBe('ready')
+  }, 90_000)
+
   it('removes docs from storage and search indexes when deleted', async () => {
     const admin = await login('admin', 'Admin@123')
 
@@ -1329,6 +1357,17 @@ describe('api keys and MCP', () => {
 
     expect((await mcp(key, 'tools/call', { name: 'delete_everything' })).body.error.code).toBe(-32602)
     expect((await mcp(key, 'resources/list')).body.error.code).toBe(-32601)
+
+    // 检索不到内容计入知识空白：指定知识库的记在该库，不指定的记为"全部知识库"
+    expect((await call('search_documents', { query: '团建预算标准', kb_id: kb })).content[0].text).toContain('没有找到')
+    await call('search_documents', { query: '团建预算标准' })
+    const adminGaps = await request(app).get('/api/admin/gaps').set(adminAuth).expect(200)
+    const gaps = adminGaps.body.items.filter((g: { question: string }) => g.question === '团建预算标准')
+    expect(gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kb_id: kb, kb_name: 'MCP 制度库', sources: expect.objectContaining({ search_empty: expect.any(Number) }) }),
+    ]))
+    // 两次检索都计入（不指定知识库那次：可访问多个库时记为全部知识库，只有一个库时记在该库）
+    expect(gaps.reduce((n: number, g: { count: number }) => n + g.count, 0)).toBe(2)
 
     const batch = await request(app).post('/mcp').set('Authorization', `Bearer ${key}`)
       .send([{ jsonrpc: '2.0', id: 1, method: 'ping' }, { jsonrpc: '2.0', method: 'notifications/initialized' }])

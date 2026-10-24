@@ -2,7 +2,7 @@
  * FileEditTool — 文件精确编辑工具（字符串替换）
  * 核心逻辑提取自 claude-code FileEditTool
  */
-import { z } from 'zod';
+import { z } from 'zod/v3';
 declare const inputSchema: z.ZodObject<{
     file_path: z.ZodString;
     old_string: z.ZodString;
