@@ -2,7 +2,7 @@
  * FileReadTool — 文件读取工具
  * 核心逻辑提取自 claude-code FileReadTool.ts
  */
-import { z } from 'zod';
+import { z } from 'zod/v3';
 declare const inputSchema: z.ZodObject<{
     file_path: z.ZodString;
     offset: z.ZodOptional<z.ZodNumber>;

@@ -4,7 +4,7 @@
  */
 import { readFile, readdir, stat } from 'node:fs/promises';
 import * as path from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { buildTool } from '../buildTool.js';
 const MAX_RESULTS = 500;
 const MAX_FILE_SIZE = 500 * 1024; // 500KB

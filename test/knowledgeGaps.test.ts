@@ -22,7 +22,7 @@ describe('groupKnowledgeGaps', () => {
     ])
     expect(gaps[0]).toMatchObject({
       kb_id: 1, count: 2, last_at: 300, question: '年假 有几天',
-      sources: { ai_not_found: 1, feedback_not_found: 1 },
+      sources: { ai_not_found: 1, feedback_not_found: 1, search_empty: 0 },
     })
     expect(gaps).toHaveLength(3)
     expect(gaps.filter(g => g.kb_id === 2)).toHaveLength(1)

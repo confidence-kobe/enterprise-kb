@@ -1261,13 +1261,14 @@ async function loadKnowledgeGaps() {
       const tags = [
         gap.sources.ai_not_found ? `<span class="gap-tag">AI 未找到 ×${gap.sources.ai_not_found}</span>` : '',
         gap.sources.feedback_not_found ? `<span class="gap-tag gap-tag-user">用户反馈 ×${gap.sources.feedback_not_found}</span>` : '',
+        gap.sources.search_empty ? `<span class="gap-tag" title="AI 助手通过 MCP 检索，没有找到任何内容">检索无结果 ×${gap.sources.search_empty}</span>` : '',
       ].join('')
       return `
         <div class="gap-row">
           <span class="gap-count" title="被问到的次数">${gap.count}</span>
           <div class="gap-main">
             <div class="gap-question">${escHtml(gap.question)}</div>
-            <div class="gap-meta">${escHtml(gap.kb_name)} · 最近 ${fmtDateTime(gap.last_at)} ${tags}</div>
+            <div class="gap-meta">${escHtml(gap.kb_name ?? '全部知识库')} · 最近 ${fmtDateTime(gap.last_at)} ${tags}</div>
           </div>
         </div>`
     }).join('')

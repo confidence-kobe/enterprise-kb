@@ -281,6 +281,20 @@ export function initDb(dbPath: string): void {
     CREATE INDEX IF NOT EXISTS idx_doc_versions_doc ON doc_versions(doc_id, id);
   `)
 
+  // 不在对话记录里的"没找到"：MCP 提问和检索、网页跨库提问。kb_id 为空表示跨全部知识库
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gap_events (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      kb_id      INTEGER REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+      user_id    INTEGER,
+      question   TEXT    NOT NULL,
+      source     TEXT    NOT NULL,
+      channel    TEXT    NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_gap_events_time ON gap_events(created_at);
+  `)
+
   // 对外接口密钥：只存 SHA-256 哈希，明文只在创建时返回一次
   db.exec(`
     CREATE TABLE IF NOT EXISTS api_keys (
@@ -1554,12 +1568,28 @@ export function listNegativeFeedback(
 /** 系统提示词要求模型在知识库无答案时说出这句话（见 prompt.ts） */
 export const NOT_FOUND_MARKER = '未找到相关内容'
 
+export type KnowledgeGapSource = 'ai_not_found' | 'feedback_not_found' | 'search_empty'
+
 export interface KnowledgeGapRow {
-  kb_id: number
-  kb_name: string
+  /** null 表示跨全部知识库的提问或检索 */
+  kb_id: number | null
+  kb_name: string | null
   question: string
   created_at: number
-  source: 'ai_not_found' | 'feedback_not_found'
+  source: KnowledgeGapSource
+}
+
+/** 记录对话之外的"没找到"（MCP 提问和检索、网页跨库提问），计入知识空白 */
+export function recordGapEvent(data: {
+  kbId: number | null
+  userId?: number | null
+  question: string
+  source: 'ai_not_found' | 'search_empty'
+  channel: 'mcp' | 'global'
+}): void {
+  db.prepare(`
+    INSERT INTO gap_events (kb_id, user_id, question, source, channel) VALUES (?, ?, ?, ?, ?)
+  `).run(data.kbId, data.userId ?? null, data.question.slice(0, 500), data.source, data.channel)
 }
 
 /**
@@ -1589,9 +1619,17 @@ export function listKnowledgeGapRows(since: number, kbId?: number): KnowledgeGap
       AND COALESCE(f.updated_at, f.created_at) >= ? ${kbFilter}
   `).all(since, ...(kbId ? [kbId] : [])) as Omit<KnowledgeGapRow, 'source'>[]
 
+  const eventRows = db.prepare(`
+    SELECT g.kb_id, kb.name AS kb_name, g.question, g.created_at, g.source
+    FROM gap_events g
+    LEFT JOIN knowledge_bases kb ON kb.id = g.kb_id
+    WHERE g.created_at >= ? ${kbId ? 'AND g.kb_id = ?' : ''}
+  `).all(since, ...(kbId ? [kbId] : [])) as KnowledgeGapRow[]
+
   return [
     ...aiRows.filter(r => r.question).map(r => ({ ...r, source: 'ai_not_found' as const })),
     ...feedbackRows.map(r => ({ ...r, source: 'feedback_not_found' as const })),
+    ...eventRows,
   ]
 }
 

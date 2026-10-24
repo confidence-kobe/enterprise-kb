@@ -277,6 +277,16 @@ test('creates an API key and uses it from an MCP client', async ({ page, request
   expect(await call('search_documents', { query: '年假', kb_id: kbId })).toContain('请假制度')
   expect(await call('ask_knowledge_base', { kb_id: kbId, question: '年假有几天？' })).toBe('年假为每年 10 天。')
 
+  // MCP 和网页跨库提问"没找到"时也计入知识空白
+  expect(await call('ask_knowledge_base', { kb_id: kbId, question: '团建补贴怎么申请？' })).toContain('未找到相关内容')
+  const globalAsk = await request.post('/api/ask', { headers: auth(), data: { question: '餐饮补贴是多少？' } })
+  expect(await globalAsk.text()).toContain('"type":"done"')
+  const gaps = (await (await request.get('/api/admin/gaps', { headers: auth() })).json()).items as Array<{ question: string; kb_name: string | null }>
+  expect(gaps).toEqual(expect.arrayContaining([
+    expect.objectContaining({ question: '团建补贴怎么申请？', kb_name: '人事制度' }),
+    expect.objectContaining({ question: '餐饮补贴是多少？', kb_name: null }),
+  ]))
+
   // 撤销后立即失效
   await page.click('[data-tab=kbs]')
   await page.click('[data-tab=api]')

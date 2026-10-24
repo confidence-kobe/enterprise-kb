@@ -2,7 +2,7 @@
  * WebFetchTool — 网页内容获取工具
  * 核心逻辑提取自 claude-code WebFetchTool.ts
  */
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { buildTool } from '../buildTool.js';
 const MAX_CONTENT_LENGTH = 50_000;
 const DEFAULT_TIMEOUT_MS = 30_000;

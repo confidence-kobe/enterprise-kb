@@ -4,7 +4,7 @@
  */
 import { glob } from 'glob';
 import * as path from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { buildTool } from '../buildTool.js';
 const MAX_RESULTS = 1000;
 const inputSchema = z.object({

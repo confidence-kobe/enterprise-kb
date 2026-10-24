@@ -2,7 +2,7 @@
  * 核心类型定义
  * 精简自 claude-code 的 Tool.ts / types/permissions.ts / types/message.ts
  */
-import type { z } from 'zod';
+import type { z } from 'zod/v3';
 import type { MessageParam, Tool as AnthropicTool } from '@anthropic-ai/sdk/resources/messages.js';
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk' | 'plan';
 export type PermissionBehavior = 'allow' | 'deny' | 'ask';

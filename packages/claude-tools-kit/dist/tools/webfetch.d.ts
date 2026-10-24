@@ -2,7 +2,7 @@
  * WebFetchTool — 网页内容获取工具
  * 核心逻辑提取自 claude-code WebFetchTool.ts
  */
-import { z } from 'zod';
+import { z } from 'zod/v3';
 declare const inputSchema: z.ZodObject<{
     url: z.ZodString;
     method: z.ZodOptional<z.ZodEnum<["GET", "POST", "PUT", "DELETE", "PATCH"]>>;

@@ -2,7 +2,7 @@
  * GlobTool — 文件名模式匹配工具
  * 核心逻辑提取自 claude-code GlobTool.ts
  */
-import { z } from 'zod';
+import { z } from 'zod/v3';
 declare const inputSchema: z.ZodObject<{
     pattern: z.ZodString;
     path: z.ZodOptional<z.ZodString>;

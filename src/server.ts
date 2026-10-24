@@ -28,6 +28,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          upsertFeedback, getFeedbackStats, getAllFeedbackStats,
          getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS, listKnowledgeGapRows,
          getConfig, setConfig,
+         recordGapEvent, NOT_FOUND_MARKER,
          createApiKey, getApiKeyById, listApiKeys, countApiKeys, deleteApiKey, MAX_API_KEYS_PER_USER } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
@@ -451,65 +452,128 @@ function ocrTimeoutMs(pages: number): number {
   return EXTRACT_TIMEOUT_MS + pages * OCR_PAGE_TIMEOUT_MS
 }
 
-/** PDF：先提取文字层，文字太少的页（扫描页）再用 OCR 识别 */
-async function extractPdfWithOcr(filePath: string): Promise<{ text: string; ocrPages: number }> {
-  const pdf = await extractPdfInWorker(filePath, { timeoutMs: EXTRACT_TIMEOUT_MS })
-  const scanned = pdf.pages.flatMap((text, i) => (isScannedPageText(text) ? [i + 1] : []))
-  if (!OCR_ENABLED || !scanned.length) return { text: pdf.text, ocrPages: 0 }
-
-  const pages = scanned.slice(0, OCR_MAX_PAGES)
-  const texts = await ocrInWorker(filePath, 'pdf', pages, { timeoutMs: ocrTimeoutMs(pages.length) })
-  const merged = [...pdf.pages]
-  pages.forEach((num, i) => { if (texts[i]?.trim()) merged[num - 1] = texts[i] })
-  if (scanned.length > pages.length) {
-    console.warn(`[ocr] ${path.basename(filePath)} 有 ${scanned.length} 页扫描页，只识别了前 ${pages.length} 页（OCR_MAX_PAGES）`)
-  }
-  return { text: merged.join('\n\n'), ocrPages: texts.filter(t => t.trim()).length }
+/**
+ * 需要 OCR 的文档在单独的队列里识别：识别一份长扫描件要几分钟，
+ * 不能让后面上传的普通文档跟着一起等。
+ */
+interface OcrJob extends DocIndexJob {
+  kind: 'image' | 'pdf'
+  /** 要识别的页码（从 1 开始）；图片为空 */
+  pages: number[]
+  /** PDF 每页已有的文字，识别结果替换其中的扫描页 */
+  pdfPages: string[]
+  /** 扫描页总数（可能多于 OCR_MAX_PAGES） */
+  scannedTotal: number
 }
 
-async function extractIndexableText(job: DocIndexJob): Promise<{ text: string; indexPath: string; ocrPages: number }> {
-  const ext = path.extname(job.originalName).toLowerCase()
-  const txtPath = job.filePath.replace(/\.[^.]+$/i, '.txt')
+const ocrQueue: Array<{ job: OcrJob; done: () => void }> = []
+let ocrWorkerRunning = false
 
-  let extracted: { text: string; ocrPages: number }
-  if (OCR_IMAGE_EXTS.has(ext)) {
-    if (!OCR_ENABLED) throw new Error('图片需要文字识别，但服务器关闭了 OCR（OCR_ENABLED=false）')
-    const [text] = await ocrInWorker(job.filePath, 'image', [], { timeoutMs: ocrTimeoutMs(1) })
-    if (!text?.trim()) throw new Error('图片中没有识别到文字')
-    extracted = { text, ocrPages: 1 }
-  } else if (ext === '.pdf') {
-    extracted = await extractPdfWithOcr(job.filePath)
-  } else if (BINARY_DOCUMENT_EXTS.has(ext)) {
-    extracted = { text: await extractDocumentTextInWorker(job.filePath, ext, { timeoutMs: EXTRACT_TIMEOUT_MS }), ocrPages: 0 }
-  } else {
-    return { text: fs.readFileSync(job.filePath, 'utf-8'), indexPath: job.filePath, ocrPages: 0 }
-  }
-  fs.writeFileSync(txtPath, extracted.text, 'utf-8')
-  return { ...extracted, indexPath: txtPath }
+function enqueueOcr(job: OcrJob): Promise<void> {
+  return new Promise(resolve => {
+    ocrQueue.push({ job, done: resolve })
+    void drainOcrQueue()
+  })
 }
 
-async function processDocIndexJob(job: DocIndexJob): Promise<void> {
+async function drainOcrQueue(): Promise<void> {
+  if (ocrWorkerRunning) return
+  ocrWorkerRunning = true
+  try {
+    while (ocrQueue.length) {
+      const { job, done } = ocrQueue.shift()!
+      await processOcrJob(job)
+      done()
+    }
+  } finally {
+    ocrWorkerRunning = false
+  }
+}
+
+async function processOcrJob(job: OcrJob): Promise<void> {
   if (!getDocById(job.docId)) return
+  try {
+    let text: string
+    let ocrPages: number
+    if (job.kind === 'image') {
+      const [result] = await ocrInWorker(job.filePath, 'image', [], { timeoutMs: ocrTimeoutMs(1) })
+      if (!result?.trim()) throw new Error('图片中没有识别到文字')
+      text = result
+      ocrPages = 1
+    } else {
+      const texts = await ocrInWorker(job.filePath, 'pdf', job.pages, { timeoutMs: ocrTimeoutMs(job.pages.length) })
+      const merged = [...job.pdfPages]
+      job.pages.forEach((num, i) => { if (texts[i]?.trim()) merged[num - 1] = texts[i] })
+      if (job.scannedTotal > job.pages.length) {
+        console.warn(`[ocr] ${job.originalName} 有 ${job.scannedTotal} 页扫描页，只识别了前 ${job.pages.length} 页（OCR_MAX_PAGES）`)
+      }
+      text = merged.join('\n\n')
+      ocrPages = texts.filter(t => t.trim()).length
+    }
+    await finishDocIndex(job, text, ocrPages, true)
+  } catch (err) {
+    markDocIndexFailed(job, err)
+  }
+}
+
+/** 写出提取的文字（extracted 时存为同名 .txt）并建立索引、向量和摘要 */
+async function finishDocIndex(job: DocIndexJob, text: string, ocrPages: number, extracted: boolean): Promise<void> {
+  if (!text.trim()) {
+    throw new Error(OCR_ENABLED ? '文档没有可索引文本' : '文档没有可索引文本（可能是扫描件，服务器关闭了 OCR）')
+  }
+  const indexPath = extracted ? job.filePath.replace(/\.[^.]+$/i, '.txt') : job.filePath
+  if (extracted) fs.writeFileSync(indexPath, text, 'utf-8')
+  updateDocOcrPages(job.docId, ocrPages || null)
+  await indexDocContentInBatches(job.docId, job.kbId, job.originalName, indexPath, text)
+
+  if (isEmbeddingEnabled()) {
+    void generateAndStoreEmbeddings(job.docId, job.kbId, job.originalName, indexPath, text)
+  }
+  void generateDocSummary(job.docId, job.originalName, text)
+}
+
+function markDocIndexFailed(job: DocIndexJob, err: unknown): void {
+  removeDocFromIndex(job.docId)
+  const message = (err as Error).message || '索引失败'
+  updateDocIndexStatus(job.docId, 'error', message.slice(0, 500))
+  console.warn(`[index] 文档解析失败 ${job.originalName}: ${message}`)
+}
+
+/**
+ * 解析文档并建立索引。需要 OCR 时交给识别队列，返回的 ocr 在识别完成后结束；
+ * 解析队列不等它，直接处理下一份文档。
+ */
+async function processDocIndexJob(job: DocIndexJob): Promise<{ ocr?: Promise<void> }> {
+  if (!getDocById(job.docId)) return {}
   updateDocIndexStatus(job.docId, 'processing')
+  const ext = path.extname(job.originalName).toLowerCase()
 
   try {
-    const { text, indexPath, ocrPages } = await extractIndexableText(job)
-    if (!text.trim()) {
-      throw new Error(OCR_ENABLED ? '文档没有可索引文本' : '文档没有可索引文本（可能是扫描件，服务器关闭了 OCR）')
+    if (OCR_IMAGE_EXTS.has(ext)) {
+      if (!OCR_ENABLED) throw new Error('图片需要文字识别，但服务器关闭了 OCR（OCR_ENABLED=false）')
+      return { ocr: enqueueOcr({ ...job, kind: 'image', pages: [], pdfPages: [], scannedTotal: 1 }) }
     }
-    updateDocOcrPages(job.docId, ocrPages || null)
-    await indexDocContentInBatches(job.docId, job.kbId, job.originalName, indexPath, text)
-
-    if (isEmbeddingEnabled()) {
-      void generateAndStoreEmbeddings(job.docId, job.kbId, job.originalName, indexPath, text)
+    if (ext === '.pdf') {
+      // 先提取文字层，文字太少的页（扫描页）再识别
+      const pdf = await extractPdfInWorker(job.filePath, { timeoutMs: EXTRACT_TIMEOUT_MS })
+      const scanned = pdf.pages.flatMap((text, i) => (isScannedPageText(text) ? [i + 1] : []))
+      if (OCR_ENABLED && scanned.length) {
+        return {
+          ocr: enqueueOcr({
+            ...job, kind: 'pdf', pages: scanned.slice(0, OCR_MAX_PAGES), pdfPages: pdf.pages, scannedTotal: scanned.length,
+          }),
+        }
+      }
+      await finishDocIndex(job, pdf.text, 0, true)
+    } else if (BINARY_DOCUMENT_EXTS.has(ext)) {
+      await finishDocIndex(job, await extractDocumentTextInWorker(job.filePath, ext, { timeoutMs: EXTRACT_TIMEOUT_MS }), 0, true)
+    } else {
+      await finishDocIndex(job, fs.readFileSync(job.filePath, 'utf-8'), 0, false)
     }
-    void generateDocSummary(job.docId, job.originalName, text)
   } catch (err) {
-    removeDocFromIndex(job.docId)
-    const message = (err as Error).message || '索引失败'
-    updateDocIndexStatus(job.docId, 'error', message.slice(0, 500))
-    console.warn(`[index] 文档解析失败 ${job.originalName}: ${message}`)
+    markDocIndexFailed(job, err)
   }
+  return {}
 }
 
 async function generateAndStoreEmbeddings(
@@ -1725,6 +1789,10 @@ app.post('/api/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => 
       audit(req, 'qa.ask_global', 'global', {
         detail: { question: question.slice(0, 200), turns: result.turns, kbCount: allKbs.length },
       })
+      // 跨库提问不保存对话，"没找到"单独记一笔，计入知识空白
+      if (result.response.includes(NOT_FOUND_MARKER)) {
+        recordGapEvent({ kbId: null, userId, question, source: 'ai_not_found', channel: 'global' })
+      }
     }
   } catch (err) {
     if (!abortCtrl.signal.aborted) send({ type: 'error', message: (err as Error).message })
@@ -1786,7 +1854,8 @@ app.post('/api/kbs/:id/reindex', requireAuth, async (req: AuthRequest, res) => {
   for (const doc of docs) {
     const filePath = path.join(kbDir, doc.filename)
     if (!fs.existsSync(filePath)) continue
-    await processDocIndexJob({ docId: doc.id, kbId, originalName: doc.original_name, filePath })
+    const { ocr } = await processDocIndexJob({ docId: doc.id, kbId, originalName: doc.original_name, filePath })
+    await ocr
     if (isDocIndexed(doc.id)) indexed++
     else failed++
   }
@@ -1853,7 +1922,14 @@ app.post('/mcp', (req, res, next) => {
     listKbs: () => (user.role === 'admin' ? getAllKbs() : listKbsForUser(user.userId))
       .map(kb => ({ id: kb.id, name: kb.name, description: kb.description, docCount: countDocs(kb.id) })),
     canRead,
-    search: (kbIds, query, limit) => searchAcrossKbs(kbIds, query, limit),
+    search: async (kbIds, query, limit) => {
+      const results = await searchAcrossKbs(kbIds, query, limit)
+      // AI 助手检索不到内容，说明知识库可能缺这部分资料
+      if (!results.length) {
+        recordGapEvent({ kbId: kbIds.length === 1 ? kbIds[0] : null, userId: user.userId, question: query, source: 'search_empty', channel: 'mcp' })
+      }
+      return results
+    },
     readDoc: (kbId, docId) => {
       const doc = getDocById(docId)
       if (!doc || doc.kb_id !== kbId) throw new McpToolError(`知识库 ${kbId} 中没有 doc_id=${docId} 的文档`)
@@ -1873,6 +1949,9 @@ app.post('/mcp', (req, res, next) => {
       audit(req, 'qa.ask', 'kb', {
         entityId: kbId, kbId, detail: { question: question.slice(0, 200), turns: result.turns, channel: 'mcp' },
       })
+      if (result.response.includes(NOT_FOUND_MARKER)) {
+        recordGapEvent({ kbId, userId: user.userId, question, source: 'ai_not_found', channel: 'mcp' })
+      }
       return result.response.trim() || '（模型没有给出回答）'
     },
   })
