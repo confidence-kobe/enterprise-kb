@@ -31,6 +31,14 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The chat page's 统计 button opens a knowledge base overview instead of a text dump. It shows:
+  - documents, broken down as indexed, still parsing, failed and OCR'd, plus file types with sizes
+  - questions in the last 30 days and how many people asked them, from all channels
+  - answer satisfaction, and how many knowledge gaps need content (as a count only, so readers of a public knowledge base don't see others' questions)
+
+  The stats now come from the database. Before, they counted files on disk, so each PDF and its extracted text were counted twice and sizes under 1 KB showed as 0.0 KB. `GET /api/kbs/:id/stats` returns this as `health`.
+- The admin user list shows each user's last activity and question count for the last 30 days (`GET /api/admin/users` adds `last_active_at` and `questions_30d`), and scrolls sideways on phones. Fixed the misaligned row border in the actions column.
+- When admins add knowledge base members, matching usernames are suggested.
 - Knowledge gaps now cover every channel. These are recorded in a new `gap_events` table and appear in the admin 反馈 tab:
   - questions asked through MCP (`ask_knowledge_base`) whose answer is "未找到相关内容"
   - cross-knowledge-base questions on the web with the same answer; these are not saved as conversations and show as 全部知识库

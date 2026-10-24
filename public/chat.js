@@ -455,14 +455,70 @@ function startNewConversation() {
 async function openStats() {
   if (!currentKb) return
   statsModal.classList.remove('hidden')
-  statsContent.textContent = '加载中…'
+  statsContent.innerHTML = '<div class="health-empty">加载中…</div>'
   try {
     const res = await fetch(`/api/kbs/${currentKb.id}/stats`, { headers: auth() })
     const data = await res.json()
-    statsContent.textContent = data.stats ?? '无数据'
+    if (!res.ok) throw new Error(data.error || '加载失败')
+    statsContent.innerHTML = renderKbHealth(data)
   } catch (err) {
-    statsContent.textContent = `请求失败：${err.message}`
+    statsContent.innerHTML = `<div class="health-empty health-error">加载失败：${escHtml(err.message)}</div>`
   }
+}
+
+function fmtBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+/** 知识库概况：文档情况、近期问答和待补知识 */
+function renderKbHealth(data) {
+  const { docs, qa, gaps, canManage } = data.health
+  const rated = qa.positive + qa.negative
+  const satisfaction = rated ? `${Math.round((qa.positive / rated) * 100)}%` : '—'
+  const card = (label, value, sub, tone = '') => `
+    <div class="health-card ${tone}">
+      <div class="health-card-label">${label}</div>
+      <div class="health-card-value">${value}</div>
+      <div class="health-card-sub">${sub}</div>
+    </div>`
+
+  const status = [
+    `<span class="health-chip">已索引 ${docs.ready}</span>`,
+    docs.processing ? `<span class="health-chip health-chip-busy">解析中 ${docs.processing}</span>` : '',
+    docs.error ? `<span class="health-chip health-chip-error">解析失败 ${docs.error}</span>` : '',
+    docs.ocr ? `<span class="health-chip">OCR 识别 ${docs.ocr}</span>` : '',
+    data.embeddingEnabled ? `<span class="health-chip">已向量化 ${data.vectoredDocs}</span>` : '',
+  ].join('')
+
+  const maxCount = Math.max(1, ...docs.byType.map(t => t.count))
+  const types = docs.byType.length
+    ? docs.byType.slice(0, 8).map(t => `
+        <div class="health-type">
+          <span class="health-type-ext">${escHtml(t.ext.replace(/^\./, '').toUpperCase())}</span>
+          <span class="health-type-bar"><span style="width:${Math.max(4, Math.round((t.count / maxCount) * 100))}%"></span></span>
+          <span class="health-type-num">${t.count} 份 · ${fmtBytes(t.bytes)}</span>
+        </div>`).join('')
+    : '<div class="health-empty">还没有文档</div>'
+
+  return `
+    <div class="health-cards">
+      ${card('文档', docs.total, docs.lastUploadedAt ? `最近更新 ${new Date(docs.lastUploadedAt * 1000).toLocaleDateString('zh-CN')}` : '还没有上传')}
+      ${card(`近 ${data.days} 天提问`, qa.questions, qa.activeUsers ? `${qa.activeUsers} 人在用` : '还没有人提问')}
+      ${card('回答满意度', satisfaction, rated ? `👍 ${qa.positive} · 👎 ${qa.negative}` : '暂无评价')}
+      ${card('待补知识', gaps, gaps ? '没找到答案的问题' : '暂未发现', gaps ? 'health-card-warn' : '')}
+    </div>
+    <div class="health-section">
+      <div class="health-section-title">文档状态 <span>${fmtBytes(docs.totalBytes)}</span></div>
+      <div class="health-chips">${status}</div>
+    </div>
+    <div class="health-section">
+      <div class="health-section-title">文件类型</div>
+      ${types}
+    </div>
+    ${canManage ? `<a class="health-link" href="/manage.html?tab=docs&kb=${currentKb.id}">管理文档 →</a>` : ''}`
 }
 
 /* ── 发送问题 ──────────────────────────────────────── */
@@ -1453,18 +1509,7 @@ exportBtn.addEventListener('click', () => {
 })
 
 /* ── 统计弹层 ──────────────────────────────────────── */
-statsBtn.addEventListener('click', async () => {
-  if (!currentKb) return
-  statsModal.classList.remove('hidden')
-  statsContent.textContent = '加载中…'
-  try {
-    const res = await fetch(`/api/kbs/${currentKb.id}/stats`, { headers: auth() })
-    const data = await res.json()
-    statsContent.textContent = data.stats ?? '无数据'
-  } catch (err) {
-    statsContent.textContent = `请求失败：${err.message}`
-  }
-})
+statsBtn.addEventListener('click', openStats)
 
 statsClose.addEventListener('click', () => statsModal.classList.add('hidden'))
 statsModal.addEventListener('click', e => { if (e.target === statsModal) statsModal.classList.add('hidden') })

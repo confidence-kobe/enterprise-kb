@@ -775,6 +775,92 @@ export function getFeedbackStats(kbId: number): { positive: number; negative: nu
   return { positive: row.positive ?? 0, negative: row.negative ?? 0 }
 }
 
+export interface KbHealth {
+  docs: {
+    total: number
+    ready: number
+    /** 待解析 + 解析中 */
+    processing: number
+    error: number
+    ocr: number
+    totalBytes: number
+    lastUploadedAt: number | null
+    byType: Array<{ ext: string; count: number; bytes: number }>
+  }
+  qa: {
+    /** since 之后的提问次数（网页、接口、MCP） */
+    questions: number
+    activeUsers: number
+    positive: number
+    negative: number
+  }
+}
+
+/** 知识库概况：文档状态与类型分布，以及 since 之后的问答情况 */
+export function getKbHealth(kbId: number, since: number): KbHealth {
+  const docRows = db.prepare(`
+    SELECT original_name, size, index_status, ocr_pages, uploaded_at FROM documents WHERE kb_id = ?
+  `).all(kbId) as Array<{ original_name: string; size: number; index_status: Document['index_status']; ocr_pages: number | null; uploaded_at: number }>
+
+  const types = new Map<string, { ext: string; count: number; bytes: number }>()
+  const docs: KbHealth['docs'] = {
+    total: docRows.length, ready: 0, processing: 0, error: 0, ocr: 0, totalBytes: 0, lastUploadedAt: null, byType: [],
+  }
+  for (const d of docRows) {
+    if (d.index_status === 'ready') docs.ready++
+    else if (d.index_status === 'error') docs.error++
+    else docs.processing++
+    if (d.ocr_pages) docs.ocr++
+    docs.totalBytes += d.size
+    if (docs.lastUploadedAt == null || d.uploaded_at > docs.lastUploadedAt) docs.lastUploadedAt = d.uploaded_at
+    const ext = path.extname(d.original_name).toLowerCase() || '（无扩展名）'
+    const t = types.get(ext) ?? { ext, count: 0, bytes: 0 }
+    t.count++
+    t.bytes += d.size
+    types.set(ext, t)
+  }
+  docs.byType = [...types.values()].sort((a, b) => b.count - a.count || b.bytes - a.bytes)
+
+  // 提问次数以审计日志为准：网页、接口、MCP 的提问都会记一笔
+  const asks = db.prepare(`
+    SELECT COUNT(*) AS questions, COUNT(DISTINCT user_id) AS active_users
+    FROM audit_events WHERE action = 'qa.ask' AND kb_id = ? AND created_at >= ?
+  `).get(kbId, since) as { questions: number; active_users: number }
+  const feedback = db.prepare(`
+    SELECT
+      SUM(CASE WHEN f.rating =  1 THEN 1 ELSE 0 END) AS positive,
+      SUM(CASE WHEN f.rating = -1 THEN 1 ELSE 0 END) AS negative
+    FROM response_feedback f
+    JOIN conversations c ON c.id = f.conversation_id
+    WHERE c.kb_id = ? AND COALESCE(f.updated_at, f.created_at) >= ?
+  `).get(kbId, since) as { positive: number | null; negative: number | null }
+
+  return {
+    docs,
+    qa: { questions: asks.questions, activeUsers: asks.active_users, positive: feedback.positive ?? 0, negative: feedback.negative ?? 0 },
+  }
+}
+
+export interface UserActivity {
+  /** 最近一次有记录的操作（登录、提问、上传等，含 API 密钥） */
+  last_active_at: number | null
+  /** since 之后的提问次数 */
+  questions: number
+}
+
+/** 每个用户的活跃情况，按审计日志统计 */
+export function listUserActivity(since: number): Map<number, UserActivity> {
+  const rows = db.prepare(`
+    SELECT user_id,
+      MAX(created_at) AS last_active_at,
+      SUM(CASE WHEN action IN ('qa.ask', 'qa.ask_global') AND created_at >= ? THEN 1 ELSE 0 END) AS questions
+    FROM audit_events
+    WHERE user_id IS NOT NULL AND action != 'auth.login_failed'
+    GROUP BY user_id
+  `).all(since) as Array<{ user_id: number } & UserActivity>
+  return new Map(rows.map(r => [r.user_id, { last_active_at: r.last_active_at, questions: r.questions ?? 0 }]))
+}
+
 export function updateDocIndexStatus(
   id: number,
   status: Document['index_status'],
