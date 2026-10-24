@@ -39,7 +39,7 @@
     "marked": "^12.0.2",
     "multer": "^2.5.0",
     "officeparser": "^8.1.0",
-    "openai": "^7.38.0",
+    "openai": "^7.41.0",
     "p5": "^2.3.4",
     "pdf-parse": "^2.4.5",
     "tesseract.js": "^7.0.0",
