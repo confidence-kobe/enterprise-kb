@@ -89,6 +89,8 @@ test('opens the cited line when a source with a Chinese file name is clicked', a
 
   const ref = page.locator('.msg-assistant').last().locator('.source-ref')
   await expect(ref).toHaveText('请假制度.md:1')
+  // 回答由 marked 渲染（而不是加载失败后的简易降级渲染）
+  expect(await page.evaluate(() => typeof (window as unknown as { marked?: { parse?: unknown } }).marked?.parse)).toBe('function')
   await ref.click()
   await expect(page.locator('#src-modal')).toBeVisible()
   await expect(page.locator('#src-modal-content .src-line-highlight')).toHaveText('年假为每年 10 天。')
