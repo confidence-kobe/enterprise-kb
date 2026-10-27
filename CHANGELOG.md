@@ -31,6 +31,12 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Dependency upgrades (from Dependabot PRs #49 to #53, combined and verified together):
+  - express 5.3.0 and openai 7.41.0
+  - marked 18, which renders chat answers. It no longer ships `marked.min.js`, so `/vendor/marked.min.js` now serves `lib/marked.umd.js`. Bold, line breaks, inline code (used for citations) and tables render as before.
+  - TypeScript 7, the native compiler. The emitted JavaScript is byte-for-byte identical to TypeScript 6's, and a build takes about 1.7 s.
+  - vitest 5
+- CI and release workflows use `actions/checkout@v5` and `actions/setup-node@v5`, because GitHub deprecated the Node 20 runtime of v4. Dependabot now also watches GitHub Actions.
 - The chat page's 统计 button opens a knowledge base overview instead of a text dump. It shows:
   - documents, broken down as indexed, still parsing, failed and OCR'd, plus file types with sizes
   - questions in the last 30 days and how many people asked them, from all channels

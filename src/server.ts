@@ -761,7 +761,7 @@ app.get('/favicon.ico', (_req, res) => res.status(204).end())
 // 只暴露白名单中的文件，不把整个 node_modules 挂成静态目录。
 const NODE_MODULES_DIR = path.join(__dirname, '../node_modules')
 const VENDOR_SCRIPTS: Record<string, string> = {
-  'marked.min.js': 'marked/marked.min.js',
+  'marked.min.js': 'marked/lib/marked.umd.js',
   'purify.min.js': 'dompurify/dist/purify.min.js',
   'p5.min.js':     'p5/lib/p5.min.js',
 }
