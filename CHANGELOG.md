@@ -1,139 +1,141 @@
-# Changelog
+# 更新日志
 
-All notable changes to this project will be documented in this file.
+本项目所有值得注意的变化都记录在这个文件里。
 
-## [Unreleased]
+## [1.3.0] - 2026-10-28
 
-### Added
+**升级说明：** 这是第一个在 GitHub 上正式发布的版本，1.0.0 到 1.2.0 的改动见发布包里的 `CHANGELOG.md`。数据库在第一次启动时自动迁移，不需要手动操作（已验证 1.2.0 的数据可以直接升级）。升级前照常用 `npm run backup` 备份。已有部署不会自动开启定时备份，需要时设置 `BACKUP_INTERVAL_HOURS`。
 
-- Automatic backups: set `BACKUP_INTERVAL_HOURS` (for example `24`) and the server backs up the database and documents on that schedule, keeping the newest `BACKUP_KEEP` copies. A failed backup is retried an hour later. New installs get daily backups from `.env.example` and `docker-compose.yml`; existing installs stay as they are until the variable is set.
-- Version history for text documents: every save keeps a version (who and when, newest 50 per document). The 历史 button in the document list shows each version with a line-by-line diff against the one before. Anyone who can edit the document can restore an old version, and the current content stays in the history. Text documents created before this release get their original content kept as a baseline version on their first edit. API: `GET /api/kbs/:id/docs/:docId/versions[/:versionId]`, `POST …/versions/:versionId/restore` (audited as `doc.restore_version`).
-- Scanned documents become searchable: built-in OCR (Tesseract, Chinese + English) reads PDF pages that have no text layer, and the upload box now also accepts photos (JPG, PNG, WebP, BMP). It runs offline on the server in a background thread, with no extra service and nothing sent to the model provider. Only pages with almost no text are OCR'd, at about 1–2 seconds per page (20-page scan: 28 s on 4 cores, app stays responsive). OCR'd documents carry an **OCR** tag in the document list. Scanned PDFs that previously failed to index are retried automatically on the next start. Settings: `OCR_ENABLED` (default on), `OCR_MAX_PAGES` (default 100).
-- API keys and an MCP server, so AI tools such as Claude Code and Cursor, or other internal systems, can use the knowledge base directly. Every user can create keys in the new API 接入 tab (shown once, stored only as a SHA-256 hash, optional expiry of 30/90/365 days, up to 20 per user). A key acts as its owner but is limited to reading and Q&A: it can call `GET` routes, `POST /api/kbs/:id/ask`, `POST /api/ask` and `POST /mcp`, and is refused on writes, admin routes and key management. Admins can see and revoke everyone's keys. Key creation and revocation are audited, and other audited actions made with a key record which key was used. API: `GET`/`POST /api/me/api-keys`, `DELETE /api/me/api-keys/:id`, `GET /api/admin/api-keys`, `DELETE /api/admin/api-keys/:id`.
-- MCP endpoint at `POST /mcp` (Streamable HTTP, stateless, protocol versions 2024-11-05 to 2025-11-25) with four read-only tools: `list_knowledge_bases`, `search_documents`, `read_document` (line-numbered, paged) and `ask_knowledge_base` (runs the built-in assistant and shares the per-user Q&A rate limit). Tools only see the knowledge bases the key's owner can access. The API 接入 tab shows the server address and ready-to-copy setup for Claude Code, a JSON config file and curl. Checked with the official MCP TypeScript SDK client.
-- Backups in the admin console (设置 tab): shows the schedule, the last result (including errors) and the backup list, with a 立即备份 button. Admin API: `GET`/`POST /api/admin/backups`. Manual backups are recorded in the audit log.
+### 新增
 
-### Fixed
+- 自动备份：设置 `BACKUP_INTERVAL_HOURS`（例如 `24`）后，服务器按这个间隔备份数据库和文档，保留最新的 `BACKUP_KEEP` 份。备份失败一小时后重试。新安装通过 `.env.example` 和 `docker-compose.yml` 默认每天备份；已有部署在设置这个变量之前保持原样。
+- 文本文档的版本历史：每次保存都会留下一个版本（记录修改人和时间，每份文档保留最新 50 个）。文档列表里的 历史 按钮可以查看每个版本，以及与上一版逐行对比的差异。能编辑文档的人都可以恢复旧版本，恢复时当前内容也会保留在历史里。本版本之前创建的文本文档，第一次编辑时会把原始内容保存为基准版本。接口：`GET /api/kbs/:id/docs/:docId/versions[/:versionId]`、`POST …/versions/:versionId/restore`（审计记录为 `doc.restore_version`）。
+- 扫描件可以检索了：内置 OCR（Tesseract，中文 + 英文）识别没有文字层的 PDF 页面，上传框也支持照片（JPG、PNG、WebP、BMP）。识别在服务器后台线程里离线进行，不需要额外服务，也不会发送给大模型服务商。只识别几乎没有文字的页面，每页约 1–2 秒（20 页扫描件在 4 核机器上 28 秒，期间应用照常响应）。识别过的文档在文档列表里带 **OCR** 标签。之前建索引失败的扫描版 PDF 会在下次启动时自动重试。设置项：`OCR_ENABLED`（默认开启）、`OCR_MAX_PAGES`（默认 100）。
+- API 密钥和 MCP 服务：Claude Code、Cursor 等 AI 工具或公司其他系统可以直接使用知识库。每个用户都能在新的 API 接入 标签页创建密钥（只显示一次，只保存 SHA-256 哈希，可选 30/90/365 天过期，每人最多 20 个）。密钥代表它的主人，但只能读取和问答：可以调用 `GET` 接口、`POST /api/kbs/:id/ask`、`POST /api/ask` 和 `POST /mcp`，写入、管理员接口和密钥管理都会被拒绝。管理员可以查看和吊销所有人的密钥。创建和吊销密钥会记入审计日志，用密钥做的其他操作也会在审计日志里注明用的是哪个密钥。接口：`GET`/`POST /api/me/api-keys`、`DELETE /api/me/api-keys/:id`、`GET /api/admin/api-keys`、`DELETE /api/admin/api-keys/:id`。
+- MCP 接口 `POST /mcp`（Streamable HTTP，无状态，支持协议版本 2024-11-05 到 2025-11-25），提供四个只读工具：`list_knowledge_bases`、`search_documents`、`read_document`（带行号、可分段读取）和 `ask_knowledge_base`（调用内置助手回答，与网页问答共用每个用户的频率限制）。工具只能看到密钥主人有权访问的知识库。API 接入 标签页显示服务地址，以及可直接复制的 Claude Code 配置、JSON 配置文件和 curl 命令。已用官方 MCP TypeScript SDK 客户端验证。
+- 管理控制台里的备份（设置 标签页）：显示备份计划、上次结果（包括错误信息）和备份列表，并有 立即备份 按钮。管理员接口：`GET`/`POST /api/admin/backups`。手动备份会记入审计日志。
 
-- Citations in answers are clickable again for Chinese file names (`请假制度.md:12`). Before, only ASCII file names were recognized. Citations that use the stored file name (`1729_ab3.txt:12`) now open the right document and show its original name. Ranges such as `手册.md:12-15` work too.
-- Clicking a citation in a long document jumps to the cited line, even past the first 10,000 characters the preview used to stop at (`GET …/preview?line=N`). The built-in search tool now numbers lines from 1, like the preview and the Read tool, so cited lines are no longer off by one.
-- Uploads say which files were skipped and why: unsupported format, or over 50 MB. More than 20 files are uploaded in batches instead of failing, and upload errors are in Chinese. Before, unsupported files were dropped silently while the message counted them as uploaded.
-- Deleting a Word, Excel or PowerPoint document now also deletes its extracted text file. Previously this was only done for PDFs.
+### 修复
 
-### Security
+- 回答里中文文件名的出处（`请假制度.md:12`）又能点击了。之前只能识别英文文件名。使用存储文件名的出处（`1729_ab3.txt:12`）现在也能打开正确的文档，并显示原始文件名。`手册.md:12-15` 这样的行号范围也支持。
+- 在长文档里点击出处会直接跳到被引用的那一行，即使超过了预览以前只显示的前 10,000 个字符（`GET …/preview?line=N`）。内置检索工具的行号改为从 1 开始，与预览和 Read 工具一致，引用的行号不再差一行。
+- 上传时会说明哪些文件被跳过以及原因：格式不支持，或超过 50 MB。一次超过 20 个文件时分批上传，不再整体失败；上传错误提示改为中文。之前不支持的文件会被悄悄丢掉，提示里却算作已上传。
+- 删除 Word、Excel 或 PowerPoint 文档时，也会删除提取出的文字文件。之前只有 PDF 会这样处理。
 
-- Upgraded dependencies for advisories published this week:
-  - body-parser 2.4.0: denial of service via trailing bytes after a compressed body (GHSA-27r3-jxmh-p828)
-  - multer 2.5.0: denial of service via a pending async file filter (GHSA-q7qp-rjg7-q26m)
-  - DOMPurify 3.4.17: three sanitizer bypasses (GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr, GHSA-c6gr-qvv4-5v3f)
-  - zod 4.6.7: memory exhaustion on oversized collections (GHSA-mrhx-c7xc-m3w5)
-- zod 3 has no patched release, so the bundled `claude-tools-kit` now uses zod 4's `zod/v3` API. The tool definitions sent to the model are byte-for-byte unchanged.
+### 安全
 
-### Changed
+- 针对本周公布的安全公告升级依赖：
+  - body-parser 2.4.0：压缩请求体后附带多余字节可导致拒绝服务（GHSA-27r3-jxmh-p828）
+  - multer 2.5.0：异步文件过滤器挂起可导致拒绝服务（GHSA-q7qp-rjg7-q26m）
+  - DOMPurify 3.4.17：三个净化绕过问题（GHSA-cg2g-xh64-v4q7、GHSA-mrv2-3pqr-j5jr、GHSA-c6gr-qvv4-5v3f）
+  - zod 4.6.7：超大集合导致内存耗尽（GHSA-mrhx-c7xc-m3w5）
+- zod 3 没有修复版本，所以随项目提供的 `claude-tools-kit` 改用 zod 4 的 `zod/v3` 接口。发给模型的工具定义逐字节不变。
 
-- Dependency upgrades (from Dependabot PRs #49 to #53, combined and verified together):
-  - express 5.3.0 and openai 7.41.0
-  - marked 18, which renders chat answers. It no longer ships `marked.min.js`, so `/vendor/marked.min.js` now serves `lib/marked.umd.js`. Bold, line breaks, inline code (used for citations) and tables render as before.
-  - TypeScript 7, the native compiler. The emitted JavaScript is byte-for-byte identical to TypeScript 6's, and a build takes about 1.7 s.
+### 变更
+
+- 依赖升级（来自 Dependabot 的 #49 到 #53，合并后统一验证）：
+  - express 5.3.0 和 openai 7.41.0
+  - marked 18（用于渲染聊天回答）。新版不再提供 `marked.min.js`，所以 `/vendor/marked.min.js` 改为提供 `lib/marked.umd.js`。粗体、换行、行内代码（出处用到）和表格的显示效果不变。
+  - TypeScript 7（原生编译器）。编译出的 JavaScript 与 TypeScript 6 逐字节相同，编译一次约 1.7 秒。
   - vitest 5
-- Dependency upgrades from Dependabot PRs #60 to #64: openai 7.43.0, officeparser 8.2.0, undici 8.12.3, supertest 7.3.1. `@types/node` stays on the Node 22 line to match the runtime, and Dependabot no longer proposes its major versions.
-- CI and release workflows use `actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7` and `softprops/action-gh-release@v3`, because GitHub deprecated the Node 20 runtime of the older versions. Dependabot now also watches GitHub Actions.
-- The chat page's 统计 button opens a knowledge base overview instead of a text dump. It shows:
-  - documents, broken down as indexed, still parsing, failed and OCR'd, plus file types with sizes
-  - questions in the last 30 days and how many people asked them, from all channels
-  - answer satisfaction, and how many knowledge gaps need content (as a count only, so readers of a public knowledge base don't see others' questions)
+- 依赖升级（来自 Dependabot 的 #60 到 #64）：openai 7.43.0、officeparser 8.2.0、undici 8.12.3、supertest 7.3.1。`@types/node` 保持在 Node 22 的版本线，与运行环境一致；Dependabot 不再提议它的大版本升级。
+- CI 和发布流程改用 `actions/checkout@v7`、`actions/setup-node@v7`、`actions/upload-artifact@v7` 和 `softprops/action-gh-release@v3`，因为 GitHub 已弃用旧版本使用的 Node 20 运行环境。Dependabot 现在也会检查 GitHub Actions 的更新。
+- 聊天页的 统计 按钮改为打开知识库概况，不再是一大段文字。内容包括：
+  - 文档数量，按已索引、解析中、失败和经过 OCR 分类，以及各文件类型的数量和大小
+  - 最近 30 天的提问数和提问人数（统计所有渠道）
+  - 回答满意度，以及有多少知识缺口需要补充内容（只显示数量，公开知识库的读者看不到别人问了什么）
 
-  The stats now come from the database. Before, they counted files on disk, so each PDF and its extracted text were counted twice and sizes under 1 KB showed as 0.0 KB. `GET /api/kbs/:id/stats` returns this as `health`.
-- The admin user list shows each user's last activity and question count for the last 30 days (`GET /api/admin/users` adds `last_active_at` and `questions_30d`), and scrolls sideways on phones. Fixed the misaligned row border in the actions column.
-- When admins add knowledge base members, matching usernames are suggested.
-- Knowledge gaps now cover every channel. These are recorded in a new `gap_events` table and appear in the admin 反馈 tab:
-  - questions asked through MCP (`ask_knowledge_base`) whose answer is "未找到相关内容"
-  - cross-knowledge-base questions on the web with the same answer; these are not saved as conversations and show as 全部知识库
-  - MCP searches that return nothing, shown with a new 检索无结果 tag
-- Scanned documents are read in their own queue. Other uploads are parsed and searchable right away instead of waiting behind a long scan.
-- Audit log is easier to read. Every action has a Chinese label, including Q&A, text edits, version restores and backups. Detail fields are labelled in Chinese, and knowledge bases are shown by name. The action filter is a drop-down. A full action code in `GET /api/admin/audit?action=` now matches exactly, while a keyword still matches loosely. Audit items include `kb_name`.
-- Upgraded vitest to 4.1.12 (vite 8.3), which clears the remaining development-only audit warning. `npm audit` now reports 0 vulnerabilities, including dev dependencies.
-- Document search results now include `doc_id`.
-- Backups started by the server run in a worker thread, so the app stays responsive while documents are copied (live check with 200 MB of documents: slowest `/healthz` 42 ms).
+  统计数据改为从数据库读取。之前是统计磁盘上的文件，每个 PDF 和它提取出的文字会被算两次，不到 1 KB 的大小显示为 0.0 KB。`GET /api/kbs/:id/stats` 在 `health` 字段里返回这些数据。
+- 管理员的用户列表显示每个用户最近一次活动时间和最近 30 天的提问数（`GET /api/admin/users` 新增 `last_active_at` 和 `questions_30d`），在手机上可以左右滑动。修复了操作列行边框错位的问题。
+- 管理员添加知识库成员时，会提示匹配的用户名。
+- 知识缺口覆盖所有渠道。这些记录保存在新的 `gap_events` 表里，显示在管理员的 反馈 标签页：
+  - 通过 MCP（`ask_knowledge_base`）提问、回答为"未找到相关内容"的问题
+  - 网页上跨知识库提问、回答相同的问题；这类提问不保存为对话，显示为 全部知识库
+  - MCP 检索没有结果的情况，带新的 检索无结果 标签
+- 扫描件在单独的队列里识别。其他上传立即解析、立即可检索，不用排在长扫描件后面。
+- 审计日志更好读了。每种操作都有中文名称，包括问答、文本编辑、恢复版本和备份。详情字段用中文标注，知识库显示名称而不是编号。操作筛选改为下拉框。`GET /api/admin/audit?action=` 传完整的操作代码时精确匹配，传关键词时仍然模糊匹配。审计记录新增 `kb_name`。
+- vitest 升级到 4.1.12（vite 8.3），消除了最后一个仅开发环境的审计警告。`npm audit` 现在包括开发依赖在内都是 0 个漏洞。
+- 文档检索结果新增 `doc_id`。
+- 服务器发起的备份在后台线程里运行，复制文档期间应用照常响应（用 200 MB 文档实测：`/healthz` 最慢 42 毫秒）。
 
 ## [1.2.0] - 2026-10-18
 
-**Upgrade notes:** requires Node.js 22.19 or newer (Docker users are unaffected). The database is migrated automatically on first start, so no manual steps are needed. Back up first with `npm run backup` as usual.
+**升级说明：** 需要 Node.js 22.19 或更新版本（Docker 用户不受影响）。数据库在第一次启动时自动迁移，不需要手动操作。升级前照常用 `npm run backup` 备份。
 
-### Fixed
+### 修复
 
-- Deleting a knowledge base now also deletes its search index and vectors. Leftover entries from earlier deletions are cleaned up on startup.
+- 删除知识库时，也会删除它的检索索引和向量。之前删除留下的残留会在启动时清理。
 
-### Security
+### 安全
 
-- Upgraded proxy-addr to 2.0.8 (IP spoofing via IPv4-mapped IPv6 when `TRUST_PROXY` names a subnet, GHSA-jqcg-44mw-7w3h).
-- Removed sprintf-js (GHSA-hp3w-g68c-fv3c, no patched release) by pinning mammoth's `argparse` to 2.x. It was only reachable from mammoth's own command-line tool, which this app never runs; document parsing is unaffected.
+- proxy-addr 升级到 2.0.8（`TRUST_PROXY` 配置为网段时，可通过 IPv4 映射的 IPv6 地址伪造 IP，GHSA-jqcg-44mw-7w3h）。
+- 把 mammoth 依赖的 `argparse` 固定在 2.x，从而移除了 sprintf-js（GHSA-hp3w-g68c-fv3c，没有修复版本）。它只会在 mammoth 自带的命令行工具里用到，本应用从不运行这个工具；文档解析不受影响。
 
-### Added
+### 新增
 
-- Knowledge gap report in the admin 反馈 tab: questions the assistant answered with "未找到相关内容", or that users marked 👎 "没找到相关资料", grouped by question and knowledge base and ranked by how often they were asked (last 7/30/90 days). Admin API: `GET /api/admin/gaps?days=&kbId=`.
-- `npm run upgrade:check -- <previous release build>`: seeds data with the previous release, starts the current build on the same data and verifies that users, documents, search, conversations and feedback survive the upgrade. It's part of the release checklist in `RELEASE.md`.
-- Browser end-to-end tests (Playwright, `npm run test:e2e`) for login, Q&A with 👎 reasons, the admin feedback tab, read-only public knowledge bases and phone layout. They run in CI as a separate job.
+- 管理员 反馈 标签页里的知识缺口报告：助手回答"未找到相关内容"的问题，以及用户点 👎 并选择"没找到相关资料"的问题，按问题和知识库分组，按被问次数排序（最近 7/30/90 天）。管理员接口：`GET /api/admin/gaps?days=&kbId=`。
+- `npm run upgrade:check -- <上一个版本的构建目录>`：先用上一个版本写入数据，再用当前版本在同一份数据上启动，验证用户、文档、检索、对话和反馈在升级后都还在。这一步已列入 `RELEASE.md` 的发布检查清单。
+- 浏览器端到端测试（Playwright，`npm run test:e2e`），覆盖登录、带 👎 原因的问答、管理员反馈页、只读的公开知识库和手机布局。在 CI 里作为单独的任务运行。
 
-### Changed
+### 变更
 
-- **Requires Node.js 22.19 or newer** (Node 20 reached end of life in April 2026). The server and the backup/restore commands now stop at startup with a clear message on older versions. Docker images and CI already use Node 22, so they are unaffected.
-- Upgraded openai to 7 and undici to 8. Both require Node 22. undici 8 uses HTTP/2 automatically when an HTTPS model endpoint offers it. The outbound proxy (`HTTPS_PROXY`/`NO_PROXY`) still applies to model calls, embeddings and document summaries.
-- Faster search index bookkeeping for large knowledge bases. With 2,000 documents (11 M characters), the document list page went from about 1 s to under 1 ms, indexing went from 11.7 ms to about 2 ms per document, and deleting a document's index went from 19 ms to under 1 ms. Searches that use 2-character terms only scan the selected knowledge base. Existing databases are migrated automatically on startup. Benchmark: `npm run bench:search`.
-- Large uploads no longer freeze the server while they are indexed. A 50 MB text file used to block every other request (including streaming answers) for about 4 s. Chunks are now written in batches that yield between writes, and the longest pause is about 0.2 s. If the document is deleted or edited while indexing is still running, the remaining batches are dropped.
-- PDF, Word, Excel and PowerPoint text extraction now runs in a separate worker thread. Before this change, a 2,000-page PDF froze the server for about 6.5 s; now the longest stall is about 13 ms. Files that take longer than `EXTRACT_TIMEOUT_SECONDS` (default 120) are marked as failed instead of hanging the index queue.
-- Upgraded pdf-parse to 2.x (current pdf.js); table cells in PDFs are now extracted with spacing.
-- Upgraded tsx, TypeScript 6 and better-sqlite3 12.
-- Upgraded officeparser, mammoth, p5 2 and bcryptjs 3. Existing password hashes keep working.
-- Upgraded dotenv to 18 (`.env` parsing unchanged; startup stays quiet), Playwright to 1.64 and @types/multer to 2.3.
+- **需要 Node.js 22.19 或更新版本**（Node 20 已于 2026 年 4 月停止维护）。版本过旧时，服务器和备份/恢复命令会在启动时给出明确提示并退出。Docker 镜像和 CI 已经使用 Node 22，不受影响。
+- openai 升级到 7，undici 升级到 8，两者都需要 Node 22。HTTPS 的大模型接口支持 HTTP/2 时，undici 8 会自动使用。出站代理（`HTTPS_PROXY`/`NO_PROXY`）仍然对模型调用、向量和文档摘要生效。
+- 大知识库的检索索引维护更快了。2,000 份文档（1,100 万字）时，文档列表页从约 1 秒降到 1 毫秒以内，每份文档建索引从 11.7 毫秒降到约 2 毫秒，删除一份文档的索引从 19 毫秒降到 1 毫秒以内。使用 2 字词的检索只扫描选中的知识库。已有数据库在启动时自动迁移。性能测试：`npm run bench:search`。
+- 大文件建索引时服务器不再卡住。以前一个 50 MB 的文本文件会让其他所有请求（包括流式回答）卡住约 4 秒。现在分批写入，批次之间让出处理时间，最长停顿约 0.2 秒。如果文档在建索引过程中被删除或编辑，剩下的批次会被丢弃。
+- PDF、Word、Excel 和 PowerPoint 的文字提取改在单独的工作线程里运行。之前一个 2,000 页的 PDF 会让服务器卡住约 6.5 秒，现在最长停顿约 13 毫秒。解析超过 `EXTRACT_TIMEOUT_SECONDS`（默认 120）的文件标记为失败，不再卡住索引队列。
+- pdf-parse 升级到 2.x（新版 pdf.js）；PDF 表格单元格提取时保留间隔。
+- 升级 tsx、TypeScript 6 和 better-sqlite3 12。
+- 升级 officeparser、mammoth、p5 2 和 bcryptjs 3。已有的密码哈希照常可用。
+- dotenv 升级到 18（`.env` 解析方式不变，启动时不额外输出），Playwright 升级到 1.64，@types/multer 升级到 2.3。
 
 ## [1.1.0] - 2026-10-02
 
-### Security
+### 安全
 
-- LLM file tools (Read/Grep/Glob/KBStats) are now confined to the knowledge bases the user can access. Previously they could read any file on the server, including `.env` and the database. **If untrusted users had access, rotate `JWT_SECRET` and `LLM_API_KEY` after upgrading.**
-- Only admins can set a knowledge base's sync folder. New optional `SYNC_ALLOWED_ROOTS` limits which server folders can be synced.
-- Upload permission is checked before the file is written, so rejected uploads no longer leave files in the knowledge base folder.
-- Public knowledge bases are read-only for non-members.
-- Login tokens are revoked immediately when a user is deleted, their role changes, or their password changes. Previously they stayed valid until expiry (24 h by default), including a demoted admin's admin rights.
-- Dependency updates for multer, body-parser, qs, form-data, brace-expansion and uuid advisories.
+- 大模型的文件工具（Read/Grep/Glob/KBStats）现在只能访问用户有权访问的知识库。之前它们能读取服务器上的任何文件，包括 `.env` 和数据库。**如果曾有不受信任的用户能使用本系统，升级后请更换 `JWT_SECRET` 和 `LLM_API_KEY`。**
+- 只有管理员能设置知识库的同步文件夹。新增可选的 `SYNC_ALLOWED_ROOTS`，限制哪些服务器目录可以同步。
+- 先检查上传权限再写入文件，被拒绝的上传不再在知识库文件夹里留下文件。
+- 公开知识库对非成员只读。
+- 删除用户、修改角色或修改密码时，该用户的登录令牌立即失效。之前它们要到过期时才失效（默认 24 小时），被降级的管理员在此期间仍有管理员权限。
+- 针对 multer、body-parser、qs、form-data、brace-expansion 和 uuid 的安全公告更新依赖。
 
-### Changed
+### 变更
 
-- **Behavior change:** uploading, creating and editing documents now requires being the owner, a member, or an admin. Public visibility only grants viewing and Q&A.
-- **Behavior change:** knowledge base owners can no longer set a sync folder themselves. They can still run a sync on a folder an admin configured.
-- Cross-knowledge-base Q&A can now open documents in every knowledge base the user can access, not just the first one.
-- CI, release builds and the Docker image now use Node.js 22.
-- Frontend libraries and the Inter font are served locally (no CDN needed on intranets).
-- Redesigned UI, including a new login page background.
+- **行为变化：** 上传、新建和编辑文档需要是所有者、成员或管理员。公开知识库只开放查看和问答。
+- **行为变化：** 知识库所有者不能再自己设置同步文件夹，但仍可以对管理员配置好的文件夹执行同步。
+- 跨知识库问答可以打开用户有权访问的所有知识库里的文档，而不只是第一个。
+- CI、发布构建和 Docker 镜像改用 Node.js 22。
+- 前端库和 Inter 字体改为本地提供（内网环境不需要访问 CDN）。
+- 重新设计界面，包括新的登录页背景。
 
-### Added
+### 新增
 
-- Chinese/Japanese/Korean full-text search (trigram index).
-- Word, Excel and PowerPoint parsing.
-- Hybrid semantic search with optional embeddings, and related-document suggestions.
-- Thumbs-down reasons with an optional comment, and a 反馈 tab for admins with the reason breakdown and the rated questions and answers.
-- Audit log of logins, user, knowledge base, document, sync, configuration and Q&A actions.
-- Local folder sync, inline text documents with Markdown preview, document auto-summaries, and per-knowledge-base system prompts.
-- Conversation search, pinning, batch delete and a stop-generation button.
-- Model selection that persists across restarts, and a per-user Q&A rate limit (`QA_RATE_MAX`, `QA_RATE_WINDOW_MS`).
-- Outbound HTTP proxy support (`HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`).
-- Backup and restore: `npm run backup` (works while the server runs; keeps the newest `BACKUP_KEEP`), `npm run backup:list`, and `npm run restore -- <backup> --yes`, which keeps the current data aside. See `DEPLOYMENT.md`.
+- 中文、日文、韩文全文检索（三元组索引）。
+- 解析 Word、Excel 和 PowerPoint。
+- 可选向量的混合语义检索，以及相关文档推荐。
+- 点 👎 时可选择原因并填写说明；管理员新增 反馈 标签页，显示原因分布和被评价的问答。
+- 审计日志，记录登录、用户、知识库、文档、同步、配置和问答操作。
+- 本地文件夹同步、带 Markdown 预览的在线文本文档、文档自动摘要，以及每个知识库单独的系统提示词。
+- 对话搜索、置顶、批量删除和停止生成按钮。
+- 重启后仍保留的模型选择，以及每个用户的问答频率限制（`QA_RATE_MAX`、`QA_RATE_WINDOW_MS`）。
+- 支持出站 HTTP 代理（`HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`）。
+- 备份与恢复：`npm run backup`（服务器运行时也能用，保留最新的 `BACKUP_KEEP` 份）、`npm run backup:list`，以及 `npm run restore -- <备份名> --yes`（会把当前数据保留在旁边）。见 `DEPLOYMENT.md`。
 
-### Fixed
+### 修复
 
-- 👍/👎 buttons were never shown under answers.
-- Home page panels stuck on "加载中…" when no knowledge base was available.
-- Admin console layout on phones.
+- 回答下方从不显示 👍/👎 按钮。
+- 没有可用知识库时，首页面板一直显示"加载中…"。
+- 管理控制台在手机上的布局。
 
 ## [1.0.0] - 2026-06-06
 
-### Added
+### 新增
 
-- Initial enterprise KB application.
-- Express + SQLite backend with OpenAI-compatible LLM support.
-- Multi-user authentication and KB ownership/member checks.
-- Document upload, preview, and storage paths.
-- Codex-oriented project guidance in `AGENTS.md`.
-- API tests, smoke checks, Docker deployment, and GitHub CI.
-- GitHub workflow hygiene files, security ownership notes, and branch protection.
+- 企业知识库应用的第一个版本。
+- Express + SQLite 后端，支持兼容 OpenAI 接口的大模型。
+- 多用户登录，以及知识库所有者和成员的权限检查。
+- 文档上传、预览和存储路径。
+- 面向 Codex 的项目说明 `AGENTS.md`。
+- 接口测试、冒烟检查、Docker 部署和 GitHub CI。
+- GitHub 工作流规范文件、安全责任说明和分支保护。

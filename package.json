@@ -1,6 +1,6 @@
 {
   "name": "enterprise-kb",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Enterprise knowledge base with OpenAI-compatible LLM support, multi-user auth, and document management",
   "type": "module",
   "engines": {
