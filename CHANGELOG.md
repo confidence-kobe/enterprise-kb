@@ -36,7 +36,8 @@ All notable changes to this project will be documented in this file.
   - marked 18, which renders chat answers. It no longer ships `marked.min.js`, so `/vendor/marked.min.js` now serves `lib/marked.umd.js`. Bold, line breaks, inline code (used for citations) and tables render as before.
   - TypeScript 7, the native compiler. The emitted JavaScript is byte-for-byte identical to TypeScript 6's, and a build takes about 1.7 s.
   - vitest 5
-- CI and release workflows use `actions/checkout@v5` and `actions/setup-node@v5`, because GitHub deprecated the Node 20 runtime of v4. Dependabot now also watches GitHub Actions.
+- Dependency upgrades from Dependabot PRs #60 to #64: openai 7.43.0, officeparser 8.2.0, undici 8.12.3, supertest 7.3.1. `@types/node` stays on the Node 22 line to match the runtime, and Dependabot no longer proposes its major versions.
+- CI and release workflows use `actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7` and `softprops/action-gh-release@v3`, because GitHub deprecated the Node 20 runtime of the older versions. Dependabot now also watches GitHub Actions.
 - The chat page's 统计 button opens a knowledge base overview instead of a text dump. It shows:
   - documents, broken down as indexed, still parsing, failed and OCR'd, plus file types with sizes
   - questions in the last 30 days and how many people asked them, from all channels
