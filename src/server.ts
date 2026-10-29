@@ -74,7 +74,7 @@ function envValue(primary: string, ...aliases: string[]): string | undefined {
 function parsePositiveInt(raw: string | undefined, fallback: number, name: string): number {
   if (!raw) return fallback
   const n = Number(raw)
-  if (!Number.isInteger(n) || n <= 0) throw new Error(`${name} must be a positive integer.`)
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`${name} 必须是正整数。`)
   return n
 }
 
@@ -134,10 +134,10 @@ function validateRuntimeConfig(): void {
   const jwtSecret = process.env.JWT_SECRET
   if (IS_PRODUCTION) {
     if (!jwtSecret || jwtSecret === DEFAULT_JWT_SECRET || jwtSecret === EXAMPLE_JWT_SECRET || jwtSecret.length < 32) {
-      throw new Error('JWT_SECRET must be set to a random string of at least 32 characters in production.')
+      throw new Error('生产环境必须把 JWT_SECRET 设置为至少 32 个字符的随机字符串。')
     }
     if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === EXAMPLE_ADMIN_PASSWORD) {
-      throw new Error('ADMIN_PASSWORD must be changed before production deployment.')
+      throw new Error('部署到生产环境前必须修改 ADMIN_PASSWORD。')
     }
   }
 }
@@ -739,7 +739,7 @@ function syncKnowledgeBase(kb: KnowledgeBase, sourceRoot: string): SyncSummary {
   return summary
 }
 
-// ── Express ───────────────────────────────────────────
+// ── Express 应用 ───────────────────────────────────────────
 
 export const app = express()
 if (TRUST_PROXY) app.set('trust proxy', 1)
@@ -798,7 +798,7 @@ function loginRateLimit(req: Request, res: Response, next: NextFunction): void {
     return
   }
   if (state.count >= LOGIN_MAX_ATTEMPTS) {
-    res.status(429).json({ error: 'Too many login attempts. Please try again later.' })
+    res.status(429).json({ error: '登录尝试次数过多，请稍后再试。' })
     return
   }
   state.count++
@@ -2266,11 +2266,11 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     return
   }
   if (err instanceof SyntaxError && 'body' in err) {
-    res.status(400).json({ error: 'Invalid JSON request body.' })
+    res.status(400).json({ error: '请求内容不是有效的 JSON。' })
     return
   }
-  console.error('[http] unhandled error:', err)
-  res.status(500).json({ error: 'Internal server error.' })
+  console.error('[http] 未处理的错误：', err)
+  res.status(500).json({ error: '服务器内部错误，请稍后重试。' })
 })
 
 export function startServer(): void {

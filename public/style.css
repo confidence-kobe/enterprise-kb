@@ -3,11 +3,11 @@
    Design system: Inter · Dark sidebar · Card-first redesign
    ═══════════════════════════════════════════════════════════ */
 
-/* ── 1. Reset & base ────────────────────────────────────── */
+/* ── 1. 重置与基础 ────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 .hidden { display: none !important; }
 
-/* ── 2. Design tokens ───────────────────────────────────── */
+/* ── 2. 设计变量 ───────────────────────────────────── */
 :root {
   --bg:        #f0f4f8;
   --surface:   #ffffff;
@@ -18,13 +18,13 @@
   --green:     #16a34a;
   --red:       #dc2626;
 
-  /* Deep blue primary */
+  /* 深蓝主色 */
   --accent:    #1e40af;
   --accent-d:  #1e3a8a;
   --accent-lt: #eff6ff;
   --accent-2:  #2563eb;
 
-  /* Sidebar — always dark */
+  /* 侧边栏：始终为深色 */
   --sb-bg:      #0f172a;
   --sb-hover:   rgba(255,255,255,.06);
   --sb-active:  rgba(59,130,246,.18);
@@ -34,7 +34,7 @@
   --sb-border:  rgba(255,255,255,.07);
   --sb-accent:  #60a5fa;
 
-  /* Component tokens */
+  /* 组件变量 */
   --tool-bg:     #f8fafc;
   --tool-border: #e2e8f0;
   --tool-accent: #6366f1;
@@ -45,21 +45,21 @@
   --ref-border:  #fde68a;
   --ref-text:    #92400e;
 
-  /* Shadows */
+  /* 阴影 */
   --sh-xs: 0 1px 2px rgba(15,23,42,.05);
   --sh-sm: 0 2px 6px rgba(15,23,42,.10), 0 1px 3px rgba(15,23,42,.07);
   --sh:    0 4px 8px -2px rgba(15,23,42,.1), 0 2px 4px -2px rgba(15,23,42,.05);
   --sh-lg: 0 12px 24px -4px rgba(15,23,42,.12), 0 4px 8px -2px rgba(15,23,42,.07);
   --sh-xl: 0 24px 48px -12px rgba(15,23,42,.2);
 
-  /* Radius */
+  /* 圆角 */
   --r-sm: 6px;
   --r:    8px;
   --r-lg: 12px;
   --r-xl: 16px;
 }
 
-/* ── 3. Dark mode tokens ────────────────────────────────── */
+/* ── 3. 深色模式变量 ────────────────────────────────── */
 html[data-theme="dark"] {
   color-scheme: dark;
   --bg:        #0d1117;
@@ -84,7 +84,7 @@ html[data-theme="dark"] {
   --sh-xl: 0 24px 48px -12px rgba(0,0,0,.6);
 }
 
-/* ── 4. Global base ─────────────────────────────────────── */
+/* ── 4. 全局基础样式 ─────────────────────────────────────── */
 ::-webkit-scrollbar       { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(0,0,0,.12); border-radius: 4px; }
@@ -102,7 +102,7 @@ body {
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* ── 5. Primitive components ────────────────────────────── */
+/* ── 5. 基础组件 ────────────────────────────── */
 
 .btn {
   display: inline-flex;
@@ -223,7 +223,7 @@ kbd {
   white-space: nowrap;
 }
 
-/* ── 6. Login page ──────────────────────────────────────── */
+/* ── 6. 登录页 ──────────────────────────────────────── */
 #tsparticles {
   position: fixed;
   inset: 0;
@@ -402,12 +402,12 @@ kbd {
 .login-box .input { height: 42px; border-radius: var(--r-sm); }
 html[data-theme="dark"] .login-box { background: rgba(10, 14, 28, 0.88); border-color: rgba(59, 130, 246, 0.25); }
 
-/* Login page always uses dark style — particles background is always dark */
+/* 登录页始终使用深色样式，粒子背景也始终是深色 */
 .login-form-title  { color: #e6edf3; }
 .login-form-sub    { color: #8b949e; }
 .login-page .form-label { color: #c9d1d9; }
 
-/* Use !important to beat html[data-theme="dark"] .input specificity */
+/* 用 !important 覆盖 html[data-theme="dark"] .input 的优先级 */
 .login-box .input  {
   background: rgba(255, 255, 255, 0.07) !important;
   border-color: rgba(59, 130, 246, 0.3) !important;
@@ -425,7 +425,7 @@ html[data-theme="dark"] .login-box { background: rgba(10, 14, 28, 0.88); border-
   color: #fca5a5;
 }
 
-/* Subtle entrance animation for login panels */
+/* 登录面板的轻微入场动画 */
 @keyframes login-fade-up {
   from { opacity: 0; transform: translateY(18px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -441,14 +441,14 @@ html[data-theme="dark"] .login-box { background: rgba(10, 14, 28, 0.88); border-
   .login-box { padding: 24px; }
 }
 
-/* ── 7. Chat page layout ────────────────────────────────── */
+/* ── 7. 聊天页布局 ────────────────────────────────── */
 .app-layout {
   height: 100dvh;
   display: flex;
   overflow: hidden;
 }
 
-/* ── 8. Sidebar ─────────────────────────────────────────── */
+/* ── 8. 侧边栏 ─────────────────────────────────────────── */
 .sidebar {
   width: 260px;
   flex-shrink: 0;
@@ -617,7 +617,7 @@ html[data-theme="dark"] .login-box { background: rgba(10, 14, 28, 0.88); border-
   color: var(--sb-muted);
 }
 
-/* ── 9. Conversation history ────────────────────────────── */
+/* ── 9. 对话历史 ────────────────────────────── */
 .sidebar-conv-hdr {
   display: flex;
   align-items: center;
@@ -796,7 +796,7 @@ html[data-theme="dark"] .login-box { background: rgba(10, 14, 28, 0.88); border-
 }
 .conv-item-cb.visible { opacity: 1; pointer-events: auto; }
 
-/* ── 10. Global search panel ────────────────────────────── */
+/* ── 10. 全局搜索面板 ────────────────────────────── */
 .global-search-panel {
   position: absolute;
   inset: 0;
@@ -853,7 +853,7 @@ html[data-theme="dark"] .login-box { background: rgba(10, 14, 28, 0.88); border-
 }
 .no-kb-hint { font-size: 13px; color: var(--sb-text); padding: 16px; text-align: center; }
 
-/* ── 11. Main area ──────────────────────────────────────── */
+/* ── 11. 主区域 ──────────────────────────────────────── */
 .main-area {
   flex: 1;
   display: flex;
@@ -862,7 +862,7 @@ html[data-theme="dark"] .login-box { background: rgba(10, 14, 28, 0.88); border-
   min-width: 0;
 }
 
-/* Top bar */
+/* 顶栏 */
 .topbar {
   height: 52px;
   background: rgba(255,255,255,.97);
@@ -931,14 +931,14 @@ html[data-theme="dark"] .topbar-model { background: #0d1117; border-color: var(-
 .topbar-icon-btn:hover:not(:disabled) { background: var(--bg); color: var(--text); }
 .topbar-icon-btn:disabled { opacity: .35; cursor: not-allowed; }
 
-/* ── 12. Content area ───────────────────────────────────── */
+/* ── 12. 内容区 ───────────────────────────────────── */
 #content {
   flex: 1;
   position: relative;
   overflow: hidden;
 }
 
-/* ── 13. Welcome / Dashboard screen ────────────────────── */
+/* ── 13. 欢迎页 / 概览 ────────────────────── */
 #welcome {
   position: absolute;
   inset: 0;
@@ -1255,7 +1255,7 @@ html[data-theme="dark"] .dashboard-list-icon { background: #172a46; color: #6cb6
 }
 .welcome-icon svg { width: 26px; height: 26px; }
 
-/* ── 14. Messages area ──────────────────────────────────── */
+/* ── 14. 消息区 ──────────────────────────────────── */
 #messages {
   position: absolute;
   inset: 0;
@@ -1268,7 +1268,7 @@ html[data-theme="dark"] .dashboard-list-icon { background: #172a46; color: #6cb6
 }
 html[data-theme="dark"] #messages { background: var(--bg); }
 
-/* ── User message bubble (right-aligned) ── */
+/* ── 用户消息气泡（右对齐） ── */
 .msg-user {
   display: flex;
   justify-content: flex-end;
@@ -1292,7 +1292,7 @@ html[data-theme="dark"] .msg-user-bubble {
   box-shadow: 0 2px 8px rgba(37,99,235,.3);
 }
 
-/* ── AI message (left-aligned card) ── */
+/* ── AI 回答（左对齐卡片） ── */
 .msg-assistant {
   display: flex;
   align-items: flex-start;
@@ -1340,7 +1340,7 @@ html[data-theme="dark"] .msg-ai-content {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── 15. Tool calls ─────────────────────────────────────── */
+/* ── 15. 工具调用 ─────────────────────────────────────── */
 .tools-log { margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
 
 .tool-call {
@@ -1418,7 +1418,7 @@ html[data-theme="dark"] .tool-call[open] { border-left-color: var(--accent); }
 .tool-wait { color: var(--light); font-style: italic; }
 .tool-path { color: var(--muted); font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace; font-size: .9em; }
 
-/* ── 16. Response text / Markdown ───────────────────────── */
+/* ── 16. 回答正文 / Markdown ───────────────────────── */
 .response-text { min-height: 1.65em; }
 .response-text p           { margin: 0 0 8px; }
 .response-text p:last-child { margin-bottom: 0; }
@@ -1593,7 +1593,7 @@ html[data-theme="dark"] .response-text tr:nth-child(even) td { background: #161b
 }
 @keyframes blink { 50% { opacity: 0; } }
 
-/* ── 17. Input area ─────────────────────────────────────── */
+/* ── 17. 输入区 ─────────────────────────────────────── */
 #input-area {
   background: var(--bg);
   padding: 10px 24px 16px;
@@ -1711,7 +1711,7 @@ html[data-theme="dark"] #question-input { color: var(--text); }
 .dots span:nth-child(3) { animation-delay: .36s; }
 @keyframes dot-pulse { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 
-/* ── 18. Modals ─────────────────────────────────────────── */
+/* ── 18. 弹窗 ─────────────────────────────────────────── */
 .modal {
   position: fixed;
   inset: 0;
@@ -2027,12 +2027,12 @@ html[data-theme="dark"] .preview-related-pane { background: var(--surface); }
 }
 .text-doc-char-count { font-size: 12px; color: var(--light); flex-shrink: 0; }
 
-/* ── 19. Empty state ────────────────────────────────────── */
+/* ── 19. 空状态 ────────────────────────────────────── */
 .empty-state { text-align: center; padding: 48px 20px; color: var(--muted); }
 .empty-state-icon { font-size: 32px; margin-bottom: 12px; opacity: .5; }
 .empty-state-text { font-size: 14px; }
 
-/* ── 20. Toast ──────────────────────────────────────────── */
+/* ── 20. 消息提示 ──────────────────────────────────────────── */
 #toast {
   position: fixed;
   bottom: 24px;
@@ -2087,7 +2087,7 @@ html[data-theme="dark"] .preview-related-pane { background: var(--surface); }
 html[data-theme="dark"] .theme-toggle-btn { background: var(--surface); border-color: var(--border); }
 html[data-theme="dark"] .theme-toggle-btn:hover { background: #21262d; }
 
-/* ── 21. Mobile responsive ──────────────────────────────── */
+/* ── 21. 手机适配 ──────────────────────────────── */
 .sidebar-toggle { display: none; }
 .sidebar-overlay {
   display: none;
@@ -2135,7 +2135,7 @@ html[data-theme="dark"] .theme-toggle-btn:hover { background: #21262d; }
   .topbar { padding: 0 8px; gap: 4px; }
 }
 
-/* ── 22. Manage page ────────────────────────────────────── */
+/* ── 22. 管理页 ────────────────────────────────────── */
 .manage-layout {
   min-height: 100dvh;
   display: flex;
@@ -2191,7 +2191,7 @@ html[data-theme="dark"] .manage-header { background: #161b22; border-color: var(
   .manage-body { padding: 16px 16px 32px; }
 }
 
-/* Tabs */
+/* 标签页 */
 .tabs {
   display: flex;
   border-bottom: 1.5px solid var(--border);
@@ -2238,7 +2238,7 @@ html[data-theme="dark"] .tabs { border-color: var(--border); }
   color: var(--text);
 }
 
-/* ── 23. Manage stats row ────────────────────────────────── */
+/* ── 23. 管理页统计行 ────────────────────────────────── */
 .manage-stats-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2272,7 +2272,7 @@ html[data-theme="dark"] .tabs { border-color: var(--border); }
 .manage-stat-card.accent .manage-stat-value { color: var(--accent); }
 html[data-theme="dark"] .manage-stat-card { background: var(--surface); border-color: var(--border); }
 
-/* ── 24. KB card grid ────────────────────────────────────── */
+/* ── 24. 知识库卡片网格 ────────────────────────────────────── */
 .item-grid { display: flex; flex-direction: column; gap: 10px; }
 
 .kb-card-grid {
@@ -2388,10 +2388,10 @@ html[data-theme="dark"] .kb-stat-pill { background: rgba(255,255,255,.04); borde
   color: var(--light);
 }
 
-/* Existing item-grid KB card (keep for compat) */
+/* 旧版 item-grid 知识库卡片（保留以兼容） */
 .kb-card-body  { flex: 1; min-width: 0; }
 
-/* ── 25. Doc table header & rows ─────────────────────────── */
+/* ── 25. 文档表头与行 ─────────────────────────── */
 .doc-table-header {
   display: grid;
   grid-template-columns: 30px 1fr 90px 80px 70px auto;
@@ -2422,7 +2422,7 @@ html[data-theme="dark"] .kb-stat-pill { background: rgba(255,255,255,.04); borde
 html[data-theme="dark"] .doc-row { background: var(--surface); border-color: var(--border); }
 html[data-theme="dark"] .doc-row:hover { background: #1c2128; border-color: var(--accent); }
 
-/* Keep old .doc-item for any remaining references */
+/* 保留旧的 .doc-item，仍有地方在用 */
 .doc-item {
   display: flex;
   align-items: center;
@@ -2503,7 +2503,7 @@ html[data-theme="dark"] .doc-item { background: var(--surface); border-color: va
 }
 .doc-snippet mark { background: #fef08a; color: inherit; border-radius: 2px; padding: 0 1px; }
 
-/* ── 26. Upload zone ──────────────────────────────────────── */
+/* ── 26. 上传区域 ──────────────────────────────────────── */
 .upload-zone {
   border: 2px dashed var(--border);
   border-radius: var(--r-lg);
@@ -2575,7 +2575,7 @@ html[data-theme="dark"] .upload-zone.drag-over { background: var(--accent-lt); b
   .sync-source-status { white-space: normal; }
 }
 
-/* ── 27. User / Audit tables ──────────────────────────────── */
+/* ── 27. 用户 / 审计表格 ──────────────────────────────── */
 .user-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .user-table th {
   text-align: left;
@@ -2763,7 +2763,7 @@ html[data-theme="dark"] .user-table tr:hover td { background: #1c2128; }
   color: var(--muted);
 }
 
-/* ── 28. Dark mode misc ───────────────────────────────────── */
+/* ── 28. 深色模式杂项 ───────────────────────────────────── */
 html[data-theme="dark"] .doc-snippet mark { background: rgba(251,191,36,.2); color: #fbbf24; }
 html[data-theme="dark"] .source-ref { background: #1c1800; border-color: #3a2f00; color: #d4a010; }
 html[data-theme="dark"] .response-text code { background: #21262d; border-color: #30363d; color: #e6edf3; }

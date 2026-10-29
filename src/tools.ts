@@ -73,7 +73,7 @@ function walkStats(dir: string, stats: FileStats): void {
       try { size = fs.statSync(fullPath).size } catch { continue }
 
       let lines = 0
-      try { lines = fs.readFileSync(fullPath, 'utf-8').split('\n').length } catch { /* binary */ }
+      try { lines = fs.readFileSync(fullPath, 'utf-8').split('\n').length } catch { /* 二进制文件 */ }
 
       stats.totalFiles++
       stats.totalLines  += lines

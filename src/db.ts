@@ -202,50 +202,50 @@ export function initDb(dbPath: string): void {
   // FTS5 全文检索索引（幂等）
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN index_version INTEGER NOT NULL DEFAULT 0`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN index_status TEXT NOT NULL DEFAULT 'ready'`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN index_error TEXT`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN indexed_at INTEGER`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE knowledge_bases ADD COLUMN sync_source_path TEXT`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE knowledge_bases ADD COLUMN sync_last_at INTEGER`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE knowledge_bases ADD COLUMN sync_last_result TEXT`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload'`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN source_path TEXT`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN source_mtime INTEGER`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN source_size INTEGER`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE knowledge_bases ADD COLUMN system_prompt TEXT`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     db.exec(`ALTER TABLE documents ADD COLUMN summary TEXT`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
   try {
     // 通过 OCR 识别出文字的页数（图片记为 1）；NULL 表示没有用到 OCR
     db.exec(`ALTER TABLE documents ADD COLUMN ocr_pages INTEGER`)
-  } catch { /* column already exists */ }
+  } catch { /* 列已存在 */ }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS response_feedback (
@@ -262,7 +262,7 @@ export function initDb(dbPath: string): void {
   `)
   // Migration: 差评原因与当时问答快照
   for (const col of ['reason TEXT', 'comment TEXT', 'question TEXT', 'answer TEXT', 'updated_at INTEGER']) {
-    try { db.exec(`ALTER TABLE response_feedback ADD COLUMN ${col}`) } catch { /* column already exists */ }
+    try { db.exec(`ALTER TABLE response_feedback ADD COLUMN ${col}`) } catch { /* 列已存在 */ }
   }
 
   // 文本文档的历史版本：内容存在数据库里（不放进知识库目录，避免被检索和 AI 工具读到）
@@ -310,15 +310,15 @@ export function initDb(dbPath: string): void {
     CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
   `)
 
-  // Migration: unicode61 → trigram for CJK support (trigram handles 3+ char Chinese terms;
-  // 2-char terms continue to be served by the existing LIKE substring fallback)
+  // 迁移：分词器从 unicode61 换成 trigram，以支持中日韩文字（trigram 处理 3 字及以上的中文词；
+  // 2 字词仍由原有的 LIKE 子串匹配兜底）
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE name='doc_fts'").get() as { sql: string } | undefined
     if (row && !row.sql.includes('trigram')) {
       db.exec('DROP TABLE IF EXISTS doc_fts; DROP TABLE IF EXISTS doc_chunks')
       console.log('[DB] FTS5 tokenizer 已升级为 trigram，后台将重建全文索引')
     }
-  } catch { /* ignore — table may not exist yet on first run */ }
+  } catch { /* 忽略：首次运行时表可能还不存在 */ }
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_docs_source
@@ -1309,7 +1309,7 @@ export function searchDocContent(
         LIMIT ?
       `).all(kbId, expression, candidateLimit) as Array<Omit<SearchCandidate, 'sources'>>
       addRows(rows, source)
-    } catch { /* fall through to substring candidates */ }
+    } catch { /* 改用子串匹配的候选结果 */ }
   }
 
   runFts(ftsQuery(terms, 'AND'), 'strict')

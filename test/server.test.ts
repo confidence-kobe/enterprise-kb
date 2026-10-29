@@ -66,6 +66,15 @@ describe('server health and auth', () => {
     await request(app).get('/node_modules/marked/package.json').expect(404)
   })
 
+  it('answers a malformed JSON body with a Chinese error', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .set('Content-Type', 'application/json')
+      .send('{"username": ')
+      .expect(400)
+    expect(res.body.error).toBe('请求内容不是有效的 JSON。')
+  })
+
   it('serves liveness and readiness endpoints', async () => {
     await request(app)
       .get('/healthz')

@@ -14,10 +14,10 @@ if (!token || !user) { location.href = '/login.html' }
   if (!token) return
   try {
     const payload = JSON.parse(atob(token.split('.')[1]))
-    const exp = payload.exp   // seconds since epoch
+    const exp = payload.exp   // Unix 时间戳（秒）
     if (!exp) return
     const now = () => Math.floor(Date.now() / 1000)
-    const WARN_BEFORE = 5 * 60   // 5 minutes
+    const WARN_BEFORE = 5 * 60   // 5 分钟
 
     function check() {
       const remaining = exp - now()
@@ -46,7 +46,7 @@ if (!token || !user) { location.href = '/login.html' }
       localStorage.removeItem('kb_user')
       location.href = '/login.html'
     })
-  } catch { /* token decode failed, ignore */ }
+  } catch { /* Token 解析失败，忽略 */ }
 })()
 
 /* ── 状态 ─────────────────────────────────────────── */
@@ -87,7 +87,7 @@ function indexKbDocs(docs) {
 /** 引用格式 `文件名:行号` 或 `文件名:起-止`；文件名可以是中文或带路径 */
 const SOURCE_REF_RE = /^(.+\.[\w]+):(\d+)(?:[-–]\d+)?$/
 
-/* ── DOM ──────────────────────────────────────────── */
+/* ── DOM 元素 ──────────────────────────────────────────── */
 const messagesEl   = document.getElementById('messages')
 const welcomeEl    = document.getElementById('welcome')
 const welcomeKbName = document.getElementById('welcome-kb-name')
@@ -683,12 +683,12 @@ function appendAssistantSkeleton() {
   const row = document.createElement('div')
   row.className = 'msg-assistant'
 
-  // Avatar
+  // 头像
   const avatar = document.createElement('div')
   avatar.className = 'msg-ai-avatar'
   avatar.textContent = 'AI'
 
-  // Content card
+  // 内容卡片
   const content = document.createElement('div')
   content.className = 'msg-ai-content'
 
@@ -1255,9 +1255,9 @@ function rebuildChatUI(msgs) {
         renderMd(responseText, msg.content, false)
         if (copyBtn) copyBtn.classList.remove('hidden')
       }
-      // tool_calls only — skip rendering, will show in next tool_result if needed
+      // 只有 tool_calls 的消息不单独显示，需要时在后面的 tool_result 里展示
     }
-    // role=tool: skip
+    // role=tool：跳过
   }
   scrollBottom()
 }
@@ -1363,10 +1363,10 @@ function renderSearchResults(items, q) {
     `
     div.addEventListener('click', async () => {
       closeGlobalSearch()
-      // switch KB if needed
+      // 必要时切换知识库
       const kbId = item.kb_id
       if (!currentKb || currentKb.id !== kbId) {
-        // find kb in sidebar and select it
+        // 在侧边栏找到对应知识库并选中
         const kbBtn = document.querySelector(`.kb-item[data-id="${kbId}"]`)
         if (kbBtn) {
           const res2 = await fetch('/api/kbs', { headers: auth() })
@@ -1375,7 +1375,7 @@ function renderSearchResults(items, q) {
           if (kb) await selectKb(kb)
         }
       }
-      // load conversation
+      // 加载对话
       const convRes = await fetch(`/api/conversations/${item.conv_id}/messages`, { headers: auth() })
       if (!convRes.ok) { showToast('加载对话失败', 'error'); return }
       const msgs = await convRes.json()
@@ -1385,7 +1385,7 @@ function renderSearchResults(items, q) {
       welcomeEl.classList.add('hidden')
       rebuildChatUI(msgs)
       updateHistoryCount()
-      // highlight active conv
+      // 高亮当前对话
       const convIdx = conversations.findIndex(c => c.id === item.conv_id)
       if (convIdx === -1 && currentKb?.id === kbId) {
         await loadConversations(kbId)
@@ -1482,7 +1482,7 @@ inputEl.addEventListener('keydown', e => {
 
 inputEl.addEventListener('input', resizeTextarea)
 
-// Also allow Ctrl+Enter as a secondary shortcut (in case user is used to it)
+// 也支持 Ctrl+Enter 发送（照顾习惯这个快捷键的用户）
 inputEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendQuestion() }
 }, true)
@@ -1622,7 +1622,7 @@ function applyTheme(dark) {
     localStorage.setItem('kb_theme', 'light')
   }
 }
-// Set initial icon based on saved or system preference
+// 按已保存的设置或系统偏好显示初始图标
 ;(() => {
   const saved = localStorage.getItem('kb_theme')
   const isDark = saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -1681,7 +1681,7 @@ document.addEventListener('keydown', e => {
   const tag = document.activeElement?.tagName
   const inInput = ['INPUT','TEXTAREA','SELECT'].includes(tag)
 
-  // Escape: close any open modal/panel
+  // Esc：关闭打开的弹窗或面板
   if (e.key === 'Escape') {
     if (!shortcutsModal.classList.contains('hidden'))    { shortcutsModal.classList.add('hidden'); return }
     if (!pwdModal.classList.contains('hidden'))          { closePwdModal(); return }
@@ -1690,28 +1690,28 @@ document.addEventListener('keydown', e => {
     return
   }
 
-  if (inInput) return  // don't intercept when typing
+  if (inInput) return  // 正在输入时不拦截按键
 
-  // ? → shortcuts help
+  // ? → 快捷键帮助
   if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
     shortcutsModal.classList.remove('hidden')
     e.preventDefault()
     return
   }
-  // Ctrl+K → global search
+  // Ctrl+K → 全局搜索
   if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
     openGlobalSearch()
     e.preventDefault()
     return
   }
-  // / → focus KB search
+  // / → 聚焦知识库搜索框
   if (e.key === '/') {
     kbSearchEl.focus()
     kbSearchEl.select()
     e.preventDefault()
     return
   }
-  // N → new conversation
+  // N → 新建对话
   if (e.key === 'n' || e.key === 'N') {
     if (!currentKb) return
     currentConversationId = null

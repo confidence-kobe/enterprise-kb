@@ -1,7 +1,7 @@
 /**
  * 升级验证：用旧版本创建数据，再用当前版本启动同一份数据，确认迁移后数据完整、功能正常。
  *
- *   git worktree add /tmp/kb-old v1.1.0 && (cd /tmp/kb-old && npm ci && npm run build)
+ *   git worktree add /tmp/kb-old v1.3.0 && (cd /tmp/kb-old && npm ci && npm run build)
  *   npm run build && npm run upgrade:check -- /tmp/kb-old
  *
  * 使用临时数据目录和本地模拟模型，不会触碰 data/ 与 storage/。
@@ -71,7 +71,7 @@ async function stop(child) {
 async function waitHealthy(child) {
   for (let i = 0; i < 80; i++) {
     if (child.exitCode !== null) break
-    try { if ((await fetch(`${BASE}/healthz`)).ok) return } catch { /* not up yet */ }
+    try { if ((await fetch(`${BASE}/healthz`)).ok) return } catch { /* 还没启动好 */ }
     await sleep(250)
   }
   throw new Error(`${child.label} 未能启动：\n${child.log()}`)

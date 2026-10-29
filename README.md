@@ -168,3 +168,7 @@ claude mcp add --transport http enterprise-kb https://kb.example.com/mcp \
 ## 部署
 
 部署检查清单见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
+## 技术文档
+
+架构、数据库、检索算法、OCR、MCP 等实现细节见 [TECHNICAL.md](TECHNICAL.md)。

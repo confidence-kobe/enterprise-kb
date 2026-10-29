@@ -1,6 +1,6 @@
-# Enterprise KB — 技术文档
+# Enterprise KB 技术文档
 
-> 版本：v1.0.0 · 最后更新：2026-06-26
+> 版本：v1.3.0 · 最后更新：2026-10-29
 
 ---
 
@@ -11,37 +11,43 @@
 3. [系统架构](#3-系统架构)
 4. [数据库设计](#4-数据库设计)
 5. [认证与权限体系](#5-认证与权限体系)
-6. [文档管道：上传 → 分块 → 索引](#6-文档管道上传--分块--索引)
-7. [混合检索算法](#7-混合检索算法)
-8. [LLM 对话引擎](#8-llm-对话引擎)
-9. [对话历史管理](#9-对话历史管理)
-10. [文件夹同步机制](#10-文件夹同步机制)
-11. [审计日志](#11-审计日志)
-12. [前端设计系统](#12-前端设计系统)
-13. [安全加固](#13-安全加固)
-14. [测试体系](#14-测试体系)
-15. [部署与运维](#15-部署与运维)
+6. [文档管道：上传 → 提取 → 分块 → 索引](#6-文档管道上传--提取--分块--索引)
+7. [扫描件识别（OCR）](#7-扫描件识别ocr)
+8. [混合检索算法](#8-混合检索算法)
+9. [大模型对话引擎](#9-大模型对话引擎)
+10. [对话历史管理](#10-对话历史管理)
+11. [API 密钥与 MCP 服务](#11-api-密钥与-mcp-服务)
+12. [文件夹同步机制](#12-文件夹同步机制)
+13. [版本历史](#13-版本历史)
+14. [审计日志、反馈与知识缺口](#14-审计日志反馈与知识缺口)
+15. [备份与恢复](#15-备份与恢复)
+16. [前端设计系统](#16-前端设计系统)
+17. [安全加固](#17-安全加固)
+18. [测试体系](#18-测试体系)
+19. [部署与运维](#19-部署与运维)
 
 ---
 
 ## 1. 项目概述与核心亮点
 
-Enterprise KB 是一套面向企业内部的**本地知识库问答系统**。用户将文档上传（或从本地目录同步）到知识库，系统自动建立全文检索索引，之后通过自然语言向 LLM 提问，LLM 利用工具调用自主检索知识库并给出有来源标注的回答。
+Enterprise KB 是一套面向企业内部的**本地知识库问答系统**。用户把文档上传（或从服务器目录同步）到知识库，系统自动建立全文检索索引；之后用自然语言提问，大模型通过工具调用自主检索知识库，给出标注了出处的回答。
 
 ### 核心亮点
 
 | 亮点 | 说明 |
 |------|------|
-| **零外部依赖检索** | 基于 SQLite FTS5，无需 Elasticsearch / Milvus 等额外服务 |
-| **结构感知分块** | 按 Markdown / 中文标题切块，标题随块携带，保留语义上下文 |
-| **四级混合召回** | 严格 AND → 宽松 OR → 文件名匹配 → 子串回退，覆盖各种查询风格 |
-| **流式工具调用** | SSE 实时推送每个 token 和工具执行过程，体感延迟极低 |
-| **可信历史裁剪** | 服务端按轮次 + 字符预算选择历史，防止 context 超限 |
-| **LLM 无关** | 对接任意 OpenAI 兼容接口：Ollama、MiniMax、OpenAI、本地模型 |
-| **本地文件夹同步** | 增量镜像本地目录，文件变更自动重建索引 |
-| **审计日志** | 所有写操作落库，管理员可查看完整操作溯源 |
-| **生产安全校验** | 启动时强制拒绝弱密码 / 弱 JWT Secret |
-| **零运维数据库** | SQLite WAL 模式，单文件，无需单独数据库服务 |
+| **零外部依赖检索** | 基于 SQLite FTS5（trigram 分词），不需要 Elasticsearch、Milvus 等额外服务 |
+| **结构感知分块** | 按 Markdown 和中文章节标题切块，标题随块携带，保留语义上下文 |
+| **四级混合召回** | 严格 AND → 宽松 OR → 文件名匹配 → 子串兜底，可选叠加向量相似度 |
+| **扫描件可检索** | 内置 Tesseract OCR（中文 + 英文），离线识别扫描版 PDF 和照片 |
+| **流式工具调用** | SSE 实时推送每个字和工具执行过程 |
+| **出处可点击** | 回答里的 `文件名:行号` 可点击，直接打开原文并定位到对应行 |
+| **AI 工具接入** | 只读 API 密钥 + MCP 服务，Claude Code、Cursor 等可直接查询知识库 |
+| **重活不卡服务** | PDF/Office 提取、OCR、备份都在工作线程里运行 |
+| **大模型无关** | 对接任意兼容 OpenAI 接口的服务：Ollama、MiniMax、OpenAI 等 |
+| **可审计** | 登录、用户、知识库、文档、同步、配置、问答操作全部记录 |
+| **数据安全** | 生产环境拒绝弱密钥；自动备份；改密或改角色后旧 Token 立即失效 |
+| **零运维数据库** | SQLite WAL 模式，单文件，不需要单独的数据库服务 |
 
 ---
 
@@ -51,34 +57,38 @@ Enterprise KB 是一套面向企业内部的**本地知识库问答系统**。�
 
 | 层 | 技术 | 版本 | 选择原因 |
 |----|------|------|---------|
-| 运行时 | Node.js | 20+ | 原生 ESM、内置 fetch、稳定 LTS |
-| 语言 | TypeScript | 5.7 | 静态类型防止运行时错误，IDE 补全 |
-| 框架 | Express | 5.0 | 成熟、生态最广；v5 原生支持 async 路由 |
-| 数据库 | better-sqlite3 | 11 | 同步 API，无回调地狱；SQLite FTS5 内置全文检索 |
-| 文件上传 | multer | 2.1 | 流式写盘，无内存缓冲 |
-| LLM 客户端 | openai SDK | 4.77 | 统一调用所有 OpenAI 兼容接口 |
-| PDF 解析 | pdf-parse | 1.1 | 纯 JS，无系统依赖 |
-| 认证 | jsonwebtoken + bcryptjs | 9 / 2 | JWT 无状态 + bcrypt 密码哈希 |
-| 跨域 | cors | 2.8 | 白名单配置，按需开启 |
+| 运行时 | Node.js | 22.19+ | 当前 LTS；undici 8 和 openai 7 需要 Node 22 |
+| 语言 | TypeScript | 7（原生编译器） | 静态类型；原生编译器一次编译约 1.7 秒 |
+| 框架 | Express | 5.3 | 成熟、生态最广；v5 原生支持 async 路由 |
+| 数据库 | better-sqlite3 | 12 | 同步 API；SQLite FTS5 内置全文检索 |
+| 文件上传 | multer | 2.5 | 流式写盘，不占内存 |
+| 大模型客户端 | openai SDK | 7 | 统一调用所有兼容 OpenAI 的接口 |
+| HTTP 客户端 | undici | 8 | 支持 `HTTPS_PROXY`/`NO_PROXY`，HTTPS 时自动用 HTTP/2 |
+| PDF 解析 | pdf-parse | 2（基于新版 pdf.js） | 纯 JS；也用来把扫描页渲染成图片 |
+| Office 解析 | mammoth、officeparser、exceljs | 1 / 8 / 4 | Word、PowerPoint、Excel |
+| OCR | tesseract.js | 7 | 本地运行，语言数据随 npm 包安装 |
+| 认证 | jsonwebtoken + bcryptjs | 9 / 3 | JWT + bcrypt 密码哈希 |
 
 ### 前端
 
 | 技术 | 说明 |
 |------|------|
-| 纯原生 JS (Vanilla) | 无框架，无构建步骤，直接由 Express 静态服务 |
-| marked.js (CDN) | Markdown 渲染 |
-| DOMPurify (CDN) | XSS 净化，防止 LLM 输出注入脚本 |
-| CSS 设计系统 | Inter 字体，Linear 侧边栏美学，Vercel 卡片风格，深色模式 |
-| Server-Sent Events | 流式接收 LLM token 和工具调用事件 |
+| 原生 JS（Vanilla） | 没有框架，没有构建步骤，由 Express 直接提供静态文件 |
+| marked 18 | Markdown 渲染，由服务器本地提供（`/vendor/marked.min.js`） |
+| DOMPurify 3 | 净化 HTML，防止大模型输出注入脚本 |
+| p5.js 2 | 登录页的流场背景动画 |
+| Inter 字体 | 本地提供，内网环境不需要访问 CDN |
+| Server-Sent Events | 流式接收大模型输出和工具调用事件 |
 
 ### 工具链
 
 | 工具 | 用途 |
 |------|------|
-| tsx | 开发期直接运行 TypeScript，无需预编译 |
-| vitest | 单元测试，兼容 ESM |
+| tsx | 开发时直接运行 TypeScript |
+| vitest 5 | 单元测试和接口测试 |
 | supertest | HTTP 集成测试 |
-| dotenv | .env 环境变量注入 |
+| Playwright | 浏览器端到端测试 |
+| dotenv | 加载 `.env` |
 | npm audit | CI 依赖漏洞门禁（moderate 级别） |
 
 ---
@@ -89,47 +99,46 @@ Enterprise KB 是一套面向企业内部的**本地知识库问答系统**。�
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                     Browser                         │
-│  login.html   index.html (chat.js)   manage.html   │
-│                   ↕ HTTP / SSE                      │
+│  浏览器                         AI 工具 / 内部系统   │
+│  login.html  index.html  manage.html   Claude Code  │
+│       ↕ HTTP / SSE（登录 Token）   ↕ API 密钥 / MCP │
 └─────────────────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────┐
-│              Express 5  (src/server.ts)             │
+│              Express 5（src/server.ts）              │
 │                                                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │
-│  │  Auth    │  │  REST    │  │   SSE /ask 路由   │  │
-│  │Middleware│  │  Routes  │  │  (流式 LLM 对话)  │  │
-│  └──────────┘  └──────────┘  └──────────────────┘  │
-│        │              │               │             │
-│        ▼              ▼               ▼             │
+│  ┌──────────┐  ┌──────────┐  ┌────────┐  ┌───────┐  │
+│  │ 认证中间件│  │ REST 路由 │  │ SSE 问答│  │ /mcp  │  │
+│  │ auth.ts  │  │          │  │        │  │mcp.ts │  │
+│  └──────────┘  └──────────┘  └────────┘  └───────┘  │
+│        │              │             │          │    │
+│        ▼              ▼             ▼          ▼    │
 │  ┌──────────────────────────────────────────────┐   │
-│  │           src/db.ts (数据访问层)              │   │
-│  │  Users · KBs · Documents · Conversations     │   │
-│  │  Messages · AuditEvents · FTS5 Index         │   │
+│  │           src/db.ts（数据访问层）             │   │
+│  │  用户 · 知识库 · 文档 · 对话 · 审计 · 密钥     │   │
+│  │  FTS5 全文索引 · 向量 · 版本 · 知识缺口        │   │
 │  └──────────────────────────────────────────────┘   │
 │                       │                             │
 │              ┌─────────────────┐                    │
-│              │  SQLite (WAL)   │                    │
-│              │  data/*.db      │                    │
+│              │  SQLite（WAL）   │                    │
 │              └─────────────────┘                    │
 │                                                     │
 │  ┌──────────────────────────────────────────────┐   │
-│  │         src/executor.ts (LLM 引擎)            │   │
-│  │  ReasoningStreamFilter · ToolCall 累积循环    │   │
+│  │  后台队列 + 工作线程                           │   │
+│  │  索引队列 · OCR 队列 · 文字提取 · 自动备份      │   │
+│  └──────────────────────────────────────────────┘   │
+│                                                     │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  src/executor.ts（大模型引擎）                 │   │
+│  │  流式输出 · 工具调用循环 · 过滤 <think>        │   │
 │  └──────────────────────────────────────────────┘   │
 │                       │                             │
 │              ┌──────────────────┐                   │
-│              │ OpenAI 兼容接口  │                   │
-│              │ Ollama/MiniMax/  │                   │
-│              │ OpenAI/其他      │                   │
+│              │ 兼容 OpenAI 的接口 │                   │
 │              └──────────────────┘                   │
 │                                                     │
-│  ┌──────────────────────────────────────────────┐   │
-│  │  storage/kb_<id>/  (文件存储)                 │   │
-│  │  上传文件 · PDF转文本 · 同步镜像文件          │   │
-│  └──────────────────────────────────────────────┘   │
+│  storage/kb_<id>/  上传文件 · 提取出的文字 · 同步文件 │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -141,265 +150,290 @@ Enterprise KB 是一套面向企业内部的**本地知识库问答系统**。�
       ▼
 POST /api/kbs/:id/ask
       │
-      ├─ JWT 校验 (requireAuth)
-      ├─ KB 访问权限检查
-      ├─ 从 DB 加载对话历史 → buildTrustedHistory() 裁剪
+      ├─ 认证（requireAuth：登录 Token 或 API 密钥）
+      ├─ 知识库访问权限检查
+      ├─ 问答频率限制（每个用户）
+      ├─ 从数据库加载对话历史 → buildTrustedHistory() 裁剪
       │
       ▼
-SSE 流建立 (text/event-stream)
+建立 SSE 流（text/event-stream）
       │
       ▼
 LLMExecutor.run(question, tools, history, abortSignal)
       │
-      ├─ 循环 (最多 MAX_TURNS 轮)
-      │     │
-      │     ├─ 调用 LLM API (stream: true)
+      ├─ 循环（最多 LLM_MAX_TURNS 轮）
+      │     ├─ 调用大模型接口（stream: true）
       │     ├─ ReasoningStreamFilter 过滤 <think> 块
-      │     ├─ 实时推送 {type:'text'} 事件给浏览器
-      │     ├─ 累积工具调用 chunks
-      │     │
-      │     ├─ finish_reason === 'stop' → 退出循环
-      │     │
-      │     └─ 执行工具调用
-      │           ├─ SearchDocs → FTS5 混合检索
-      │           ├─ Read → 读取文件
-      │           ├─ Glob → 文件名模式扫描
-      │           ├─ Grep → 正则内容搜索
+      │     ├─ 实时推送 {type:'text'} 事件
+      │     ├─ 累积工具调用分片
+      │     ├─ 没有工具调用 → 结束循环
+      │     └─ 执行工具调用（都限制在 ToolScope 内）
+      │           ├─ SearchDocs → 混合检索
+      │           ├─ Read → 按行读取文件
+      │           ├─ Glob → 文件名模式匹配
+      │           ├─ Grep → 正则搜索内容
       │           └─ KBStats → 知识库统计
       │
       ▼
-结果持久化 (messages 表)
+保存消息（messages 表），回答"未找到相关内容"时计入知识缺口
       │
       ▼
-推送 {type:'done'} 事件，关闭 SSE
+推送 {type:'done'}，关闭 SSE
 ```
 
 ---
 
 ## 4. 数据库设计
 
-### ER 图
+### 表结构
 
 ```
-users
-  id · username · password_hash · role · created_at
-    │
-    ├──────────────────────────────────┐
-    │                                  │
-    ▼                                  ▼
-knowledge_bases                    conversations
-  id · name · description             id · kb_id · user_id
-  storage_path · owner_id             title · is_pinned
-  is_public                           created_at · updated_at
-  sync_source_path · sync_last_at         │
-  sync_last_result                        ▼
-    │                               messages
-    │    kb_access                    id · conversation_id
-    ├──► kb_id + user_id (M:N)        role · content
-    │                                 tool_calls · tool_call_id
-    ▼                                 seq · created_at
-documents
-  id · kb_id · filename
-  original_name · size
-  source_type (upload/text/sync)
-  source_path · source_mtime
-  index_version · index_status
-  index_error · indexed_at
+users                 id · username · password_hash · role · token_version · created_at
+knowledge_bases       id · name · description · storage_path · owner_id · is_public
+                      system_prompt · sync_source_path · sync_last_at · sync_last_result
+kb_access             kb_id + user_id（成员，多对多）
+documents             id · kb_id · filename · original_name · size · uploaded_at
+                      source_type（upload/text/sync）· source_path · source_mtime · source_size
+                      index_version · index_status · index_error · indexed_at
+                      summary · ocr_pages
+conversations         id · kb_id · user_id · title · is_pinned · created_at · updated_at
+messages              id · conversation_id · role · content · tool_calls · tool_call_id · seq
+response_feedback     id · conversation_id · user_id · rating · 差评原因与问答快照 · created_at
+doc_versions          id · doc_id · title · content · size · user_id · username · note · created_at
+gap_events            id · kb_id（可为空）· user_id · question · source · channel · created_at
+api_keys              id · user_id · name · prefix · key_hash · created_at · expires_at · last_used_at
+audit_events          id · user_id · username · action · entity_type · entity_id · kb_id · detail · ip
+system_config         key · value（例如当前选用的模型）
 
-doc_fts (FTS5 虚拟表)
-  content · original_name
-  file_path · kb_id
-  doc_id · chunk_line
-
-audit_events
-  id · user_id · username · action
-  entity_type · entity_id · kb_id
-  detail · ip · created_at
+doc_fts               FTS5 虚拟表（trigram 分词），存放文档分块的全文索引
+doc_chunks            doc_fts 分块与文档的映射，删除和重建索引时按文档快速定位
+doc_chunk_vectors     分块向量（只在配置了 EMBEDDING_MODEL 时写入）
 ```
 
 ### 关键设计决策
 
-**为什么用 SQLite 而非 PostgreSQL？**
-企业内部部署场景要求零运维——不需要单独数据库服务、不需要 DBA、备份即复制单文件。WAL 模式支持并发读，对知识库系统的并发量完全够用。
+**为什么用 SQLite 而不是 PostgreSQL？**
+企业内部部署要求零运维：不需要单独的数据库服务和 DBA，备份用 SQLite 的在线备份接口即可。WAL 模式支持并发读，对知识库系统的并发量完全够用。
 
-**FTS5 虚拟表设计**
-`doc_fts` 使用 `unicode61` tokenizer（支持中文字符边界），`UNINDEXED` 字段（`original_name`、`file_path`、`kb_id`、`doc_id`、`chunk_line`）不参与全文索引但可随结果返回，避免二次 JOIN。
+**FTS5 使用 trigram 分词**
+`unicode61` 分词器对中文按单字切分，检索效果差。改用 `trigram` 后，3 个字及以上的中文词可以直接走索引；2 个字的词由 `LIKE` 子串匹配兜底，并先按知识库缩小扫描范围。从旧版本升级时会自动重建索引。
 
-**幂等迁移策略**
-新增列用 `ALTER TABLE ... ADD COLUMN` 包裹在 `try/catch` 中。已存在则静默忽略，无需版本管理工具。适合单进程单文件的部署特征。
+**幂等迁移**
+新增列用 `ALTER TABLE ... ADD COLUMN` 包在 `try/catch` 里，已存在就忽略；新表用 `CREATE TABLE IF NOT EXISTS`。不需要迁移工具，适合单进程、单文件的部署方式。每次发布前用 `npm run upgrade:check` 验证上一个版本的数据能直接升级。
 
 **WAL 模式**
 ```sql
 PRAGMA journal_mode = WAL;   -- 读写并发，写入不阻塞读取
-PRAGMA foreign_keys = ON;    -- 级联删除保证孤儿数据不产生
+PRAGMA foreign_keys = ON;    -- 级联删除，不留孤儿数据
 ```
 
 ---
 
 ## 5. 认证与权限体系
 
-### JWT 无状态认证
+### 登录与 Token
 
 ```
-登录流程：
+登录：
   POST /api/auth/login
-    → 校验用户名密码 (bcrypt.compare)
-    → 签发 JWT (HS256, 24h 有效期)
+    → 校验用户名和密码（bcrypt.compare）
+    → 签发 JWT（HS256，默认 24 小时有效），载荷里带 token_version（tv）
     → 返回 token
 
 后续请求：
   Authorization: Bearer <token>
-    → requireAuth 中间件验证签名 + 过期时间
-    → 注入 req.user = { userId, username, role }
+    → requireAuth 验证签名和过期时间
+    → 每次都从数据库重新读取用户：
+        用户已删除               → 401
+        tv ≠ users.token_version → 401（已改密或改角色）
+        角色以数据库为准，不信任 Token 里的角色
+    → 注入 req.user = { userId, username, role, tv }
 ```
 
-**为什么选 JWT 而非 Session？**
-无状态设计使服务重启不影响已登录用户，无需 Redis / 数据库 Session 存储，适合单实例本地部署。
+**为什么每次请求都查数据库？**
+纯无状态的 JWT 在改密、降级或删除用户后仍然有效，直到过期。用 `token_version` 让这些操作立即生效，代价只是一次按主键的 SQLite 查询。
 
 ### 三层权限模型
 
 ```
 角色层
-  admin  → 所有操作（含用户管理、审计日志、全局配置）
+  admin  → 所有操作（用户管理、审计日志、备份、全局配置、所有人的 API 密钥）
   user   → 只能操作自己可访问的知识库
 
-知识库层（canUserAccessKb）
-  公开 KB (is_public=1)  → 任意已登录用户
-  私有 KB                → owner_id = 当前用户
-                        OR kb_access 表中有授权记录
+知识库层
+  读取（canUserAccessKb）：公开知识库、所有者、成员、管理员
+  写入（canUserWriteKb）：所有者、成员、管理员（公开状态只开放查看和问答）
+  同步文件夹：只有管理员能设置
 
 中间件层
-  requireAuth   → JWT 有效即通过
-  requireAdmin  → role === 'admin'
+  requireAuth   → 登录 Token 或 API 密钥有效即通过
+  requireAdmin  → role === 'admin'，并且拒绝 API 密钥
 ```
 
 ### 登录限速
 
-用 in-memory `Map<ip, {count, resetAt}>` 实现，窗口期（默认 15 分钟）内最多 10 次失败，超限返回 429。选择内存实现而非数据库的原因：重启自动清零符合预期，攻击者重启后需重新尝试；单实例部署无需跨进程共享状态。
+用内存里的 `Map<"IP:用户名", {count, resetAt}>` 实现：时间窗口（`LOGIN_RATE_WINDOW_MS`，默认 15 分钟）内最多 `LOGIN_RATE_MAX`（默认 10）次，超出返回 429 和"登录尝试次数过多，请稍后再试。"。单实例部署不需要跨进程共享状态，重启清零也符合预期。
 
 ---
 
-## 6. 文档管道：上传 → 分块 → 索引
+## 6. 文档管道：上传 → 提取 → 分块 → 索引
 
 ### 管道流程
 
 ```
-用户上传文件 / 文字创建 / 文件夹同步
+网页上传 / 在线新建文本 / 文件夹同步
          │
          ▼
-   文件扩展名白名单校验
-   (.txt .md .pdf .ts .js .py .go ... 共 17 种)
+   权限检查（在写入文件之前）
+   扩展名白名单：文本、Markdown、PDF、代码、Office（.docx .xlsx .pptx 等）
+   网页上传额外接受图片（.png .jpg .jpeg .webp .bmp）
          │
          ▼
-   写入 storage/kb_<id>/<uuid><ext>
+   写入 storage/kb_<id>/<服务端生成的文件名>
+   createDoc() → documents 表，index_status = 'pending'
          │
          ▼
-   createDoc() 写入 documents 表
-   index_status = 'pending'
+   加入后台索引队列
          │
          ▼
-   加入后台索引队列 (内存数组)
-         │
-         ▼
-   ┌── PDF? ──┐
-   │          │
-  是         否
-   │          │
-   ▼          ▼
-pdf-parse   fs.readFile(utf-8)
-提取文本          │
-   │          │
-   └────┬─────┘
-        │
+   ┌──────── 文件类型 ─────────┐
+   │            │              │
+ PDF       Office          文本/图片
+   │            │              │
+   ▼            ▼              │
+ 工作线程里提取文字（runInWorker）│
+ 超时 EXTRACT_TIMEOUT_SECONDS    │
+   │            │              │
+   └────┬───────┘              │
+        │  扫描页 / 图片 → 加入 OCR 队列（见第 7 节）
         ▼
    chunkDocument(text)   ← src/documentChunker.ts
         │
         ▼
-   indexDocContent()     ← src/db.ts
-   写入 doc_fts 虚拟表
+   分批写入 doc_fts / doc_chunks，批次之间让出事件循环
    index_status = 'ready'
+        │
+        ▼（可选）生成分块向量、文档摘要
 ```
 
-### 结构感知分块算法（src/documentChunker.ts）
+**为什么在工作线程里提取？**
+一个 2,000 页的 PDF 在主线程解析会让服务器卡住约 6.5 秒，所有请求（包括流式回答）都会停下。放进工作线程后，主线程最长停顿约 13 毫秒；格式错误或恶意构造的文件只会让它自己失败。
+
+**为什么分批写入索引？**
+一个 50 MB 的文本文件一次性写入会阻塞约 4 秒。分批写入、批次之间让出事件循环后，最长停顿约 0.2 秒。建索引过程中文档被删除或编辑时，剩下的批次直接丢弃。
+
+### 结构感知分块（src/documentChunker.ts）
 
 **问题背景**
-直接将整篇文档塞进 FTS5 会丢失位置信息，也无法做 snippet 定位。均匀切块（每 N 字符一块）会切断语义单元。
+整篇文档放进 FTS5 会丢失位置信息，也无法定位片段。按固定字数切块会切断语义单元。
 
 **实现原理**
 ```
 识别分割点：
-  Markdown 标题 (# / ## / ### ...)
-  中文章节标题 (第一章 / 一、/ （一）...)
+  Markdown 标题（# / ## / ### ...）
+  中文章节标题（第一章 / 一、/（一）...）
 
-按分割点将文档切成若干段落，每段不超过 maxChars（默认 1200）字符。
-  若单段超出 → 再次细分，保留 overlapLines 行重叠避免边界截断语义。
+按分割点切成若干段，每段不超过 maxChars（默认 1200）个字符。
+  单段超长 → 再细分，保留 overlapLines（默认 2）行重叠，避免在边界截断语义。
 
-每个 chunk 携带：
-  { content, heading, startLine }
-  content  = "# 标题\n\n正文..."   ← 标题随块携带，LLM 可获知上下文
-  heading  = '安装说明'
-  startLine = 42                   ← 用于在源文件中定位
+每个分块携带：
+  content   = "# 标题\n\n正文..."   ← 标题随块携带
+  heading   = '安装说明'
+  startLine = 42                   ← 行号从 0 开始，对外显示时加 1
 ```
 
-**为什么标题随块携带？**
-LLM 读到片段时能知道所属章节，回答不会脱离上下文。纯内容块缺失标题会导致 LLM 混淆"这段话是关于什么的"。
+**为什么标题要随块携带？**
+大模型读到片段时能知道它属于哪一章，回答不会脱离上下文。
 
 ---
 
-## 7. 混合检索算法
+## 7. 扫描件识别（OCR）
+
+```
+PDF 提取完文字（每页分开）
+      │
+      ▼
+isScannedPageText(页面文字)：去掉空白后少于 20 个字 → 扫描页
+      │
+      ├─ 没有扫描页 → 正常建索引
+      │
+      └─ 有扫描页 → 加入 OCR 队列（与普通索引队列分开）
+              │
+              ▼
+        工作线程里：
+          pdf-parse 把扫描页渲染成约 200 dpi 的图片（宽 1654 像素）
+          tesseract.js 识别（语言 eng+chi_sim，LSTM 引擎）
+          cleanOcrText() 去掉汉字和中文标点旁边多余的空格
+              │
+              ▼
+        识别结果与文字页合并，建索引；documents.ocr_pages 记录识别页数
+```
+
+- **离线**：语言数据来自 `@tesseract.js-data/eng` 和 `@tesseract.js-data/chi_sim`（4.0.0_best_int），首次使用时复制到系统临时目录，不联网。
+- **为什么 200 dpi**：实测比 300 dpi 识别得更准，也更快。
+- **为什么英文在前**：tesseract.js 7 在 `chi_sim+eng` 顺序下会把语言名读错并报错。
+- **为什么要清理空格**：Tesseract 会在每个字之间插空格（"住宿 标准 为 每 晚"），不清理就检索不到"住宿标准"。英文单词之间的空格保留。
+- **为什么单独排队**：扫描件每页约 1–2 秒，单独排队后其他上传不用等。
+- 限制：每个 PDF 最多识别 `OCR_MAX_PAGES`（默认 100）页；`OCR_ENABLED=false` 关闭。
+
+---
+
+## 8. 混合检索算法
 
 ### 四级召回漏斗
 
 ```
-Query: "部署 配置 端口"
+查询："部署 配置 端口"
           │
           ▼
   ① 严格 FTS5 AND
      MATCH '"部署" AND "配置" AND "端口"'
-     BM25 排序，取前 candidateLimit 条
+     按 BM25 排序，取前 candidateLimit 条
           │
-          ▼ (若严格 AND 结果不足)
+          ▼（严格 AND 结果不够时）
   ② 宽松 FTS5 OR
      MATCH '"部署" OR "配置" OR "端口"'
-     补充不包含全部词的候选
           │
-          ▼ (始终执行)
+          ▼（始终执行）
   ③ 子串 LIKE 扫描
-     content LIKE '%部署%'
-     OR original_name LIKE '%部署%'
-     兜底覆盖分词未命中的情况
+     content LIKE '%部署%' OR original_name LIKE '%部署%'
+     兜底 2 字词和分词没命中的情况
+          │
+          ▼（可选：配置了 EMBEDDING_MODEL）
+  ③' 向量相似度：向量命中但全文没命中的分块也加入候选
           │
           ▼
-  候选集合合并（de-duplicate by doc_id:chunk_line）
+  候选合并（按 doc_id:chunk_line 去重）
           │
           ▼
-  ④ 多维打分 scoreCandidate()
+  ④ 打分 scoreCandidate()
      +80  严格 AND 命中
      +35  宽松 OR 命中
      +20  子串命中
-     +240 文件名完全匹配
-     +160 文件名包含短语
-     +120 内容包含完整短语
-     +45  文件名包含单词
-     +12  内容包含单词
-     +15  BM25 排名靠前加成
+     +240 文件名与查询完全相同
+     +160 文件名包含整个查询
+     +120 内容包含整个查询
+     +45  文件名包含某个词
+     +12  内容包含某个词
+     +0~15 BM25 排名加成
+     有向量时：最终分 = 全文分 × 0.5 + 向量相似度（0~100）× 0.5
           │
           ▼
-  取分数最高的 limit 条，生成 snippet
+  取分数最高的 limit 条，生成片段
 ```
 
-**Snippet 生成**
-找到第一个匹配词位置，取前 120 字符 + 匹配词（加 `>>>高亮<<<` 标记）+ 后 240 字符，供 LLM 和用户快速定位。
+**片段生成**
+找到第一个命中词，取它前面 120 个字、后面 240 个字，命中词用 `>>>…<<<` 标出，方便大模型和用户快速定位。
 
-**为什么不用纯向量检索？**
-1. 向量检索需要 Embedding 模型，增加本地部署复杂度
-2. BM25 + 子串对关键词精确匹配优于语义向量
-3. 企业内文档多为结构化技术文档，精确词匹配比语义相似更重要
-4. 四级漏斗在无精确匹配时自动降级，召回率有保障
+**为什么向量检索是可选的？**
+1. 向量需要 Embedding 模型，增加部署复杂度
+2. 企业文档里精确的词（制度名称、编号、术语）往往比语义相似更重要，BM25 + 子串匹配更可靠
+3. 四级漏斗没有精确匹配时会自动放宽，召回率有保障
+4. 需要语义检索时，设置 `EMBEDDING_MODEL` 即可叠加
 
 ---
 
-## 8. LLM 对话引擎
+## 9. 大模型对话引擎
 
 ### LLMExecutor 工具调用循环
 
@@ -408,385 +442,408 @@ src/executor.ts — LLMExecutor.run()
 
 while (turns < maxTurns):
   │
-  ├─ 调用 OpenAI API (stream: true)
+  ├─ 调用大模型接口（stream: true，通过 undici 的 fetch，遵守出站代理设置）
   │
-  ├─ for chunk in stream:
+  ├─ 逐个处理流式分片：
   │     ├─ delta.content → ReasoningStreamFilter.push()
-  │     │     ├─ 遇到 <think> → 进入 inThink 模式，丢弃内容
-  │     │     ├─ 遇到 </think> → 退出 inThink，恢复输出
-  │     │     └─ 正常文本 → 原样返回
-  │     │
+  │     │     ├─ 遇到 <think> → 进入思考模式，丢弃内容
+  │     │     ├─ 遇到 </think> → 退出思考模式，恢复输出
+  │     │     └─ 普通文字 → 原样输出
   │     └─ delta.tool_calls → 按 index 累积
-  │           name: mergeStreamedToolName() 处理分片名称
-  │           arguments: 字符串拼接
+  │           name：mergeStreamedToolName() 处理被拆开的名称
+  │           arguments：字符串拼接
   │
-  ├─ finish_reason === 'stop' → break
-  ├─ 无工具调用 → break
+  ├─ 没有工具调用 → 结束
   │
-  └─ for toolCall in accumulated:
-        ├─ 解析 JSON arguments
-        ├─ 找到对应 LLMTool
-        ├─ tool.execute(params, kbPath)
-        ├─ onEvent({ type:'tool_result', ... })  → SSE 推送
-        └─ 构造 role:'tool' message 加入对话
+  └─ 逐个执行工具调用：
+        ├─ 解析 JSON 参数（解析失败按空参数处理）
+        ├─ tool.execute(params, scope)
+        ├─ onEvent({ type:'tool_result', ... }) → SSE 推送
+        └─ 构造 role:'tool' 消息加入对话
 
 return { response, turns, messages }
 ```
 
 ### ReasoningStreamFilter
 
-部分思考型模型（如 DeepSeek-R1、QwQ）在流式输出中穿插 `<think>...</think>` 推理块，这些内容不应展示给用户。
-
-```
-状态机：
-  inThink = false (默认)
-    收到 "<think>" → inThink = true，丢弃后续
-    收到 "</think>" → inThink = false，恢复输出
-
-  边界处理：
-    "<thi" + "nk>" 跨 chunk 分片 → buffer 保留最多 6 字符
-    判断是否是标签的不完整前缀 (partialOpeningTagLength)
-    是 → 暂存，等待下一个 chunk
-    否 → 立即输出
-```
+部分推理模型（如 DeepSeek-R1、QwQ）会在输出里穿插 `<think>...</think>` 推理过程，这些内容不展示给用户。标签可能被拆在两个分片里（`<thi` + `nk>`），所以最多缓存 6 个字符，判断是不是标签的开头，是就等下一个分片，不是就立即输出。
 
 ### 工具集
 
-| 工具 | 实现来源 | 功能 |
-|------|---------|------|
-| SearchDocs | src/tools.ts | FTS5 混合全文检索，首选检索工具 |
-| Read | claude-tools-kit | 按路径读取文件（支持 offset/limit） |
-| Glob | claude-tools-kit | 文件名模式扫描（**/*.md 等） |
-| Grep | claude-tools-kit | 正则内容搜索，支持多种输出模式 |
-| KBStats | src/tools.ts | 统计知识库文件数量、行数、大小 |
+| 工具 | 来源 | 功能 |
+|------|------|------|
+| SearchDocs | src/tools.ts | 混合全文检索，首选的检索工具；行号从 1 开始 |
+| Read | claude-tools-kit | 按行读取文件（支持 offset/limit） |
+| Glob | claude-tools-kit | 文件名模式匹配（`**/*.md` 等） |
+| Grep | claude-tools-kit | 正则搜索内容 |
+| KBStats | src/tools.ts | 统计知识库的文件数、行数和大小 |
 
-Glob / Grep / Read 来自 vendored `claude-tools-kit`（从 Claude Code 主项目提取），保证与 Claude Code 内置工具行为一致。
+所有工具都限制在 `ToolScope` 内（src/toolScope.ts）：单个知识库问答只能访问这一个知识库，跨知识库问答只能访问用户有权访问的知识库。路径参数和 Glob 模式在解析符号链接之后检查。
 
-### 系统提示词策略（src/prompt.ts）
+### 系统提示词（src/prompt.ts）
 
 ```
-检索工作流指导：
-  1. 优先 SearchDocs，一次定位
-  2. 找到路径后用 Read 精读全文
-  3. SearchDocs 无结果时降级到 Glob/Grep
-  4. 最多 3 轮检索，避免无效循环
+检索流程：
+  1. 先用 SearchDocs 定位
+  2. 找到文件后用 Read 精读
+  3. SearchDocs 没有结果时改用 Glob/Grep
+  4. 控制检索轮次，避免无效循环
 
 回答规范：
-  - 必须标注来源文件名:行号
-  - 知识库无内容时明确说"未找到"，不猜测
-  - 只能读取文件，不能修改
+  - 必须用原始文件名和 Read 的行号标注出处（文件名:行号）
+  - 知识库里没有相关内容时明确回答"未找到相关内容"，不猜测
+  - 只能读取，不能修改文件
 
-边界限制：
-  - 只在 kbPath 目录内操作
-  - 不访问外部网络
+每个知识库还可以设置自己的系统提示词，作为"补充指令"追加在后面。
 ```
 
 ---
 
-## 9. 对话历史管理
+## 10. 对话历史管理
 
 ### 问题背景
 
-每轮对话结束后，完整的 user/assistant/tool 消息序列都持久化到 `messages` 表。下次提问时需要将历史注入 LLM，但：
-- 历史过长会超出模型 context window
-- 截断不当会切断工具调用与结果的配对，导致 API 报错
+每轮对话结束后，完整的 user/assistant/tool 消息都保存到 `messages` 表。下次提问时要把历史交给大模型，但：
+- 历史太长会超出模型的上下文窗口
+- 截断不当会拆开工具调用和结果的配对，导致接口报错
+- 客户端传来的历史不可信，可能被篡改
 
 ### buildTrustedHistory（src/conversationHistory.ts）
 
 ```
-输入：messages 表中的所有历史行（按 seq 排序）
+输入：数据库里该对话的所有消息（按 seq 排序），不使用客户端传来的历史
 
 步骤：
-  1. 按"以 user 消息开头"将历史分组成"轮次"
-     跳过开头的孤儿 tool/assistant 消息
-
-  2. 从最新轮次开始向前，累积消息直到：
-     - 已用消息数 ≥ maxMessages (默认 40)
-     - 已用字符数 ≥ maxChars   (默认 40000)
-
-  3. 若最新一轮本身超出字符预算（极长工具结果）：
-     保留该轮但裁剪超大内容
-     content = head(2000字符) + '\n[earlier content omitted]\n' + tail(500字符)
-
-  4. 返回：
-     { messages, totalMessages, truncated }
-     truncated = true 表示历史有被丢弃，前端显示提示
+  1. 以 user 消息为起点，把历史分成"轮次"，跳过开头不完整的消息
+  2. 从最新一轮往前累积，直到：
+     - 消息数达到 maxMessages（HISTORY_MAX_MESSAGES，默认 40）
+     - 字符数达到 maxChars（HISTORY_MAX_CHARS，默认 40000）
+  3. 如果最新一轮本身就超出字符预算（工具结果特别长）：
+     保留这一轮，但把超长内容裁成开头 2000 字 + 省略提示 + 结尾 500 字
+  4. 返回 { messages, totalMessages, truncated }
+     truncated = true 时，回答下方显示"已使用最近上下文"
 ```
 
-**为什么按轮次而非按消息数截断？**
-工具调用产生 `assistant(tool_calls)` + `tool(result)` 消息对，必须成对出现，否则 OpenAI API 返回 400。按轮次边界截断保证消息序列的完整性。
+**为什么按轮次截断？**
+`assistant(tool_calls)` 和 `tool(result)` 必须成对出现，否则 OpenAI 兼容接口会返回 400。按轮次边界截断能保证消息序列完整。
 
 ---
 
-## 10. 文件夹同步机制
+## 11. API 密钥与 MCP 服务
+
+### API 密钥
+
+```
+创建：POST /api/me/api-keys
+  明文 = "ekb_" + 24 字节随机数（base64url）
+  只保存 SHA-256 哈希和前缀，明文只在创建时返回一次
+  可选 30/90/365 天过期，每人最多 20 个
+
+使用：Authorization: Bearer ekb_…
+  requireAuth 识别 ekb_ 前缀 → 计算哈希查表 → 以密钥主人的身份和当前权限执行
+  isApiKeyAllowed(method, path) 白名单：
+    GET / HEAD
+    POST /api/kbs/:id/ask、POST /api/ask
+    POST /mcp
+  其他请求一律 403；requireAdmin 和 /api/me/api-keys 拒绝任何密钥
+```
+
+用密钥执行的操作在审计日志里记为 `via: 'api_key'` 并带上密钥前缀。管理员可以在 `/api/admin/api-keys` 查看和吊销所有人的密钥。
+
+### MCP 服务（src/mcp.ts）
+
+- 传输：Streamable HTTP 无状态模式，只接受 `POST /mcp`（GET/DELETE 返回 405）。
+- 协议版本：2025-11-25、2025-06-18、2025-03-26、2024-11-05。
+- 方法：`initialize`、`ping`、`tools/list`、`tools/call`。
+- 浏览器请求的 `Origin` 必须是本站或 `CORS_ORIGIN` 里的来源；未认证时返回 401 和 `WWW-Authenticate`。
+
+| 工具 | 说明 |
+|------|------|
+| `list_knowledge_bases` | 列出可访问的知识库（kb_id、名称、描述、文档数） |
+| `search_documents` | 全文检索，返回片段和出处（kb_id、doc_id、行号） |
+| `read_document` | 带行号读取原文，可分段，单次最多 40,000 字符 |
+| `ask_knowledge_base` | 调用内置助手回答，与网页共用问答频率限制 |
+
+每次调用工具都重新检查知识库权限。MCP 提问回答"未找到相关内容"或检索没有结果时，记入知识缺口。
+
+---
+
+## 12. 文件夹同步机制
 
 ### 同步流程
 
 ```
-管理员配置 sync_source_path（本地目录绝对路径）
+管理员设置 sync_source_path（服务器上的目录）
+  校验：真实路径不能与 STORAGE_PATH 重叠；设置了 SYNC_ALLOWED_ROOTS 时必须在其中
                 │
                 ▼
-        POST /api/kbs/:id/sync
+        POST /api/kbs/:id/sync（所有者也可以执行）
                 │
-        scanSyncDirectory(root)
-                │
+        scanSyncDirectory(root)，每次都重新校验路径
                 ├─ 递归遍历目录
                 ├─ 跳过隐藏目录、node_modules、dist 等
-                ├─ 跳过不支持的扩展名
-                ├─ 跳过 > 50MB 的单文件
-                ├─ 跳过符号链接（安全）
-                └─ 累计文件数 > SYNC_MAX_FILES (1000)
-                   或总大小 > SYNC_MAX_TOTAL_MB (500MB) → 截止
-
+                ├─ 跳过不支持的扩展名（不导入图片）
+                ├─ 跳过超过 50 MB 的文件
+                ├─ 跳过符号链接
+                └─ 文件数超过 SYNC_MAX_FILES（1000）
+                   或总大小超过 SYNC_MAX_TOTAL_MB（500 MB）→ 停止
                 │
                 ▼
-        对比 documents 表中 source_type='sync' 的现有记录
+        与 documents 表里 source_type='sync' 的记录对比
                 │
           ┌─────┴──────────────────┐
+      新文件                     已有文件
           │                        │
-      新文件（不在 DB）        已有文件（在 DB）
-          │                        │
-          ▼                        ▼
-      createDoc()          source_mtime 或 source_size 变化？
-      加入索引队列              是 → updateDocFromSync()
-                                      重置 index_status='pending'
-                                      加入索引队列
+      createDoc()          修改时间或大小变了？
+      加入索引队列             是 → 更新并重新建索引
                                否 → 跳过（增量）
           │
           ▼
-      删除 DB 中有记录但源目录已不存在的文件
+      删除源目录里已经不存在的文件
                 │
                 ▼
-        返回 SyncSummary { added, updated, removed, skipped, errors }
+        返回 { added, updated, removed, skipped, errors }
 ```
 
 **路径安全**
-`isPathInside(parent, child)` 用 `path.relative()` 检验 child 是否在 parent 内，防止路径穿越攻击。`normalizeSourcePath()` 解析所有 `../` 后再比较。
+`isPathInside(parent, child)` 用 `path.relative()` 判断 child 是否在 parent 里，`normalizeSourcePath()` 先解析掉所有 `../` 再比较，防止路径穿越。
 
 ---
 
-## 11. 审计日志
+## 13. 版本历史
 
-所有写操作在路由层调用 `createAuditEvent()` 落库：
-
-| 操作类型 | entity_type |
-|---------|------------|
-| 用户登录/登出 | auth |
-| 创建/删除用户 | user |
-| 创建/删除/修改知识库 | kb |
-| 上传/删除文档 | document |
-| 文件夹同步 | sync |
-| 切换 LLM 模型 | config |
-
-每条记录存储：`user_id`、`username`、`action`、`entity_type`、`entity_id`、`kb_id`、`detail`（JSON，限 4000 字符）、`ip`。
-
-管理员通过 `GET /api/admin/audit-events` 查询，支持按 `action`、`username`、`kb_id` 过滤，分页返回。
+- 文本文档每次保存都写入 `doc_versions` 表（内容、修改人、时间），每份文档保留最新 50 个版本。
+- 版本存在数据库里，不在 `STORAGE_PATH` 下，所以大模型工具和检索看不到旧内容。
+- 启用版本记录之前创建的文本文档，第一次编辑时把原始内容保存为基准版本（`note = 'baseline'`）。
+- 恢复旧版本会生成一个新版本（`note = 'restore:<版本号>'`），恢复前的内容仍保留在历史里，所以恢复操作也可以撤销。
+- 接口：`GET /api/kbs/:id/docs/:docId/versions[/:versionId]`、`POST …/versions/:versionId/restore`（需要写权限，审计记为 `doc.restore_version`）。
 
 ---
 
-## 12. 前端设计系统
+## 14. 审计日志、反馈与知识缺口
+
+### 审计日志
+
+路由层通过 `audit()`（内部调用 `createAuditEvent()`）记录：
+
+| 类别 | entity_type | 举例 |
+|------|-------------|------|
+| 登录 | auth | 登录成功、失败 |
+| 用户 | user | 创建、删除、改角色、重置密码 |
+| 知识库 | kb / kb_member | 创建、修改、删除、系统提示词、成员变更 |
+| 文档 | doc | 上传、新建、编辑、删除、恢复版本 |
+| 同步 | kb | 设置同步文件夹（kb.sync_source_update）、执行同步（kb.sync_run） |
+| 配置 | config | 切换模型 |
+| 问答 | kb / global | 单库提问（qa.ask）、跨库提问（qa.ask_global） |
+| 密钥 | api_key | 创建、吊销 |
+| 备份 | backup | 手动备份 |
+
+每条记录保存 `user_id`、`username`、`action`、`entity_type`、`entity_id`、`kb_id`、`detail`（JSON，最多 4000 字符）和 `ip`。管理员通过 `GET /api/admin/audit` 查询：`action` 传完整操作代码时精确匹配，传关键词时模糊匹配；结果带知识库名称 `kb_name`。界面上每种操作和详情字段都显示中文名称。
+
+### 反馈
+
+用户可以对回答点 👍/👎，点 👎 时可以选原因并补充说明，系统同时保存当时的问题和回答快照（`response_feedback` 表）。管理员在 反馈 标签页看到满意度、原因分布和被评价的问答。
+
+### 知识缺口
+
+把"知识库里没有、但有人在问"的问题汇总出来，按被问次数排序：
+
+| 来源 | 记录位置 |
+|------|----------|
+| 网页单库提问，回答"未找到相关内容" | 对话记录 |
+| 用户点 👎 并选择"没找到相关资料" | response_feedback |
+| 网页跨库提问、MCP 提问回答"未找到相关内容" | gap_events（source = ai_not_found） |
+| MCP 检索没有结果 | gap_events（source = search_empty，显示为 检索无结果） |
+
+管理员接口：`GET /api/admin/gaps?days=&kbId=`（最近 7/30/90 天）。
+
+---
+
+## 15. 备份与恢复
+
+```
+触发：npm run backup / 自动备份（BACKUP_INTERVAL_HOURS）/ 管理控制台的 立即备份
+      │
+      ▼
+工作线程里执行（backupWorker），不阻塞服务
+  ├─ SQLite 在线备份接口 → enterprise-kb.db（包括 WAL 里还没合并的数据）
+  ├─ 完整性检查（integrity_check）
+  ├─ 复制 STORAGE_PATH → storage/
+  └─ 写 manifest.json（版本、时间、统计）
+      │
+      ▼
+只保留最新 BACKUP_KEEP 份（默认 7 份）
+```
+
+- 自动备份：启动约一分钟后，如果最近没有备份就先备份一次；失败一小时后重试。
+- 恢复：`npm run restore -- <备份名> --yes`，服务器在运行时拒绝执行。当前数据改名为 `*.before-restore-<时间>` 保留，不删除。
+- 安全：备份接口只返回备份名称和数量，不返回路径，不提供下载或恢复；`BACKUP_DIR` 不能放在 `STORAGE_PATH` 里面。
+
+---
+
+## 16. 前端设计系统
 
 ### 架构选型
 
 **为什么不用 React/Vue？**
-- 系统由 Express 统一服务静态文件，无需构建流水线
-- 功能相对固定，无需组件复用的复杂度
-- 纯 Vanilla JS + CSS 变量实现 < 300KB（含所有页面），加载极快
-- 服务器端无 Node 构建进程，降低部署复杂度
+- 由 Express 直接提供静态文件，不需要构建流水线
+- 功能相对固定，不需要组件化带来的复杂度
+- 部署时只有一个 Node 进程，没有前端构建步骤
 
-### CSS 设计令牌（style.css v21）
+### 页面
+
+| 页面 | 文件 | 内容 |
+|------|------|------|
+| 登录 | login.html | 登录表单，流场背景动画 |
+| 问答 | index.html + chat.js | 知识库列表、对话历史、流式问答、出处预览、知识库概况 |
+| 管理控制台 | manage.html + manage.js | 知识库与文档、成员、用户、审计、反馈与知识缺口、API 接入、设置与备份 |
+
+静态资源带版本号（如 `style.css?v=40`），修改后要同步更新版本号，避免浏览器缓存旧文件。
+
+### CSS 设计变量（style.css）
 
 ```css
 :root {
-  /* 色彩系统 */
-  --bg, --surface, --border     /* 背景层次 */
-  --text, --muted, --light      /* 文字层次 */
+  --bg, --surface, --border          /* 背景层次 */
+  --text, --muted, --light           /* 文字层次 */
   --accent, --accent-d, --accent-lt  /* 强调色 */
-
-  /* 侧边栏（始终深色） */
-  --sb-bg: #0d1321;
-  --sb-accent: #60a5fa;
-
-  /* 语义组件令牌 */
-  --tool-bg, --tool-border, --tool-accent  /* 工具调用区块 */
-  --code-bg, --code-text                   /* 代码块 */
-  --ref-bg, --ref-border, --ref-text       /* 来源引用 */
-
-  /* 阴影梯度（5 级） */
-  --sh-xs, --sh-sm, --sh, --sh-lg, --sh-xl
-
-  /* 圆角梯度（4 级） */
-  --r-sm(6px), --r(8px), --r-lg(12px), --r-xl(16px)
+  --sb-bg, --sb-accent               /* 侧边栏（始终深色） */
+  --tool-bg, --tool-border           /* 工具调用区块 */
+  --code-bg, --code-text             /* 代码块 */
+  --sh-xs … --sh-xl                  /* 阴影 */
+  --r-sm, --r, --r-lg, --r-xl        /* 圆角 */
 }
 ```
 
-深色模式通过 `html[data-theme="dark"]` 覆写同名令牌，无需 class 切换逻辑。
+深色模式通过 `html[data-theme="dark"]` 覆盖同名变量实现。
 
 ### SSE 流式渲染
 
 ```javascript
-// chat.js — readSSE()
-
+// chat.js
 switch (ev.type) {
-  case 'text':
-    // 实时追加 Markdown，流式渲染
-    responseText.dataset.raw += ev.text
-    renderMd(responseText, raw, /* streaming= */ true)
-    break
-
-  case 'tool_call':
-    // 插入可折叠工具调用块
-    addToolCall(toolsLog, ev.name, ev.input)
-    break
-
-  case 'tool_result':
-    // 在工具调用块内填入结果预览（前 5 行）
-    lastToolBody.textContent = preview
-    lastToolBody.className = ev.isError ? 'tool-err' : 'tool-ok'
-    break
-
-  case 'done':
-    // 最终渲染、持久化历史、更新侧边栏
-    renderMd(responseText, raw, /* streaming= */ false)
-    break
+  case 'text':        // 追加文字，流式渲染 Markdown
+  case 'tool_call':   // 插入可折叠的工具调用块
+  case 'tool_result': // 在工具调用块里显示结果预览
+  case 'done':        // 最终渲染，更新侧边栏
+  case 'error':       // 显示错误
 }
 ```
+
+### 出处跳转
+
+回答里的 `文件名:行号`（包括中文文件名和 `手册.md:12-15` 这样的范围）会被识别成链接。点击后打开文档预览，通过 `GET …/preview?line=N` 加载被引用行附近的内容并高亮。使用存储文件名的出处也能找到对应文档，并显示原始文件名。
 
 ### 安全的 Markdown 渲染
 
 ```javascript
-// 主路径：marked + DOMPurify
 html = DOMPurify.sanitize(marked.parse(raw), {
-  ALLOWED_TAGS: ['p','br','strong','em','code','pre',
-                 'blockquote','h1'~'h6','ul','ol','li',
-                 'table','thead','tbody','tr','th','td',
-                 'a','span','details','summary','hr'],
-  ALLOWED_ATTR: ['href','class','target','rel'],
+  ALLOWED_TAGS: [...],      // 段落、标题、列表、表格、代码、链接等
+  ALLOWED_ATTR: ['href', 'class', 'target', 'rel'],
   ALLOW_DATA_ATTR: false,
 })
-
-// 降级路径（CDN 未加载）：手写正则 + escHtml()
 ```
 
-`escHtml()` 先对原始字符串 HTML 实体编码，再做正则替换，防止用户输入或 LLM 输出中的 `<script>` 等注入。
+`marked` 没加载时退回到手写的正则渲染，先用 `escHtml()` 转义 HTML 再替换，防止注入。
 
 ---
 
-## 13. 安全加固
+## 17. 安全加固
 
-### 生产启动校验
+### 生产环境启动校验
 
 ```typescript
 // src/server.ts — validateRuntimeConfig()
-
 if (IS_PRODUCTION) {
-  // JWT_SECRET：长度 ≥ 32，不等于任何已知示例值
-  if (!jwtSecret || jwtSecret.length < 32
-      || jwtSecret === DEFAULT_JWT_SECRET
-      || jwtSecret === EXAMPLE_JWT_SECRET) {
-    throw new Error('JWT_SECRET must be set...')
-  }
-
-  // ADMIN_PASSWORD：不得为默认值或示例值
-  if (!process.env.ADMIN_PASSWORD
-      || process.env.ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD
-      || process.env.ADMIN_PASSWORD === EXAMPLE_ADMIN_PASSWORD) {
-    throw new Error('ADMIN_PASSWORD must be changed...')
-  }
+  // JWT_SECRET：至少 32 个字符，且不是任何已知的示例值
+  // ADMIN_PASSWORD：不是默认值或示例值
+  // 不满足就抛出中文错误并拒绝启动
 }
 ```
 
-**为什么同时拦截两个弱密码值？**
-`.env.example` 中的 `change-this-admin-password` 有时会被开发者直接复制使用而忘记修改，必须在 `IS_PRODUCTION` 时拦截两个已知弱值。
+`.env.example` 里的示例值有时会被直接复制使用，所以生产环境必须拦截这些已知的弱值。启动时还会检查 Node.js 版本（src/nodeVersion.ts），低于 22.19 时给出明确提示并退出。
 
 ### HTTP 安全响应头
 
 ```
 X-Content-Type-Options: nosniff
 X-Frame-Options: DENY
-Referrer-Policy: strict-origin-when-cross-origin
+Referrer-Policy: same-origin
 Permissions-Policy: camera=(), microphone=(), geolocation=()
 ```
 
 ### 文件上传防护
 
-- 扩展名白名单（17 种），拒绝 .exe / .sh / .php 等
-- 单文件限制 50MB，总同步目录限制 500MB
-- multer `diskStorage` 直接写盘，不经过内存 Buffer
-- 文件名由服务端生成（`uuid + ext`），忽略用户提交的 filename
+- 扩展名白名单，不在白名单里的格式（如 .exe、.php）被拒绝，并告诉用户哪些文件被跳过以及原因
+- 单个文件最大 50 MB，一次最多 20 个；同步目录总大小最多 500 MB
+- 先检查权限再写入文件
+- 文件名由服务端生成，不使用用户提交的文件名
+- 预览按数据库里的存储文件名查找，不信任客户端传来的路径
 
 ### 密码存储
 
 ```typescript
-bcrypt.hashSync(password, 10)  // cost factor 10
+bcrypt.hashSync(password, 10)  // cost factor 10，自带 salt
 ```
-
-bcrypt 内置 salt，每次哈希值不同，防止彩虹表攻击。
 
 ### 依赖漏洞门禁
 
-`npm run check` 脚本包含：
-```bash
-npm audit --omit=dev --audit-level=moderate
-```
-CI 强制通过才能合并，所有 moderate 及以上漏洞必须修复。
+`npm run check` 包含 `npm audit --omit=dev --audit-level=moderate`，CI 必须通过才能合并。
 
 ---
 
-## 14. 测试体系
+## 18. 测试体系
 
 ### 测试文件
 
-| 文件 | 覆盖模块 | 用例数 |
+| 文件 | 覆盖内容 | 用例数 |
 |------|---------|--------|
-| test/server.test.ts | 完整 REST API（认证、用户、KB、文档、权限、对话） | 7 |
+| test/server.test.ts | 完整 REST API：认证、用户、知识库、文档、权限、对话、上传、预览、审计、备份、API 密钥、MCP 路由 | 40 |
+| test/searchIndex.test.ts | 全文索引维护、迁移和清理 | 8 |
+| test/toolScope.test.ts | 大模型工具的访问范围限制 | 8 |
+| test/backup.test.ts | 备份、恢复、清理旧备份 | 6 |
+| test/backupScheduler.test.ts | 自动备份计划 | 6 |
+| test/mcp.test.ts | MCP 协议和工具 | 4 |
+| test/ocr.test.ts | OCR 识别和文字清理 | 4 |
+| test/extractInWorker.test.ts | 工作线程提取和超时 | 4 |
+| test/proxy.test.ts | 出站代理配置 | 4 |
 | test/executor.test.ts | ReasoningStreamFilter、mergeStreamedToolName | 3 |
-| test/documentChunker.test.ts | chunkDocument（标题携带、CRLF、空章节） | 3 |
-| test/conversationHistory.test.ts | buildTrustedHistory（轮次裁剪、内容截断） | 2 |
+| test/executorProxy.test.ts | 问答请求走代理 | 3 |
+| test/documentChunker.test.ts | 分块（标题携带、CRLF、空章节） | 3 |
+| test/knowledgeGaps.test.ts | 知识缺口汇总 | 3 |
+| test/nodeVersion.test.ts | Node.js 版本检查 | 3 |
+| test/pdfText.test.ts | PDF 文字提取 | 3 |
+| test/conversationHistory.test.ts | 历史裁剪 | 2 |
+| e2e/app.e2e.ts | 浏览器测试（Playwright） | 14 |
 
-### 集成测试策略（server.test.ts）
+### 接口测试策略（server.test.ts）
 
-```typescript
-// 每个 describe 块：
-beforeAll(async () => {
-  // 使用临时 DB 路径 + 临时 storage 路径
-  // 启动真实 Express 应用
-  server = app.listen(0)  // 随机端口
-})
+测试使用临时数据库和临时存储目录，启动真实的 Express 应用，请求直接打到真实路由 → 真实 SQLite → 真实文件系统，不 mock 数据层。
 
-afterAll(async () => {
-  server.close()
-  // 清理临时文件
-})
-```
+### 浏览器测试（e2e/）
 
-测试直接命中真实 Express 路由 → 真实 SQLite → 真实文件系统，不 mock 数据层，避免 mock 与真实行为不一致。
+`npm run test:e2e` 启动一个模拟大模型（e2e/mock-llm.mjs）和一个使用临时数据库的服务器，覆盖登录、问答与 👎 原因、中文文件名的出处跳转、知识库概况、反馈与知识缺口、版本历史与恢复、照片 OCR、上传跳过提示、审计日志、只读的公开知识库、网页备份、创建 API 密钥并用 MCP 客户端连接、用户活跃度和手机布局。CI 里作为单独的任务运行。
 
-### 端到端 Smoke Test（scripts/full-smoke.mjs）
+### 其他检查脚本
 
-```
-① 健康检查 /healthz
-② 管理员登录，获取 token
-③ 创建普通用户
-④ 创建知识库
-⑤ 上传文档
-⑥ 权限测试（普通用户无法访问未授权 KB）
-⑦ 授权访问
-⑧ 创建对话（跳过真实 LLM 调用）
-⑨ 清理（删除 KB、用户）
-```
+| 命令 | 内容 |
+|------|------|
+| `npm run codex:smoke` | 检查首页、`/healthz`、`/readyz` |
+| `npm run smoke:full` | 对运行中的服务完整走一遍，包括一次真实的模型回答，结束后清理数据 |
+| `npm run upgrade:check` | 用上一个版本写入数据，再用当前版本启动，验证升级后数据完整 |
+| `npm run bench:search` | 检索索引性能测试 |
 
 ---
 
-## 15. 部署与运维
+## 19. 部署与运维
 
 ### 快速启动
 
 ```bash
 npm ci
 cp .env.example .env
-# 编辑 .env 设置 JWT_SECRET、ADMIN_PASSWORD、LLM_BASE_URL
-npm run dev      # 开发：tsx 直接运行 TypeScript
+# 编辑 .env，设置 JWT_SECRET、ADMIN_PASSWORD、LLM_BASE_URL 等
+npm run dev      # 开发：用 tsx 直接运行 TypeScript
 npm run build    # 生产：编译到 dist/
 npm start        # 生产：运行 dist/server.js
 ```
@@ -796,64 +853,44 @@ npm start        # 生产：运行 dist/server.js
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `PORT` | 8080 | 监听端口 |
-| `JWT_SECRET` | — | 必须修改，≥ 32 字符随机字符串 |
+| `JWT_SECRET` | — | 生产环境必须修改，至少 32 个字符的随机字符串 |
 | `JWT_EXPIRES_IN` | 24h | Token 有效期 |
 | `ADMIN_USERNAME` | admin | 初始管理员用户名 |
-| `ADMIN_PASSWORD` | — | 必须修改，不能是示例值 |
-| `LLM_BASE_URL` | localhost:11434/v1 | OpenAI 兼容接口 |
-| `LLM_API_KEY` | ollama | API Key |
-| `LLM_MODEL` | qwen2.5:7b | 模型名 |
-| `LLM_MAX_TURNS` | 8 | 单次问答最多工具调用轮次 |
-| `HISTORY_MAX_MESSAGES` | 40 | 历史最多消息数 |
-| `HISTORY_MAX_CHARS` | 40000 | 历史最多字符数 |
-| `SYNC_MAX_FILES` | 1000 | 单次同步最多文件数 |
-| `SYNC_MAX_TOTAL_MB` | 500 | 单次同步最大总大小 |
-| `STORAGE_PATH` | ./storage | 文件存储目录 |
-| `DB_PATH` | ./data/enterprise-kb.db | SQLite 文件路径 |
-| `TRUST_PROXY` | false | 是否信任反向代理 X-Forwarded-For |
+| `ADMIN_PASSWORD` | — | 生产环境必须修改 |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | — | 兼容 OpenAI 的大模型接口 |
+| `LLM_MAX_TURNS` | 8 | 每次回答最多调用几轮工具 |
+| `EMBEDDING_MODEL` | 空 | 设置后启用向量检索 |
+| `HISTORY_MAX_MESSAGES` / `HISTORY_MAX_CHARS` | 40 / 40000 | 发给模型的历史上限 |
+| `QA_RATE_MAX` / `QA_RATE_WINDOW_MS` | 20 / 60000 | 每个用户的问答频率限制（每分钟 20 次） |
+| `LOGIN_RATE_MAX` / `LOGIN_RATE_WINDOW_MS` | 10 / 900000 | 登录频率限制 |
+| `SYNC_MAX_FILES` / `SYNC_MAX_TOTAL_MB` | 1000 / 500 | 单次同步上限 |
+| `SYNC_ALLOWED_ROOTS` | 空 | 允许同步的服务器目录 |
+| `EXTRACT_TIMEOUT_SECONDS` | 120 | PDF/Office 提取超时 |
+| `OCR_ENABLED` / `OCR_MAX_PAGES` | true / 100 | OCR 开关和每个 PDF 的页数上限 |
+| `BACKUP_DIR` / `BACKUP_KEEP` / `BACKUP_INTERVAL_HOURS` | backups / 7 / 0 | 备份位置、保留份数、自动备份间隔 |
+| `STORAGE_PATH` / `DB_PATH` | ./storage / ./data/enterprise-kb.db | 存储位置 |
+| `CORS_ORIGIN` | 空 | 允许跨域的来源 |
+| `TRUST_PROXY` | false | 是否信任反向代理的 X-Forwarded-For |
+| `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | 空 | 出站代理 |
 
-### Docker Compose 部署
+完整说明见 `.env.example` 和 `DEPLOYMENT.md`。
 
-```yaml
-# docker-compose.yml
-services:
-  app:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      NODE_ENV: production
-      JWT_SECRET: ${JWT_SECRET}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      LLM_BASE_URL: ${LLM_BASE_URL}
-    volumes:
-      - enterprise_kb_data:/app/data
-      - enterprise_kb_storage:/app/storage
+### 健康检查
 
-volumes:
-  enterprise_kb_data:
-  enterprise_kb_storage:
-```
-
-### 健康检查端点
-
-| 端点 | 说明 |
+| 接口 | 说明 |
 |------|------|
-| `GET /healthz` | 进程存活检查，始终返回 200 |
-| `GET /readyz` | 就绪检查，包含 LLM 接口连通性验证 |
+| `GET /healthz` | 进程是否存活，始终返回 200 |
+| `GET /readyz` | 是否就绪，包括大模型接口能否连通 |
 
-### 备份
+### Docker
 
-SQLite 单文件备份只需复制 `data/enterprise-kb.db`（WAL 模式下热备用 `.backup` pragma 或直接 cp 均可）。上传文件在 `storage/` 目录，同步备份即可。
+`docker-compose.yml` 把数据库和文档分别保存在 `enterprise_kb_data`、`enterprise_kb_storage` 两个命名数据卷里，容器以 `node` 用户运行，默认每天自动备份到数据卷内的 `/app/data/backups`。
 
-### CI 流水线
+### CI 与发布
 
-```yaml
-# .github/workflows/ci.yml
-- run: npm ci
-- run: npm run check
-# check = build + vitest + npm audit --omit=dev --audit-level=moderate
-```
+- `.github/workflows/ci.yml`：`npm ci` → `npm run check`（编译 + 测试 + 依赖审计），浏览器测试作为单独的任务。
+- `.github/workflows/release.yml`：推送 `v*` tag 时重新检查、打包，并从 `CHANGELOG.md` 提取对应版本的说明发布 GitHub Release。流程见 `RELEASE.md`。
+- Dependabot 每周检查 npm 依赖和 GitHub Actions 的更新。
 
 ---
 
@@ -862,42 +899,47 @@ SQLite 单文件备份只需复制 `data/enterprise-kb.db`（WAL 模式下热备
 ```
 enterprise-kb/
 ├── src/
-│   ├── server.ts            # Express 主服务，所有路由（1487 行）
-│   ├── db.ts                # 数据访问层，SQLite 操作（874 行）
-│   ├── auth.ts              # JWT 签发/验证，bcrypt 密码（84 行）
-│   ├── executor.ts          # LLM 工具调用循环（261 行）
-│   ├── tools.ts             # 工具定义，SearchDocs/KBStats（178 行）
-│   ├── toolAdapter.ts       # claude-tools-kit 适配器（69 行）
-│   ├── prompt.ts            # 系统提示词构建（46 行）
-│   ├── documentChunker.ts   # 结构感知文本分块（119 行）
-│   └── conversationHistory.ts # 历史裁剪算法（96 行）
+│   ├── server.ts             # Express 主服务和所有路由、后台队列
+│   ├── db.ts                 # 数据访问层、迁移、检索
+│   ├── auth.ts               # JWT、API 密钥、认证中间件
+│   ├── mcp.ts                # MCP 协议处理和知识库工具
+│   ├── executor.ts           # 大模型工具调用循环
+│   ├── tools.ts              # SearchDocs、KBStats 工具
+│   ├── toolAdapter.ts        # claude-tools-kit 适配
+│   ├── toolScope.ts          # 工具访问范围限制
+│   ├── prompt.ts             # 系统提示词
+│   ├── documentChunker.ts    # 结构感知分块
+│   ├── documentText.ts       # PDF/Office 文字提取
+│   ├── pdfText.ts            # PDF 逐页提取
+│   ├── ocr.ts                # OCR 识别
+│   ├── runInWorker.ts        # 工作线程运行与超时
+│   ├── extractWorker.ts      # 文字提取工作线程入口
+│   ├── extractInWorker.ts    # 主线程调用提取的封装
+│   ├── embedding.ts          # 向量生成（可选）
+│   ├── conversationHistory.ts# 历史裁剪
+│   ├── knowledgeGaps.ts      # 知识缺口汇总
+│   ├── backup.ts             # 备份与恢复
+│   ├── backupScheduler.ts    # 自动备份计划
+│   ├── backupWorker.ts       # 备份工作线程入口
+│   ├── backup-cli.ts         # backup / restore 命令
+│   ├── proxy.ts              # 出站代理
+│   └── nodeVersion.ts        # Node.js 版本检查
 ├── public/
-│   ├── index.html           # 主聊天页（304 行）
-│   ├── chat.js              # 聊天前端逻辑（1457 行）
-│   ├── manage.html          # 管理页（417 行）
-│   ├── manage.js            # 管理前端逻辑（1254 行）
-│   ├── login.html           # 登录页（112 行）
-│   └── style.css            # 设计系统（2390 行）
-├── test/
-│   ├── server.test.ts       # API 集成测试
-│   ├── executor.test.ts     # 流式过滤器单元测试
-│   ├── documentChunker.test.ts
-│   └── conversationHistory.test.ts
-├── scripts/
-│   ├── codex-smoke.mjs      # 轻量健康检查
-│   └── full-smoke.mjs       # 完整 E2E smoke test
-├── packages/
-│   └── claude-tools-kit/    # vendored 工具包（Glob/Grep/Read）
-├── .github/workflows/
-│   └── ci.yml               # GitHub Actions CI
-├── Dockerfile
-├── docker-compose.yml
-├── .env.example
-├── DEPLOYMENT.md
-├── RELEASE.md
-└── SECURITY_OWNERSHIP.md
+│   ├── index.html · chat.js        # 问答页
+│   ├── manage.html · manage.js     # 管理控制台
+│   ├── login.html                  # 登录页
+│   └── style.css                   # 设计系统
+├── test/                     # Vitest 测试和测试用文件
+├── e2e/                      # Playwright 浏览器测试和模拟大模型
+├── scripts/                  # 冒烟检查、升级检查、性能测试
+├── packages/claude-tools-kit/# 随项目提供的工具包（Read/Glob/Grep）
+├── .github/                  # CI、发布流程、Dependabot、PR 模板
+├── Dockerfile · docker-compose.yml · .env.example
+├── README.md · DEPLOYMENT.md · RELEASE.md · CHANGELOG.md
+├── SECURITY_OWNERSHIP.md · AGENTS.md
+└── TECHNICAL.md
 ```
 
 ---
 
-*Enterprise KB v1.0.0 — 从数据库到前端，完整自研，适合企业内网私有化部署。*
+*Enterprise KB v1.3.0：从数据库到前端完整自研，适合企业内网私有化部署。*

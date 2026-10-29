@@ -5,7 +5,7 @@
  * 适配为 LLMExecutor 所需的 LLMTool（OpenAI function calling 格式）。
  *
  * 桥接关系：
- *   claude-tools-kit Tool           →  LLMTool (OpenAI format)
+ *   claude-tools-kit Tool           →  LLMTool（OpenAI 格式）
  *   ─────────────────────────────────────────────────────────
  *   tool.name                        →  definition.name
  *   tool.description                 →  definition.description

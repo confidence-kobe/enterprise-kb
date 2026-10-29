@@ -51,8 +51,8 @@ function fitTurnToBudget(turn: Record<string, unknown>[], maxChars: number): Rec
 }
 
 /**
- * Select recent persisted conversation turns without trusting client-provided history.
- * A turn always starts with a user message, so tool messages are never sent orphaned.
+ * 从数据库里保存的对话中选出最近几轮，不信任客户端传来的历史记录。
+ * 每一轮都从用户消息开始，所以不会单独发出没有对应调用的工具消息。
  */
 export function buildTrustedHistory(
   rows: MessageRow[],
