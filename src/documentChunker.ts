@@ -40,8 +40,8 @@ function renderChunk(entries: LineEntry[], heading: string | null): DocumentChun
 }
 
 /**
- * Split documents on paragraph and heading boundaries while carrying section context
- * into subsequent chunks. Line numbers are zero-based to match the existing Read tool.
+ * 按段落和标题边界切分文档，并把所在章节的标题带到后续分块里。
+ * 行号从 0 开始，与 Read 工具一致。
  */
 export function chunkDocument(
   text: string,

@@ -229,7 +229,7 @@ export class LLMExecutor {
         try {
           params = JSON.parse(toolCall.function.arguments)
         } catch {
-          // ignore
+          // 忽略
         }
 
         onEvent?.({ type: 'tool_call', name: toolName, input: params })

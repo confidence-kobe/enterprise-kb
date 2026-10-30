@@ -1,13 +1,13 @@
-## Summary
+## 概要
 
-Describe the change in one or two sentences.
+用一两句话说明这次改了什么。
 
-## Validation
+## 验证
 
 - [ ] `npm run build`
 - [ ] `npm run test`
 - [ ] `npm run check`
 
-## Notes
+## 备注
 
-Call out any follow-up work, deployment impact, or config changes.
+写明后续工作、对部署的影响或配置变更。

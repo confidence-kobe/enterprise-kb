@@ -15,10 +15,10 @@ function resolveJwtSecret(): string {
   const secret = process.env.JWT_SECRET ?? DEFAULT_JWT_SECRET
   const isProduction = process.env.NODE_ENV === 'production'
   if (isProduction && (secret === DEFAULT_JWT_SECRET || secret === EXAMPLE_JWT_SECRET || secret.length < 32)) {
-    throw new Error('JWT_SECRET must be set to a random string of at least 32 characters in production.')
+    throw new Error('生产环境必须把 JWT_SECRET 设置为至少 32 个字符的随机字符串。')
   }
   if (!isProduction && (secret === DEFAULT_JWT_SECRET || secret === EXAMPLE_JWT_SECRET)) {
-    console.warn('[security] JWT_SECRET is using a development/example value. Replace it before production deployment.')
+    console.warn('[security] JWT_SECRET 仍是开发用的示例值，部署到生产环境前请更换。')
   }
   return secret
 }
@@ -34,7 +34,7 @@ export interface JwtPayload {
   tv?: number
 }
 
-// ── Token ─────────────────────────────────────────────
+// ── 登录 Token ─────────────────────────────────────────────
 
 export function signToken(payload: JwtPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES } as jwt.SignOptions)

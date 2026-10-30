@@ -10,7 +10,7 @@
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=39">
+  <link rel="stylesheet" href="style.css?v=40">
   <script src="/vendor/p5.min.js"></script>
 </head>
 <body class="login-page">
@@ -77,8 +77,8 @@
   <script>
     if (localStorage.getItem('kb_token')) location.href = '/index.html'
 
-    // p5.js flow field — Perlin noise vector field (skipped if the CDN script failed to load,
-    // so the login form below still works on networks that block the CDN)
+    // p5.js 流场背景：基于 Perlin 噪声的向量场（p5.js 脚本加载失败时跳过，
+    // 这样即使网络拦截了脚本，下面的登录表单也照常可用）
     if (window.p5) new p5(function (p) {
       const N = 1400
       const pts = []
@@ -93,7 +93,7 @@
       }
 
       p.draw = function () {
-        // Low alpha overlay creates long glowing silk trails
+        // 低透明度的叠加层形成长长的发光丝线拖尾
         p.fill(4, 8, 18, 7)
         p.noStroke()
         p.rect(0, 0, p.width, p.height)
@@ -106,7 +106,7 @@
           const vel   = p5.Vector.fromAngle(angle)
           vel.mult(1.6)
 
-          // Mouse attraction — radius 220px, smooth falloff
+          // 鼠标吸引：半径 220px，力度平滑衰减
           if (hasMouse) {
             const dx = mx - v.x, dy = my - v.y
             const dist = Math.sqrt(dx * dx + dy * dy)

@@ -29,7 +29,7 @@ const isAdmin = user?.role === 'admin'
   }
 })()
 
-/* ── DOM ──────────────────────────────────────────── */
+/* ── DOM 元素 ──────────────────────────────────────────── */
 const toast        = document.getElementById('toast')
 const kbList       = document.getElementById('kb-list')
 const docKbSelect  = document.getElementById('doc-kb-select')
@@ -186,7 +186,7 @@ function applyInitialManageRoute() {
 function renderKbList() {
   kbList.innerHTML = ''
 
-  // Stats dashboard row
+  // 统计数据行
   const totalDocs  = allKbs.reduce((s, k) => s + (k.doc_count  ?? 0), 0)
   const totalConvs = allKbs.reduce((s, k) => s + (k.conv_count ?? 0), 0)
   const statsRow = document.createElement('div')
@@ -226,7 +226,7 @@ function renderKbList() {
   grid.className = 'kb-card-grid'
   kbList.appendChild(grid)
 
-  // Accent color palette cycling by kb.id
+  // 按 kb.id 轮换强调色
   const palette = [
     { bar: '#1e40af', icon: '#1e40af', bg: 'rgba(30,64,175,.08)', border: 'rgba(30,64,175,.2)' },
     { bar: '#7c3aed', icon: '#7c3aed', bg: 'rgba(124,58,237,.08)', border: 'rgba(124,58,237,.2)' },
@@ -485,7 +485,7 @@ function docSourceBadge(doc) {
 }
 
 function vectorBadge(doc) {
-  // Show vector coverage if the doc object exposes chunk/vec counts
+  // 文档带有分块数和向量数时，显示向量覆盖率
   const chunks = doc.chunk_count ?? doc.chunks ?? 0
   const vecs   = doc.vec_count  ?? doc.vecs   ?? 0
   if (!chunks) return ''
@@ -517,7 +517,7 @@ async function loadDocs(append = false) {
     docTotal = data.total ?? docs.length
   }
 
-  // Show / hide table header
+  // 显示或隐藏表头
   const tableHeader = document.getElementById('doc-table-header')
   if (tableHeader) tableHeader.style.display = !docs.length && !append ? 'none' : ''
 
@@ -1416,7 +1416,7 @@ function formatAuditDetail(detail) {
         .join(' · ')
         .slice(0, 240)
     }
-  } catch { /* plain text */ }
+  } catch { /* 不是 JSON，按纯文本处理 */ }
   return String(detail).slice(0, 240)
 }
 
@@ -2005,7 +2005,7 @@ async function copyText(text) {
     area.select()
     const ok = document.execCommand('copy')
     area.remove()
-    if (!ok) throw new Error('copy failed')
+    if (!ok) throw new Error('复制失败')
   }
 }
 
@@ -2140,7 +2140,7 @@ function initTextDocModal() {
   const closeBtn   = document.getElementById('text-doc-modal-close')
   const openBtn    = document.getElementById('new-text-doc-btn')
 
-  let editingDocId = null  // null = create mode, number = edit mode
+  let editingDocId = null  // null 表示新建，数字表示正在编辑的文档
 
   function renderPreview(md) {
     if (!md.trim()) {
