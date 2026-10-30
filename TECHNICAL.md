@@ -331,7 +331,8 @@ PRAGMA foreign_keys = ON;    -- 级联删除，不留孤儿数据
 ```
 识别分割点：
   Markdown 标题（# / ## / ### ...）
-  中文章节标题（第一章 / 一、/（一）...）
+  中文章节标题（第一章 / 第二节 / 第三部分 ...）
+  编号标题（1.2 / 1.2.3 ...）
 
 按分割点切成若干段，每段不超过 maxChars（默认 1200）个字符。
   单段超长 → 再细分，保留 overlapLines（默认 2）行重叠，避免在边界截断语义。
@@ -936,7 +937,7 @@ enterprise-kb/
 ├── .github/                  # CI、发布流程、Dependabot、PR 模板
 ├── Dockerfile · docker-compose.yml · .env.example
 ├── README.md · DEPLOYMENT.md · RELEASE.md · CHANGELOG.md
-├── SECURITY_OWNERSHIP.md · AGENTS.md
+├── SECURITY_OWNERSHIP.md · AGENTS.md · GUIDE.md
 └── TECHNICAL.md
 ```
 

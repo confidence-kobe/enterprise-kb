@@ -57,6 +57,10 @@ export function hashPassword(plain: string): string {
 /** 接口密钥统一以此开头，便于和登录 Token 区分，也便于密钥扫描工具识别 */
 export const API_KEY_PREFIX = 'ekb_'
 
+/**
+ * 密钥用 SHA-256 哈希，而不是像密码那样用 bcrypt：密钥本身是 192 位随机数，不可能被暴力猜出，
+ * 不需要故意算得很慢；而且每个请求都要校验一次，bcrypt 会拖慢每一次接口调用。
+ */
 export function hashApiKey(key: string): string {
   return createHash('sha256').update(key).digest('hex')
 }
@@ -70,6 +74,10 @@ export function generateApiKey(): { key: string; prefix: string; hash: string } 
 /** 接口密钥只能查询和问答：允许 GET，以及下面几个只读性质的 POST */
 const API_KEY_POST_ROUTES = [/^\/api\/kbs\/\d+\/ask$/, /^\/api\/ask$/, /^\/mcp$/]
 
+/**
+ * 密钥能调用哪些接口（白名单）。用白名单而不是黑名单：以后新增的写接口默认就不能用密钥调用，
+ * 不会因为忘了加限制而被泄露的密钥修改数据。
+ */
 export function isApiKeyAllowed(method: string, rawPath: string): boolean {
   // Express 路由默认不区分大小写、允许结尾斜杠，这里先统一格式再判断
   const p = rawPath.toLowerCase().replace(/\/+$/, '')
@@ -86,6 +94,7 @@ export interface AuthRequest extends Request {
   apiKey?: { id: number; prefix: string }
 }
 
+/** 用 API 密钥认证：查哈希 → 检查过期 → 检查主人还在 → 检查接口在白名单里 → 以主人身份放行 */
 function authenticateApiKey(req: AuthRequest, res: Response, next: NextFunction, key: string): void {
   const row = getApiKeyByHash(hashApiKey(key))
   if (!row || (row.expires_at != null && row.expires_at * 1000 <= Date.now())) {

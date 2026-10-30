@@ -1,6 +1,21 @@
 /**
- * Express 主服务 — 所有路由
- * 启动：npx tsx src/server.ts
+ * Express 主服务：所有 HTTP 路由、后台索引队列和启动流程都在这个文件里。
+ * 启动：npx tsx src/server.ts（开发）或 node dist/server.js（生产）
+ *
+ * 文件结构（按出现顺序，可以按分节标题跳着读）：
+ *   配置 / 初始化          读取环境变量，生产环境检查弱密钥，打开数据库
+ *   文件类型与同步设置      上传和同步允许的扩展名、各种上限
+ *   文件夹同步：路径校验与扫描
+ *   权限与审计的辅助函数
+ *   文件上传（multer）
+ *   后台索引队列与 OCR 队列  上传后的解析、分块、建索引都在这里排队进行
+ *   文件夹同步：执行同步
+ *   Express 应用           安全响应头、CORS、静态文件、登录限速
+ *   各类路由               认证、密钥、知识库、成员、文档、统计、对话、
+ *                          问答（SSE）、反馈、搜索、MCP、管理员、备份、配置
+ *   启动                   补建旧文档索引、开始监听端口、启动自动备份
+ *
+ * 数据访问都在 db.ts，大模型调用在 executor.ts，认证在 auth.ts。
  */
 
 import './nodeVersion.js'
@@ -63,6 +78,7 @@ const EXAMPLE_ADMIN_PASSWORD  = 'change-this-admin-password'
 const DEFAULT_JWT_SECRET      = 'dev-secret-change-me'
 const EXAMPLE_JWT_SECRET      = 'change-this-to-a-random-secret-string-at-least-32-chars'
 
+/** 读取环境变量，空字符串视为没有设置；aliases 兼容早期版本的 OLLAMA_* 变量名 */
 function envValue(primary: string, ...aliases: string[]): string | undefined {
   for (const key of [primary, ...aliases]) {
     const val = process.env[key]?.trim()
@@ -82,6 +98,7 @@ function isOllamaEndpoint(baseUrl: string): boolean {
   return /localhost|127\.0\.0\.1/.test(baseUrl) && baseUrl.includes('11434')
 }
 
+/** Ollama 的 OpenAI 兼容接口在 /v1 下，用户常常只填 http://localhost:11434，这里自动补上 */
 function normalizeLlmBaseUrl(raw: string): string {
   const trimmed = raw.replace(/\/+$/, '')
   if (isOllamaEndpoint(trimmed) && !trimmed.endsWith('/v1')) return `${trimmed}/v1`
@@ -109,6 +126,7 @@ const LLM_PROVIDER = (() => {
   }
 })()
 const PROJECT_ROOT = path.join(__dirname, '..')
+/** 相对路径按项目根目录解析，而不是按启动命令所在的目录，避免换个目录启动就找不到数据 */
 function resolveFromProject(envVal: string | undefined, fallback: string): string {
   const val = envVal ?? fallback
   return path.isAbsolute(val) ? val : path.resolve(PROJECT_ROOT, val)
@@ -130,6 +148,7 @@ const ADMIN_PASS   = process.env.ADMIN_PASSWORD   ?? 'Admin@123'
 const CORS_ORIGIN  = envValue('CORS_ORIGIN')
 const TRUST_PROXY  = /^(1|true|yes)$/i.test(envValue('TRUST_PROXY') ?? '')
 
+/** 生产环境拒绝默认或示例密钥：这些值写在公开的代码和 .env.example 里，用了等于没设密码 */
 function validateRuntimeConfig(): void {
   const jwtSecret = process.env.JWT_SECRET
   if (IS_PRODUCTION) {
@@ -150,8 +169,9 @@ initDb(DB_PATH)
 ensureAdmin(ADMIN_USER, ADMIN_PASS)
 currentModel = getConfig('model') ?? currentModel
 
-// ── Multer（文件上传） ─────────────────────────────────
+// ── 文件类型与同步设置 ────────────────────────────────
 
+/** 可以入库的扩展名（白名单）。上传和文件夹同步都以此为准，不在其中的文件一律跳过 */
 const ALLOWED_EXTS = new Set([
   '.txt', '.md', '.markdown', '.pdf',
   '.ts', '.js', '.py', '.java', '.go', '.rs',
@@ -208,6 +228,12 @@ interface SyncSummary {
   errors: string[]
 }
 
+// ── 文件夹同步：路径校验与扫描 ────────────────────────
+
+/**
+ * child 是否在 parent 里面（或就是 parent）。用 path.relative 判断，而不是比较字符串前缀：
+ * 前缀比较会把 /data/kb-evil 误判为在 /data/kb 里面，也挡不住 ../ 绕出去。
+ */
 function isPathInside(parent: string, child: string): boolean {
   const rel = path.relative(path.resolve(parent), path.resolve(child))
   return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel))
@@ -252,16 +278,22 @@ function isDirectory(sourcePath: string): boolean {
   }
 }
 
+/** 同步文件的比对键：Windows 文件名不区分大小写，统一转小写，避免同一个文件被当成两个 */
 function sourcePathKey(sourcePath: string): string {
   const normalized = path.normalize(sourcePath)
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
+/**
+ * 存储文件名由服务端生成（时间戳 + 随机串 + 扩展名），原始文件名只存在数据库里。
+ * 这样用户提交的文件名（可能含 ../ 或特殊字符）永远不会出现在磁盘路径里。
+ */
 function makeStoredFilename(originalName: string): string {
   const ext = path.extname(originalName).toLowerCase()
   return `${Date.now()}_${Math.random().toString(36).slice(2, 10)}${ext}`
 }
 
+/** 彻底删除一份文档：磁盘文件、提取出的文字、全文索引和数据库记录 */
 function removeStoredDocument(kbId: number, doc: Document): void {
   const kbDir = path.join(STORAGE_PATH, `kb_${kbId}`)
   const filePath = path.join(kbDir, doc.filename)
@@ -275,6 +307,9 @@ function removeStoredDocument(kbId: number, doc: Document): void {
   deleteDoc(doc.id)
 }
 
+// ── 权限与审计的辅助函数 ──────────────────────────────
+
+/** 能否管理知识库（改设置、管成员、删库）：只有管理员和所有者，成员不行 */
 function canManageKb(kb: KnowledgeBase, user: AuthRequest['user']): boolean {
   return Boolean(user && (user.role === 'admin' || kb.owner_id === user.userId))
 }
@@ -284,17 +319,26 @@ function canWriteKb(kbId: number, user: AuthRequest['user']): boolean {
   return Boolean(user && (user.role === 'admin' || canUserWriteKb(user.userId, kbId)))
 }
 
+/**
+ * 返回给前端的知识库信息。不能管理的人看不到同步文件夹路径：
+ * 那是服务器上的真实路径，暴露出去会泄露服务器的目录结构。
+ */
 function publicKb(kb: KnowledgeBase, user: AuthRequest['user']): KnowledgeBase & { can_write: boolean } {
   const can_write = canWriteKb(kb.id, user)
   if (canManageKb(kb, user)) return { ...kb, can_write }
   return { ...kb, sync_source_path: null, sync_last_at: null, sync_last_result: null, can_write }
 }
 
+/** 同上：同步来的文档，源文件路径只给能管理知识库的人看 */
 function publicDoc(doc: Document, kb: KnowledgeBase, user: AuthRequest['user']): Document {
   if (canManageKb(kb, user)) return doc
   return { ...doc, source_path: null }
 }
 
+/**
+ * 记一条审计日志。操作人、IP 从请求里取，路由只需说明做了什么（action）、对什么做的（entityType）。
+ * action 的命名规则是"对象.动作"，例如 kb.create、doc.delete、qa.ask。
+ */
 function audit(
   req: AuthRequest | Request,
   action: string,
@@ -325,6 +369,7 @@ function audit(
   })
 }
 
+/** 路由里常用的检查：知识库存在且当前用户能管理它，否则直接回 404/403 并返回 null */
 function requireKbOwnerOrAdmin(req: AuthRequest, res: Response, kbId: number): KnowledgeBase | null {
   const kb = getKbById(kbId)
   if (!kb) {
@@ -338,6 +383,11 @@ function requireKbOwnerOrAdmin(req: AuthRequest, res: Response, kbId: number): K
   return kb
 }
 
+/**
+ * 递归扫描同步目录，返回可以入库的文件。跳过：符号链接（可能指向目录外）、隐藏目录和
+ * node_modules 等构建目录、不支持的格式、超过 50 MB 的文件；总数或总大小超限后停止收录。
+ * 只扫描，不改动任何数据。
+ */
 function scanSyncDirectory(root: string): { files: SyncFile[]; skipped: SyncSkipped; errors: string[] } {
   const files: SyncFile[] = []
   const skipped: SyncSkipped = { unsupported: 0, tooLarge: 0, limit: 0, symlink: 0, hiddenDir: 0, errors: 0 }
@@ -406,6 +456,8 @@ function scanSyncDirectory(root: string): { files: SyncFile[]; skipped: SyncSkip
   return { files, skipped, errors }
 }
 
+// ── 文件上传（multer） ─────────────────────────────────
+
 /** multer 在 Windows 上把中文文件名按 Latin-1 读取，需转回 UTF-8 */
 function uploadName(originalname: string): string {
   return Buffer.from(originalname, 'latin1').toString('utf8')
@@ -438,6 +490,21 @@ const upload = multer({
   },
 })
 
+// ── 后台索引队列与 OCR 队列 ───────────────────────────
+//
+// 上传只负责把文件写到磁盘、在数据库里记一条 pending 的文档，马上返回；
+// 解析、分块、建索引放进下面的队列，在后台一份一份地做：
+//
+//   enqueueDocIndex → drainDocIndexQueue → processDocIndexJob
+//                                           ├─ 文本文件：直接读
+//                                           ├─ PDF / Office：在工作线程里提取文字
+//                                           └─ 扫描页 / 图片：交给 OCR 队列（enqueueOcr）
+//                                         → finishDocIndex：写索引、生成向量和摘要
+//
+// 队列一次只处理一份，是有意为之：解析很吃 CPU 和内存，并发处理会拖慢正在进行的问答。
+// 队列在内存里，服务重启会丢失；启动时 reindexExistingDocs() 会把还没有索引的文档
+// （包括上次失败的）重新排队，所以重启不会让文档永远停在"解析中"。
+
 interface DocIndexJob {
   docId: number
   kbId: number
@@ -469,6 +536,7 @@ interface OcrJob extends DocIndexJob {
 const ocrQueue: Array<{ job: OcrJob; done: () => void }> = []
 let ocrWorkerRunning = false
 
+/** 加入 OCR 队列；返回的 Promise 在这份文档识别完成（或失败）后结束，重建索引的接口会等它 */
 function enqueueOcr(job: OcrJob): Promise<void> {
   return new Promise(resolve => {
     ocrQueue.push({ job, done: resolve })
@@ -476,6 +544,7 @@ function enqueueOcr(job: OcrJob): Promise<void> {
   })
 }
 
+/** 依次处理 OCR 队列；ocrWorkerRunning 保证同一时间只有一个循环在跑 */
 async function drainOcrQueue(): Promise<void> {
   if (ocrWorkerRunning) return
   ocrWorkerRunning = true
@@ -490,7 +559,9 @@ async function drainOcrQueue(): Promise<void> {
   }
 }
 
+/** 识别一份文档。PDF 只识别扫描页，识别结果替换回对应页，其余页保留原有文字 */
 async function processOcrJob(job: OcrJob): Promise<void> {
+  // 排队期间文档可能已被删除
   if (!getDocById(job.docId)) return
   try {
     let text: string
@@ -532,6 +603,7 @@ async function finishDocIndex(job: DocIndexJob, text: string, ocrPages: number, 
   void generateDocSummary(job.docId, job.originalName, text)
 }
 
+/** 标记索引失败：清掉可能已写入一半的索引，错误信息存进数据库，文档列表里会显示 */
 function markDocIndexFailed(job: DocIndexJob, err: unknown): void {
   removeDocFromIndex(job.docId)
   const message = (err as Error).message || '索引失败'
@@ -576,6 +648,7 @@ async function processDocIndexJob(job: DocIndexJob): Promise<{ ocr?: Promise<voi
   return {}
 }
 
+/** 生成分块向量（只在配置了 EMBEDDING_MODEL 时调用）。失败只记日志，全文检索照常可用 */
 async function generateAndStoreEmbeddings(
   docId: number,
   kbId: number,
@@ -600,6 +673,7 @@ async function generateAndStoreEmbeddings(
   }
 }
 
+/** 用大模型给文档生成一两句话的摘要，显示在文档列表里。只取前 3000 字，控制费用和耗时 */
 async function generateDocSummary(docId: number, originalName: string, text: string): Promise<void> {
   try {
     const excerpt = text.slice(0, 3000).trim()
@@ -630,6 +704,7 @@ async function generateDocSummary(docId: number, originalName: string, text: str
   }
 }
 
+/** 加入索引队列并确保队列在处理；上传、新建、编辑、同步、启动补建都从这里进入 */
 function enqueueDocIndex(job: DocIndexJob): void {
   docIndexQueue.push(job)
   void drainDocIndexQueue()
@@ -647,6 +722,16 @@ async function drainDocIndexQueue(): Promise<void> {
   }
 }
 
+// ── 文件夹同步：执行同步 ──────────────────────────────
+
+/**
+ * 把同步目录镜像到知识库（增量）：
+ *   新文件        → 复制进来，建文档记录，排队建索引
+ *   修改时间或大小变了 → 覆盖副本，清掉旧索引，重新排队
+ *   没变          → 跳过
+ *   源目录里已删除的 → 从知识库里删除
+ * 只处理 source_type='sync' 的文档，网页上传的文档不受影响。
+ */
 function syncKnowledgeBase(kb: KnowledgeBase, sourceRoot: string): SyncSummary {
   const { files, skipped, errors } = scanSyncDirectory(sourceRoot)
   const summary: SyncSummary = {
@@ -787,6 +872,10 @@ const LOGIN_WINDOW_MS = parsePositiveInt(envValue('LOGIN_RATE_WINDOW_MS'), 15 * 
 const LOGIN_MAX_ATTEMPTS = parsePositiveInt(envValue('LOGIN_RATE_MAX'), 10, 'LOGIN_RATE_MAX')
 const loginAttempts = new Map<string, { count: number; resetAt: number }>()
 
+/**
+ * 登录限速：按"IP + 用户名"计数，时间窗口内超过次数返回 429。成功的登录也计数，规则简单、不易绕过。
+ * 计数放在内存里：单实例部署够用，重启清零也可以接受；如果以后多实例部署，需要改成共享存储。
+ */
 function loginRateLimit(req: Request, res: Response, next: NextFunction): void {
   const username = typeof req.body?.username === 'string' ? req.body.username.toLowerCase().trim() : ''
   const key = `${req.ip}:${username}`
@@ -822,6 +911,7 @@ function takeQaQuota(userId: number): boolean {
   return true
 }
 
+/** 问答路由用的中间件版本；限制的是大模型调用费用，防止脚本或泄露的密钥刷接口 */
 function qaRateLimit(req: AuthRequest, res: Response, next: NextFunction): void {
   const userId = req.user?.userId
   if (userId && !takeQaQuota(userId)) {
@@ -885,6 +975,7 @@ app.patch('/api/me/password', requireAuth, (req: AuthRequest, res) => {
 
 const API_KEY_EXPIRY_DAYS_MAX = 3650
 
+/** 返回给前端的密钥信息：用白名单挑字段，保证 key_hash 永远不会出现在响应里 */
 function publicApiKey(key: ReturnType<typeof listApiKeys>[number]) {
   const { id, user_id, username, name, prefix, created_at, expires_at, last_used_at } = key
   return { id, user_id, username, name, prefix, created_at, expires_at, last_used_at }
@@ -1215,6 +1306,7 @@ app.post('/api/kbs/:id/docs/text', requireAuth, async (req: AuthRequest, res) =>
 
 // ── 编辑现有文本文档（每次保存都记录一个历史版本） ─────────────
 
+/** 把用户输入的标题变成文档名：替换掉文件名里不允许的字符，限制长度，统一以 .md 结尾 */
 function textDocTitle(title: string | undefined, fallback: string): string {
   if (!title?.trim()) return fallback
   const safeName = title.trim().replace(/[\\/:*?"<>|]/g, '_').slice(0, 80)
@@ -1513,6 +1605,10 @@ app.get('/api/kbs/:id/stats', requireAuth, (req: AuthRequest, res) => {
 
 // ── 对话历史路由 ──────────────────────────────────────
 
+/**
+ * 大模型消息 ⇄ 数据库行。tool_calls 是数组，存成 JSON 字符串；seq 是消息在对话里的顺序，
+ * 读回来时按 seq 排序，保证工具调用和工具结果的先后不乱。
+ */
 function serializeMessage(msg: Record<string, unknown>, seq: number) {
   return {
     role:         msg.role as string,
@@ -1649,6 +1745,15 @@ function kbExecutor(kb: KnowledgeBase, onEvent: (e: QAEvent) => void): LLMExecut
   })
 }
 
+/**
+ * 单个知识库的问答，整个系统最核心的一条路由。步骤：
+ *   1. 检查权限，找到或新建对话（对话只能属于本人、本知识库）
+ *   2. 从数据库取历史并裁剪（buildTrustedHistory），不使用客户端传来的历史
+ *   3. 开启 SSE，大模型的每段文字、每次工具调用都实时推给浏览器
+ *   4. LLMExecutor 循环"调用模型 → 执行工具 → 再调用模型"，直到模型给出最终回答
+ *   5. 只有完整结束时才保存新消息、自动命名对话、记审计；用户中途关掉页面则什么都不保存
+ * 回答"未找到相关内容"的问题会出现在知识缺口报告里（从对话记录里统计）。
+ */
 app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => {
   const kbId = Number(req.params.id)
   if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
@@ -2139,6 +2244,10 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, (req, res) => {
 
 // ── 服务端配置（供前端读取） ───────────────────────────
 
+/**
+ * 大模型服务是否可用（/readyz 和顶栏状态用）。Ollama 查 /api/tags；其他服务查当前模型的
+ * /models/<模型名>，顺带确认模型名没填错。超时很短，避免拖慢健康检查。
+ */
 async function checkLlmOnline(): Promise<boolean> {
   if (NODE_ENV === 'test') return true
   try {
@@ -2219,6 +2328,10 @@ async function checkLLM(): Promise<void> {
 
 // ── 启动时补建历史文档 FTS5 索引（后台，不阻塞启动） ────────────
 
+/**
+ * 启动时扫一遍所有文档：没有索引的重新排队（重启前没处理完的、上次失败的、旧版本升级后
+ * 需要重建的），已有索引但缺向量的补生成向量。磁盘上找不到文件的文档跳过。
+ */
 async function reindexExistingDocs(): Promise<void> {
   const allKbs = getAllKbs()
   let total = 0, queued = 0, embQueued = 0
@@ -2289,6 +2402,10 @@ export function startServer(): void {
   })
 }
 
+/**
+ * 直接运行这个文件时才启动服务器；被测试 import 时不监听端口，
+ * 测试用导出的 app 配合 supertest 发请求。
+ */
 function isDirectRun(): boolean {
   const entryPoint = process.argv[1]
   return Boolean(entryPoint && path.resolve(entryPoint) === url.fileURLToPath(import.meta.url))

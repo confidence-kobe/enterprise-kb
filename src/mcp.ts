@@ -142,6 +142,11 @@ function requireReadableKb(kb: KnowledgeBaseAccess, args: Record<string, unknown
   return kbId
 }
 
+/**
+ * 创建 MCP 的四个知识库工具。工具不直接访问数据库，而是通过传进来的 KnowledgeBaseAccess，
+ * 由 server.ts 按当前用户的权限实现。这样权限逻辑只有一份，mcp.ts 本身也不依赖数据库。
+ * 工具的 description 是写给 AI 客户端看的，说明什么时候该用哪个工具。
+ */
 export function createKnowledgeBaseTools(kb: KnowledgeBaseAccess): McpTool[] {
   return [
     {
