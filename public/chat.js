@@ -1,3 +1,17 @@
+/**
+ * 问答页（index.html）的全部前端逻辑。原生 JS，没有框架和构建步骤，浏览器直接加载。
+ *
+ * 主要流程：
+ *   loadKbs → selectKb      加载知识库列表，选中一个后加载它的文档和对话
+ *   sendQuestion → readSSE  发问题，边接收边渲染流式回答和工具调用
+ *   renderMd                渲染 Markdown，并把 `文件名:行号` 变成可点击的出处
+ *   openSrcPreview          点击出处后打开原文，定位到被引用的行
+ *   loadConversations …     左侧对话历史：分组、搜索、置顶、重命名、批量删除
+ *
+ * 登录信息存在 localStorage（kb_token、kb_user），每个请求通过 auth() 带上 Token。
+ * 修改这个文件后，记得把 index.html 里 chat.js?v= 的版本号加一，否则浏览器可能继续用缓存的旧文件。
+ */
+
 /* ── 认证检查 ──────────────────────────────────────── */
 const token = localStorage.getItem('kb_token')
 const user  = JSON.parse(localStorage.getItem('kb_user') || 'null')
@@ -190,6 +204,7 @@ welcomeNewConvAction?.addEventListener('click', () => {
   startNewConversation()
 })
 
+/** 请求头里带上登录 Token；所有 fetch 都要用 */
 function auth() {
   return { Authorization: `Bearer ${token}` }
 }
@@ -297,6 +312,7 @@ function renderWelcomeChips(kb) {
   hintsEl.style.display = kb.doc_count > 0 ? '' : 'none'
 }
 
+/** 切换到某个知识库（或"全部知识库"）：重置当前对话，加载文档列表和对话历史 */
 async function selectKb(kb) {
   currentKb = kb
   localStorage.setItem(LAST_KB_KEY, String(kb.id))
@@ -587,6 +603,15 @@ function appendRetryBtn(row, question) {
   row.querySelector('.msg-ai-body')?.appendChild(btn)
 }
 
+/**
+ * 读取服务端推送的 SSE 流。每个事件是一行 `data: {...}`，按 type 处理：
+ *   text         追加回答文字，边收边渲染
+ *   tool_call    插入一个工具调用块（如"检索文档：请假"）
+ *   tool_result  在对应的工具调用块里填上结果预览
+ *   done         回答结束：最终渲染、记下对话 ID、显示复制和 👍/👎 按钮
+ *   error        显示错误和"重试"按钮
+ * 事件之间以空行（\n\n）分隔；网络分片可能把一个事件切成两半，所以用 buf 攒到完整的事件再解析。
+ */
 async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBtn, thumbUp, thumbDown, question }) {
   const reader  = response.body.getReader()
   const decoder = new TextDecoder()
@@ -866,7 +891,7 @@ function summarizeInput(name, input) {
   return `<code>${escHtml(JSON.stringify(input).slice(0, 80))}</code>`
 }
 
-/* ── Markdown 渲染（marked.js + DOMPurify，CDN 降级兼容） ── */
+/* ── Markdown 渲染（marked.js + DOMPurify，脚本没加载时有降级方案） ── */
 let _markedReady = false
 function ensureMarked() {
   if (_markedReady || typeof marked === 'undefined') return
@@ -874,6 +899,12 @@ function ensureMarked() {
   _markedReady = true
 }
 
+/**
+ * 把大模型的 Markdown 回答渲染成 HTML。大模型的输出不可信（可能被文档内容诱导输出脚本），
+ * 所以必须经过 DOMPurify 净化，只保留白名单里的标签和属性。
+ * 渲染完再找出形如 `文件名:行号` 的行内代码，变成可点击的出处。
+ * streaming 为 true 时保留末尾的闪烁光标。
+ */
 function renderMd(el, raw, streaming) {
   const cursor = el.querySelector('.cursor')
   ensureMarked()
@@ -892,7 +923,7 @@ function renderMd(el, raw, streaming) {
       ALLOW_DATA_ATTR: false,
     })
   } else {
-    // 降级路径（CDN 未加载）：原有正则方案
+    // 降级路径（marked 或 DOMPurify 没加载）：先整体转义再用正则替换，保证不会注入 HTML
     html = escHtml(raw)
       .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
         `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`)
@@ -1243,6 +1274,7 @@ async function loadConversation(conv) {
   }
 }
 
+/** 打开历史对话时，用保存的消息重新画出聊天记录（只画用户问题和最终回答，工具调用过程不重放） */
 function rebuildChatUI(msgs) {
   for (let i = 0; i < msgs.length; i++) {
     const msg = msgs[i]
@@ -1735,6 +1767,10 @@ const srcContent  = document.getElementById('src-modal-content')
 document.getElementById('src-modal-close').addEventListener('click', () => srcModal.classList.add('hidden'))
 srcModal.addEventListener('click', e => { if (e.target === srcModal) srcModal.classList.add('hidden') })
 
+/**
+ * 打开出处预览：向服务端要被引用行附近的内容（?line=N），而不是整篇文档，
+ * 长文档也能直接定位；被引用的行高亮并滚动到可见位置。
+ */
 async function openSrcPreview(docId, label, targetLine) {
   srcTitle.textContent = label
   srcContent.textContent = '加载中…'

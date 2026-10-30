@@ -171,4 +171,5 @@ claude mcp add --transport http enterprise-kb https://kb.example.com/mcp \
 
 ## 技术文档
 
-架构、数据库、检索算法、OCR、MCP 等实现细节见 [TECHNICAL.md](TECHNICAL.md)。
+- [GUIDE.md](GUIDE.md)：代码导读，推荐的阅读顺序、一次提问在代码里的完整路径、设计取舍和已知局限。第一次读代码从这里开始。
+- [TECHNICAL.md](TECHNICAL.md)：架构、数据库、检索算法、OCR、MCP 等实现细节。

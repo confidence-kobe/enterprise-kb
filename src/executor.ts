@@ -71,6 +71,10 @@ export class ReasoningStreamFilter {
   }
 }
 
+/**
+ * 合并流式返回的工具名。不同服务商的行为不一样：有的把名字拆成几段依次发送，
+ * 有的每个分片都重复发完整的名字。这里同时兼容两种，避免拼出 "SearchDocsSearchDocs"。
+ */
 export function mergeStreamedToolName(current: string, incoming: string): string {
   if (!current) return incoming
   if (!incoming || incoming === current || current.endsWith(incoming)) return current

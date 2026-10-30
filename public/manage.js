@@ -1,3 +1,20 @@
+/**
+ * 管理控制台（manage.html）的全部前端逻辑。原生 JS，没有框架和构建步骤。
+ *
+ * 页面由多个标签页组成，每个标签页对应下面一个分节：
+ *   知识库 · 文档（上传、预览、同步、版本历史）· API 接入（所有人可见）
+ *   用户 · 审计日志 · 反馈与知识缺口 · 设置与备份（只有管理员可见）
+ *
+ * 代码组织方式：每个功能一个 initXxx() 负责绑定事件，loadXxx() 负责请求数据并渲染，
+ * 页面加载时在"初始化"分节里统一调用 init。
+ *
+ * ⚠️ 一个踩过两次的坑：初始化代码在文件开头就执行了，这时文件后面用 const/let 声明的变量
+ * 还没有初始化，提前访问会抛出 ReferenceError，整个页面跟着失效。所以 init 函数里不要直接用
+ * 后面分节的 const；需要时放到标签页打开时再用（懒加载），或者像"回答反馈常量"那样提到前面声明。
+ *
+ * 修改这个文件后，记得把 manage.html 里 manage.js?v= 的版本号加一。
+ */
+
 /* ── 认证 ─────────────────────────────────────────── */
 let token = localStorage.getItem('kb_token')
 const user  = JSON.parse(localStorage.getItem('kb_user') || 'null')
@@ -88,7 +105,9 @@ initTextDocModal()
 initSyncSource()
 if (isAdmin) initResetPwdModal()
 
-// 事件委托：KB 卡片操作（一次性绑定，覆盖所有渲染周期）
+// 事件委托：知识库卡片每次刷新都会重新生成，所以不在每张卡片上绑事件，
+// 而是在外层容器上绑一次，按按钮的 data-action 分发
+
 kbList.addEventListener('click', e => {
   const btn = e.target.closest('[data-action]')
   if (!btn) return
@@ -452,6 +471,7 @@ let docOffset = 0
 let docTotal  = 0
 let docRefreshTimer = null
 
+/** 文档的索引状态标签：待解析、解析中（图片显示"识别中"）、已索引、失败（鼠标悬停显示失败原因） */
 function docStatusBadge(doc) {
   const status = doc.index_status ?? 'ready'
   const labels = {
@@ -494,6 +514,7 @@ function vectorBadge(doc) {
   return `<span class="doc-vec-badge ${cls}" title="向量覆盖率 ${pct}%（${vecs}/${chunks} 块）">⚡ ${pct}%</span>`
 }
 
+/** 加载当前知识库的文档列表（分页，append 为 true 时是"加载更多"） */
 async function loadDocs(append = false) {
   if (!currentDocKbId) return
   if (docRefreshTimer) {
@@ -937,6 +958,11 @@ function checkUploadFiles(files) {
   return { ok, skipped }
 }
 
+/**
+ * 上传文件：先在浏览器里挑出格式不支持和超过 50 MB 的文件（不浪费上传流量），
+ * 剩下的每 20 个一批发给服务端（服务端一次最多收 20 个），最后汇总成一条提示。
+ * 上传成功只代表文件到了服务器，解析和建索引在后台进行，文档列表里会显示进度。
+ */
 async function uploadFiles(files) {
   if (!currentDocKbId || !files.length) return
   const { ok, skipped } = checkUploadFiles(files)
@@ -1405,6 +1431,7 @@ function formatAuditValue(key, val) {
   return String(val)
 }
 
+/** 把审计日志的 detail（JSON）变成中文的"字段：值"文本，字段名用 auditDetailLabels 翻译 */
 function formatAuditDetail(detail) {
   if (!detail) return ''
   try {

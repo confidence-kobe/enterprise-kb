@@ -1,6 +1,16 @@
 /**
- * 数据库层 — SQLite (better-sqlite3)
- * 无 ORM，原生 SQL，轻量适合企业内部部署
+ * 数据库层：SQLite（better-sqlite3），不用 ORM，全部是手写 SQL 和预编译语句。
+ * 所有表的读写都集中在这个文件，其他模块不直接写 SQL。
+ *
+ * better-sqlite3 是同步 API：每个函数直接返回结果，不需要 await。SQLite 查询通常在微秒到毫秒级，
+ * 同步调用反而更简单；耗时长的操作（大文档建索引）用 indexDocContentInBatches 分批执行。
+ *
+ * 文件结构（按分节标题）：
+ *   类型定义 / 初始化（建表与迁移）
+ *   用户、知识库、审计日志、文档、历史版本、接口密钥、对话
+ *   FTS5 全文检索（分块写入、混合检索打分）
+ *   向量存储与检索（可选）
+ *   系统配置、反馈统计、知识缺口
  */
 
 import Database from 'better-sqlite3'
@@ -98,6 +108,11 @@ export interface AuditEvent {
 
 let db: Database.Database
 
+/**
+ * 打开数据库并完成全部建表和迁移，服务启动时调用一次。
+ * 每一步都是幂等的（CREATE TABLE IF NOT EXISTS、加列时忽略"列已存在"），
+ * 所以新安装和从任意旧版本升级走的是同一段代码。新增表或列时照这个写法追加在后面即可。
+ */
 export function initDb(dbPath: string): void {
   const dir = path.dirname(dbPath)
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
@@ -383,6 +398,10 @@ export function closeDb(): void {
   db.close()
 }
 
+/**
+ * 首次启动时创建管理员账号。账号已存在时什么都不做，所以之后修改 ADMIN_PASSWORD
+ * 不会改变已有管理员的密码，要在界面里改。
+ */
 export function ensureAdmin(username: string, password: string): void {
   const exists = db.prepare('SELECT id FROM users WHERE username = ?').get(username)
   if (!exists) {
@@ -496,6 +515,10 @@ export function deleteKb(id: number): void {
   })()
 }
 
+/**
+ * 能否读取知识库（查看、检索、问答）：公开的、自己创建的、或者被加为成员的。
+ * 管理员不在这里判断，由路由另外放行，所以调用处常见 `canUserAccessKb(...) || role === 'admin'`。
+ */
 export function canUserAccessKb(userId: number, kbId: number): boolean {
   const kb = getKbById(kbId)
   if (!kb) return false
@@ -1124,6 +1147,10 @@ function deleteDocChunks(docId: number): void {
   db.prepare('DELETE FROM doc_chunks WHERE doc_id = ?').run(docId)
 }
 
+/**
+ * 写入分块：doc_chunks 和 doc_fts 共用同一个 rowid。doc_fts 是 FTS5 虚拟表，按 doc_id 列删除要全表扫描；
+ * 有了 doc_chunks 这张普通表，删除或重建某份文档的索引时可以按文档快速找到它的所有 rowid。
+ */
 function insertDocChunks(
   docId: number,
   kbId: number,
@@ -1223,6 +1250,10 @@ interface SearchCandidate {
   sources: Set<'strict' | 'relaxed' | 'substring'>
 }
 
+// 检索分两步：先从几个来源收集候选分块（严格 AND、宽松 OR、子串匹配、可选的向量），
+// 再用 scoreCandidate 统一打分排序。详细说明见 TECHNICAL.md 的"混合检索算法"。
+
+/** 把查询拆成词：去掉 FTS5 语法里有特殊含义的字符，避免用户输入被当成查询语法 */
 function queryTerms(query: string): string[] {
   return query
     .replace(/["\*\^\(\)\\<>]/g, ' ')
@@ -1231,10 +1262,12 @@ function queryTerms(query: string): string[] {
     .filter(Boolean)
 }
 
+/** 生成 FTS5 MATCH 表达式：每个词加双引号当作短语，词之间用 AND 或 OR 连接 */
 function ftsQuery(terms: string[], operator: 'AND' | 'OR'): string {
   return terms.map(term => `"${term.replace(/"/g, '""')}"`).join(` ${operator} `)
 }
 
+/** 截取命中位置附近的片段（前 120 字、后 240 字），命中的词用 >>>…<<< 标出 */
 function makeSnippet(content: string, query: string, terms: string[]): string {
   const normalized = content.toLocaleLowerCase()
   const match = [query, ...terms]
@@ -1250,6 +1283,10 @@ function makeSnippet(content: string, query: string, terms: string[]): string {
   return `${start > 0 ? '…' : ''}${content.slice(start, match.index)}>>>${content.slice(match.index, match.index + match.value.length)}<<<${content.slice(match.index + match.value.length, end)}${end < content.length ? '…' : ''}`
 }
 
+/**
+ * 给候选分块打分。权重是经验值：文件名命中比正文命中重要得多（找"请假制度"时，
+ * 文件名就叫这个的文档最可能是答案）；整句命中比单个词命中重要；BM25 排名只做小幅加成。
+ */
 function scoreCandidate(candidate: SearchCandidate, query: string, terms: string[]): number {
   const name = candidate.original_name.toLocaleLowerCase()
   const content = candidate.content.toLocaleLowerCase()
@@ -1272,6 +1309,10 @@ function scoreCandidate(candidate: SearchCandidate, query: string, terms: string
   return score
 }
 
+/**
+ * 在一个知识库里检索，返回最相关的 limit 个分块。SearchDocs 工具、网页搜索、MCP 检索都调用它。
+ * 先多取一些候选（limit × 6，至少 30），合并去重后再统一打分，保证排序不受某一个来源的偏好左右。
+ */
 export function searchDocContent(
   kbId: number,
   query: string,
@@ -1394,6 +1435,10 @@ export function removeDocFromIndex(docId: number): void {
 
 // ── 向量存储与检索 ─────────────────────────────────────
 
+// 向量存成 BLOB，检索时把整个知识库的向量读出来、在 JS 里逐条计算余弦相似度。
+// 没有用向量数据库，换来的是零额外依赖；代价是分块数很多时这里会变慢（见 GUIDE.md 的"已知局限"）。
+
+/** 余弦相似度，1 表示方向完全相同；加 1e-8 防止零向量时除以 0 */
 function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   let dot = 0, normA = 0, normB = 0
   const len = Math.min(a.length, b.length)
@@ -1437,6 +1482,7 @@ export interface VectorSearchResult {
   similarity: number
 }
 
+/** 按向量相似度检索一个知识库，返回最相似的 limit 个分块 */
 export function searchByVector(
   kbId: number,
   queryEmbedding: Float32Array,
@@ -1477,6 +1523,7 @@ export interface RelatedDoc {
   similarity: number
 }
 
+/** 相关文档推荐：两份文档里最相似的一对分块代表它们的相关程度 */
 export function getRelatedDocs(kbId: number, docId: number, limit = 5): RelatedDoc[] {
   // 取目标文档所有 chunk 向量
   const srcRows = db.prepare(
@@ -1516,6 +1563,10 @@ export function getRelatedDocs(kbId: number, docId: number, limit = 5): RelatedD
     .slice(0, limit)
 }
 
+/**
+ * 文档的索引是否完好可用：状态是 ready、有分块，并且 index_version 等于当前的 DOC_INDEX_VERSION。
+ * 改了分块或索引的方式时，把 DOC_INDEX_VERSION 加一，所有旧文档会在下次启动时自动重建索引。
+ */
 export function isDocIndexed(docId: number): boolean {
   const doc = getDocById(docId)
   return doc?.index_version === DOC_INDEX_VERSION
