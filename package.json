@@ -48,7 +48,7 @@
   "devDependencies": {
     "@playwright/test": "^1.64.1",
     "@types/bcryptjs": "^3.0.0",
-    "@types/better-sqlite3": "^7.6.12",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/jsonwebtoken": "^9.0.7",
