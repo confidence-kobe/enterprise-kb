@@ -2,30 +2,7 @@
 
 本项目所有值得注意的变化都记录在这个文件里。
 
-## [未发布]
-
-### 安全
-
-- 修复两个新公布的依赖安全公告：glob 的 AbortSignal 取消后仍可能遍历文件系统（GHSA-3g3m-2fjr-6pw4），minimatch 的通配模式可导致拒绝服务（GHSA-g3hv-75wg-m249）。所有旧版本都在受影响范围内，所以通过 `overrides` 统一升级到 glob 14.0.3 和 minimatch 11。
-  - 实际会用到的是 `claude-tools-kit` 的 Glob 工具（大模型搜索文件名），已确认在 glob 14 下工作正常。
-  - 另一条路径来自 exceljs 写 Excel 时用到的 archiver。本项目只读取 Excel，读取走的是 unzipper 的流式解析，不经过这些代码；已确认读写 Excel 都正常。
-
-### 文档
-
-- 新增 `GUIDE.md` 代码导读：推荐的阅读顺序、一次提问在代码里的完整路径、设计取舍，以及已知局限和可以改进的地方。
-- 给 `server.ts`、`db.ts`、`chat.js`、`manage.js` 等主要文件补充中文注释：每个文件开头说明职责和结构，关键函数说明"为什么这样做"。只改注释，不改行为。
-- 修正 `TECHNICAL.md` 里分块规则的描述：识别的是"第一章、第二节"和"1.2、1.2.3"这类标题，不识别"一、""（一）"。
-
-### 变更
-
-- 剩下的英文提示改成中文：登录尝试过多、请求内容不是有效的 JSON、服务器内部错误，以及生产环境启动时对 `JWT_SECRET`、`ADMIN_PASSWORD` 和数值配置的检查。`npm run smoke:full` 的检查项和报错也改成中文。
-- 代码注释、`.env.example`、`SECURITY_OWNERSHIP.md`、`AGENTS.md` 和 PR 模板改为中文。`AGENTS.md` 新增"语言约定"，以后的注释、文档、界面文字和提交信息都用中文。
-- `TECHNICAL.md` 更新到 1.3.0：补充 OCR、API 密钥与 MCP、版本历史、知识缺口、备份、工作线程和浏览器测试，并修正已过时的版本号、认证方式、分词器和测试统计。
-- `SECURITY_OWNERSHIP.md` 的"建议的后续措施"去掉了已经完成的项目（权限和上传测试、备份手册、Dependabot、分支保护）。
-- better-sqlite3 升级到 13（SQLite 3.53.4）。新版改用 N-API，预编译的二进制文件直接随包发布，不再依赖 prebuild-install；还修复了工作线程退出时可能导致进程崩溃的问题（本项目的备份在工作线程里运行）。已验证 1.3.0 的数据库可以直接升级。dotenv 升级到 18.0.9。
-- 依赖升级（来自 Dependabot 的 #72 到 #75）：openai 7.45.1、officeparser 8.4.0、marked 18.1.2，以及与 better-sqlite3 13 对应的类型定义 @types/better-sqlite3 9.6.0。
-
-## [1.3.0] - 2026-10-28
+## [1.3.0] - 2026-11-04
 
 **升级说明：** 这是第一个在 GitHub 上正式发布的版本，1.0.0 到 1.2.0 的改动见发布包里的 `CHANGELOG.md`。数据库在第一次启动时自动迁移，不需要手动操作（已验证 1.2.0 的数据可以直接升级）。升级前照常用 `npm run backup` 备份。已有部署不会自动开启定时备份，需要时设置 `BACKUP_INTERVAL_HOURS`。
 
@@ -47,12 +24,15 @@
 
 ### 安全
 
-- 针对本周公布的安全公告升级依赖：
+- 针对 10 月公布的安全公告升级依赖：
   - body-parser 2.4.0：压缩请求体后附带多余字节可导致拒绝服务（GHSA-27r3-jxmh-p828）
   - multer 2.5.0：异步文件过滤器挂起可导致拒绝服务（GHSA-q7qp-rjg7-q26m）
   - DOMPurify 3.4.17：三个净化绕过问题（GHSA-cg2g-xh64-v4q7、GHSA-mrv2-3pqr-j5jr、GHSA-c6gr-qvv4-5v3f）
   - zod 4.6.7：超大集合导致内存耗尽（GHSA-mrhx-c7xc-m3w5）
 - zod 3 没有修复版本，所以随项目提供的 `claude-tools-kit` 改用 zod 4 的 `zod/v3` 接口。发给模型的工具定义逐字节不变。
+- 修复两个新公布的依赖安全公告：glob 的 AbortSignal 取消后仍可能遍历文件系统（GHSA-3g3m-2fjr-6pw4），minimatch 的通配模式可导致拒绝服务（GHSA-g3hv-75wg-m249）。所有旧版本都在受影响范围内，所以通过 `overrides` 统一升级到 glob 14.0.3 和 minimatch 11。
+  - 实际会用到的是 `claude-tools-kit` 的 Glob 工具（大模型搜索文件名），已确认在 glob 14 下工作正常。
+  - 另一条路径来自 exceljs 写 Excel 时用到的 archiver。本项目只读取 Excel，读取走的是 unzipper 的流式解析，不经过这些代码；已确认读写 Excel 都正常。
 
 ### 变更
 
@@ -80,6 +60,18 @@
 - vitest 升级到 4.1.12（vite 8.3），消除了最后一个仅开发环境的审计警告。`npm audit` 现在包括开发依赖在内都是 0 个漏洞。
 - 文档检索结果新增 `doc_id`。
 - 服务器发起的备份在后台线程里运行，复制文档期间应用照常响应（用 200 MB 文档实测：`/healthz` 最慢 42 毫秒）。
+- 剩下的英文提示改成中文：登录尝试过多、请求内容不是有效的 JSON、服务器内部错误，以及生产环境启动时对 `JWT_SECRET`、`ADMIN_PASSWORD` 和数值配置的检查。`npm run smoke:full` 的检查项和报错也改成中文。
+- 代码注释、`.env.example`、`SECURITY_OWNERSHIP.md`、`AGENTS.md` 和 PR 模板改为中文。`AGENTS.md` 新增"语言约定"，以后的注释、文档、界面文字和提交信息都用中文。
+- `TECHNICAL.md` 更新到 1.3.0：补充 OCR、API 密钥与 MCP、版本历史、知识缺口、备份、工作线程和浏览器测试，并修正已过时的版本号、认证方式、分词器和测试统计。
+- `SECURITY_OWNERSHIP.md` 的"建议的后续措施"去掉了已经完成的项目（权限和上传测试、备份手册、Dependabot、分支保护）。
+- better-sqlite3 升级到 13（SQLite 3.53.4）。新版改用 N-API，预编译的二进制文件直接随包发布，不再依赖 prebuild-install；还修复了工作线程退出时可能导致进程崩溃的问题（本项目的备份在工作线程里运行）。已验证 1.2.0 的数据库在新驱动下可以直接升级。dotenv 升级到 18.0.9。
+- 依赖升级（来自 Dependabot 的 #72 到 #75）：openai 7.45.1、officeparser 8.4.0、marked 18.1.2，以及与 better-sqlite3 13 对应的类型定义 @types/better-sqlite3 9.6.0。
+
+### 文档
+
+- 新增 `GUIDE.md` 代码导读：推荐的阅读顺序、一次提问在代码里的完整路径、设计取舍，以及已知局限和可以改进的地方。
+- 给 `server.ts`、`db.ts`、`chat.js`、`manage.js` 等主要文件补充中文注释：每个文件开头说明职责和结构，关键函数说明"为什么这样做"。只改注释，不改行为。
+- 修正 `TECHNICAL.md` 里分块规则的描述：识别的是"第一章、第二节"和"1.2、1.2.3"这类标题，不识别"一、""（一）"。
 
 ## [1.2.0] - 2026-10-18
 
