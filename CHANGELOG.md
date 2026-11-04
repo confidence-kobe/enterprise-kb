@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+### 安全
+
+- 修复两个新公布的依赖安全公告：glob 的 AbortSignal 取消后仍可能遍历文件系统（GHSA-3g3m-2fjr-6pw4），minimatch 的通配模式可导致拒绝服务（GHSA-g3hv-75wg-m249）。所有旧版本都在受影响范围内，所以通过 `overrides` 统一升级到 glob 14.0.3 和 minimatch 11。
+  - 实际会用到的是 `claude-tools-kit` 的 Glob 工具（大模型搜索文件名），已确认在 glob 14 下工作正常。
+  - 另一条路径来自 exceljs 写 Excel 时用到的 archiver。本项目只读取 Excel，读取走的是 unzipper 的流式解析，不经过这些代码；已确认读写 Excel 都正常。
+
 ### 文档
 
 - 新增 `GUIDE.md` 代码导读：推荐的阅读顺序、一次提问在代码里的完整路径、设计取舍，以及已知局限和可以改进的地方。
@@ -17,6 +23,7 @@
 - `TECHNICAL.md` 更新到 1.3.0：补充 OCR、API 密钥与 MCP、版本历史、知识缺口、备份、工作线程和浏览器测试，并修正已过时的版本号、认证方式、分词器和测试统计。
 - `SECURITY_OWNERSHIP.md` 的"建议的后续措施"去掉了已经完成的项目（权限和上传测试、备份手册、Dependabot、分支保护）。
 - better-sqlite3 升级到 13（SQLite 3.53.4）。新版改用 N-API，预编译的二进制文件直接随包发布，不再依赖 prebuild-install；还修复了工作线程退出时可能导致进程崩溃的问题（本项目的备份在工作线程里运行）。已验证 1.3.0 的数据库可以直接升级。dotenv 升级到 18.0.9。
+- 依赖升级（来自 Dependabot 的 #72 到 #75）：openai 7.45.1、officeparser 8.4.0、marked 18.1.2，以及与 better-sqlite3 13 对应的类型定义 @types/better-sqlite3 9.6.0。
 
 ## [1.3.0] - 2026-10-28
 
