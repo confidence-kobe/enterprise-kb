@@ -38,7 +38,7 @@
     "mammoth": "^1.13.0",
     "marked": "^18.1.2",
     "multer": "^2.5.0",
-    "officeparser": "^8.4.0",
+    "officeparser": "^8.5.0",
     "openai": "^7.45.1",
     "p5": "^2.3.4",
     "pdf-parse": "^2.4.5",
