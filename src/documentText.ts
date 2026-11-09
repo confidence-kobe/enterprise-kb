@@ -41,10 +41,14 @@ async function extractXlsxText(filePath: string): Promise<string> {
   return lines.join('\n')
 }
 
+/**
+ * PowerPoint 用 officeparser 解析。officeparser 8 起旧的 parseOfficeAsync 已移除，
+ * 改为 parseOffice 先得到文档结构，再用 to('text') 转成纯文本（含表格和演讲者备注）。
+ */
 async function extractPptxText(filePath: string): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const officeParser: any = (await import('officeparser')).default
-  return await officeParser.parseOfficeAsync(filePath) as string
+  const { parseOffice } = await import('officeparser')
+  const ast = await parseOffice(filePath)
+  return (await ast.to('text')).value
 }
 
 export async function extractDocumentText(filePath: string, ext: string): Promise<string> {
