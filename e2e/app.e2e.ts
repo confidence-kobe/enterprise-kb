@@ -87,13 +87,20 @@ test('opens the cited line when a source with a Chinese file name is clicked', a
   await page.fill('#question-input', '年假有几天？请给出处')
   await page.keyboard.press('Enter')
 
-  const ref = page.locator('.msg-assistant').last().locator('.source-ref')
-  await expect(ref).toHaveText('请假制度.md:1')
+  // 正文里的出处变成编号，回答下方列出来源卡片
+  const answer = page.locator('.msg-assistant').last()
+  await expect(answer.locator('.response-text .cite-num').first()).toHaveText('1')
+  const ref = answer.locator('.cite-card')
+  await expect(ref).toHaveCount(1)
+  await expect(ref).toContainText('请假制度.md')
+  await expect(ref).toContainText('第 1 行')
   // 回答由 marked 渲染（而不是加载失败后的简易降级渲染）
   expect(await page.evaluate(() => typeof (window as unknown as { marked?: { parse?: unknown } }).marked?.parse)).toBe('function')
   await ref.click()
   await expect(page.locator('#src-modal')).toBeVisible()
+  await expect(page.locator('#src-modal-sub')).toHaveText('已定位到被引用的第 1 行')
   await expect(page.locator('#src-modal-content .src-line-highlight')).toHaveText('年假为每年 10 天。')
+  await expect(ref).toHaveClass(/is-active/)
   expect(errors).toEqual([])
 })
 
