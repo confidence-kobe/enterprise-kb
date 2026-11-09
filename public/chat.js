@@ -47,7 +47,7 @@ if (!token || !user) { location.href = '/login.html' }
         const sessionMsg   = document.getElementById('session-toast-msg')
         if (sessionToast) {
           sessionToast.classList.remove('hidden')
-          sessionMsg.textContent = `⚠️ 会话将在 ${mins} 分钟后过期`
+          sessionMsg.textContent = `会话将在 ${mins} 分钟后过期`
         }
       }
     }
@@ -523,7 +523,7 @@ function renderKbHealth(data) {
     <div class="health-cards">
       ${card('文档', docs.total, docs.lastUploadedAt ? `最近更新 ${new Date(docs.lastUploadedAt * 1000).toLocaleDateString('zh-CN')}` : '还没有上传')}
       ${card(`近 ${data.days} 天提问`, qa.questions, qa.activeUsers ? `${qa.activeUsers} 人在用` : '还没有人提问')}
-      ${card('回答满意度', satisfaction, rated ? `👍 ${qa.positive} · 👎 ${qa.negative}` : '暂无评价')}
+      ${card('回答满意度', satisfaction, rated ? `${qa.positive} 个有帮助，${qa.negative} 个没帮助` : '暂无评价')}
       ${card('待补知识', gaps, gaps ? '没找到答案的问题' : '暂未发现', gaps ? 'health-card-warn' : '')}
     </div>
     <div class="health-section">
@@ -585,7 +585,7 @@ async function sendQuestion(question, { skipUserMsg = false } = {}) {
         responseText.innerHTML = '<span style="color:var(--muted)">（已停止）</span>'
       }
     } else {
-      responseText.innerHTML = `<span style="color:var(--red)">⚠️ ${escHtml(err.message)}</span>`
+      responseText.innerHTML = `<span class="msg-error">${ICONS.alert}${escHtml(err.message)}</span>`
       appendRetryBtn(row, question)
     }
     setLoading(false)
@@ -595,7 +595,7 @@ async function sendQuestion(question, { skipUserMsg = false } = {}) {
 function appendRetryBtn(row, question) {
   const btn = document.createElement('button')
   btn.className = 'msg-retry-btn'
-  btn.textContent = '↻ 重试'
+  btn.innerHTML = `${ICONS.retry}重试`
   btn.addEventListener('click', () => {
     row.remove()
     sendQuestion(question, { skipUserMsg: true })
@@ -684,7 +684,7 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
         }
         case 'error': {
           cursorEl.remove()
-          responseText.innerHTML = `<span style="color:var(--red)">⚠️ ${escHtml(ev.message ?? '未知错误')}</span>`
+          responseText.innerHTML = `<span class="msg-error">${ICONS.alert}${escHtml(ev.message ?? '未知错误')}</span>`
           appendRetryBtn(row, question)
           setLoading(false)
           break
@@ -747,12 +747,14 @@ function appendAssistantSkeleton() {
   const thumbUp = document.createElement('button')
   thumbUp.className = 'msg-feedback-btn hidden'
   thumbUp.title = '有帮助'
-  thumbUp.textContent = '👍'
+  thumbUp.setAttribute('aria-label', '有帮助')
+  thumbUp.innerHTML = ICONS.thumbUp
 
   const thumbDown = document.createElement('button')
   thumbDown.className = 'msg-feedback-btn hidden'
   thumbDown.title = '没帮助'
-  thumbDown.textContent = '👎'
+  thumbDown.setAttribute('aria-label', '没帮助')
+  thumbDown.innerHTML = ICONS.thumbDown
 
   function submitFeedback(rating, detail = {}) {
     const convId = row.dataset.conversationId
@@ -865,7 +867,7 @@ function addToolCall(container, name, input) {
   const statusSpan = document.createElement('span')
   statusSpan.className = 'tool-call-status tool-status-wait'
   statusSpan.textContent = '执行中'
-  summary.innerHTML = `<span class="tool-toggle">▶</span><span class="tool-call-label">🔍 ${escHtml(name)} ${summarizeInput(name, input)}</span>`
+  summary.innerHTML = `<span class="tool-toggle">${ICONS.chevron}</span><span class="tool-call-label">${escHtml(name)} ${summarizeInput(name, input)}</span>`
   summary.appendChild(statusSpan)
 
   const body = document.createElement('div')
@@ -1062,7 +1064,7 @@ function exportConversation() {
       }
       lines.push('## Assistant', '')
       if (toolCalls.length > 0) {
-        lines.push('<details>', `<summary>🔍 工具调用（共 ${toolCalls.length} 次）</summary>`, '')
+        lines.push('<details>', `<summary>工具调用（共 ${toolCalls.length} 次）</summary>`, '')
         for (const tc of toolCalls) {
           let inputStr = ''
           try { inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input) } catch { inputStr = String(tc.input) }
@@ -1189,14 +1191,11 @@ function appendConvItem(conv) {
   btn.innerHTML = `
     <input type="checkbox" class="conv-item-cb ${convBulkMode ? 'visible' : ''}"
            data-id="${conv.id}" ${isChecked ? 'checked' : ''} title="选择">
-    <span class="conv-item-icon">${isPinned
-      ? `<svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11" style="color:#fbbf24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`
-      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="11" height="11"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`
-    }</span>
+    ${isPinned ? `<span class="conv-item-icon" title="已收藏">${ICONS.star}</span>` : ''}
     <span class="conv-item-title">${escHtml(conv.title)}</span>
     <button class="conv-item-pin ${isPinned ? 'pinned' : ''}" data-id="${conv.id}"
-            title="${isPinned ? '取消收藏' : '收藏对话'}">★</button>
-    <button class="conv-item-del" data-id="${conv.id}" title="删除对话">×</button>
+            title="${isPinned ? '取消收藏' : '收藏对话'}" aria-label="${isPinned ? '取消收藏' : '收藏对话'}">${ICONS.star}</button>
+    <button class="conv-item-del" data-id="${conv.id}" title="删除对话" aria-label="删除对话">${ICONS.x}</button>
   `
     btn.addEventListener('click', e => {
       if (e.target.closest('.conv-item-del') || e.target.closest('.conv-item-pin')) return
@@ -1644,12 +1643,12 @@ convBulkDeleteBtn.addEventListener('click', async () => {
 function applyTheme(dark) {
   if (dark) {
     document.documentElement.setAttribute('data-theme', 'dark')
-    themeToggleBtn.textContent = '☀️'
+    themeToggleBtn.innerHTML = ICONS.sun
     themeToggleBtn.title = '切换为浅色模式'
     localStorage.setItem('kb_theme', 'dark')
   } else {
     document.documentElement.removeAttribute('data-theme')
-    themeToggleBtn.textContent = '🌙'
+    themeToggleBtn.innerHTML = ICONS.moon
     themeToggleBtn.title = '切换为深色模式'
     localStorage.setItem('kb_theme', 'light')
   }

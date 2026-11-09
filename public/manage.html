@@ -10,7 +10,7 @@
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=40">
+  <link rel="stylesheet" href="style.css?v=41">
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
 </head>
@@ -29,7 +29,7 @@
     </div>
     <span class="badge" id="user-badge"></span>
     <button class="btn btn-secondary btn-sm" id="change-pwd-btn">修改密码</button>
-    <button class="theme-toggle-btn" id="theme-toggle-btn" title="切换深色/浅色模式">🌙</button>
+    <button class="theme-toggle-btn" id="theme-toggle-btn" title="切换深色/浅色模式" aria-label="切换深色/浅色模式"></button>
     <button class="btn btn-secondary btn-sm" onclick="location.href='/index.html'">← 返回问答</button>
     <button class="btn btn-secondary btn-sm" id="logout-btn">退出</button>
   </header>
@@ -604,6 +604,7 @@
   </div>
 
   <div id="toast" class="hidden"></div>
-  <script src="manage.js?v=31"></script>
+  <script src="icons.js?v=1"></script>
+  <script src="manage.js?v=32"></script>
 </body>
 </html>

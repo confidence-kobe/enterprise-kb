@@ -29,17 +29,17 @@ const isAdmin = user?.role === 'admin'
   if (isDark) document.documentElement.setAttribute('data-theme', 'dark')
   const btn = document.getElementById('theme-toggle-btn')
   if (btn) {
-    btn.textContent = isDark ? '☀️' : '🌙'
+    btn.innerHTML = isDark ? ICONS.sun : ICONS.moon
     btn.title = isDark ? '切换为浅色模式' : '切换为深色模式'
     btn.addEventListener('click', () => {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark'
       if (dark) {
         document.documentElement.removeAttribute('data-theme')
-        btn.textContent = '🌙'; btn.title = '切换为深色模式'
+        btn.innerHTML = ICONS.moon; btn.title = '切换为深色模式'
         localStorage.setItem('kb_theme', 'light')
       } else {
         document.documentElement.setAttribute('data-theme', 'dark')
-        btn.textContent = '☀️'; btn.title = '切换为浅色模式'
+        btn.innerHTML = ICONS.sun; btn.title = '切换为浅色模式'
         localStorage.setItem('kb_theme', 'dark')
       }
     })
