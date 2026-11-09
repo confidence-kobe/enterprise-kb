@@ -33,6 +33,7 @@
     user:       svg('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'),
     sparkle:    svg('<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>'),
     zap:        svg('<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>'),
+    more:       svg('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'),
     spinner:    svg('<path d="M21 12a9 9 0 1 1-6.2-8.56"/>', ' data-spin'),
   }
 })()

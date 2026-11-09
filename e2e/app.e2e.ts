@@ -129,7 +129,13 @@ test('admin feedback tab shows stats, reasons and knowledge gaps', async ({ page
   await page.keyboard.press('Enter')
   await expect(page.locator('.msg-assistant').last()).toContainText('未找到相关内容')
 
+  // 管理员打开管理台，首页是「待处理」：能看到没找到答案的问题和最近的差评，导航上有数字
   await page.goto('/manage.html')
+  await expect(page.locator('#tab-inbox')).toBeVisible()
+  await expect(page.locator('#inbox-content')).toContainText('出差补贴标准是多少')
+  await expect(page.locator('#inbox-content')).toContainText('已改为 15 天')
+  await expect(page.locator('#inbox-count')).toBeVisible()
+
   await page.click('[data-tab=feedback]')
   await expect(page.locator('#feedback-stats')).toContainText('回答满意度')
   await expect(page.locator('#feedback-reason-bars')).toContainText('信息过时')
@@ -339,7 +345,7 @@ test('admin console fits a phone screen', async ({ page, request }) => {
   const errors = trackErrors(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
-  for (const tab of ['kbs', 'docs', 'users', 'feedback', 'api', 'settings']) {
+  for (const tab of ['inbox', 'kbs', 'docs', 'users', 'feedback', 'api', 'settings']) {
     await page.goto('/manage.html')
     await page.click(`[data-tab=${tab}]`)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
