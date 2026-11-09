@@ -48,7 +48,7 @@ afterAll(async () => {
 
 describe('server health and auth', () => {
   it('serves frontend vendor libraries locally without exposing node_modules', async () => {
-    for (const name of ['marked.min.js', 'purify.min.js', 'p5.min.js']) {
+    for (const name of ['marked.min.js', 'purify.min.js']) {
       await request(app)
         .get(`/vendor/${name}`)
         .expect(200)

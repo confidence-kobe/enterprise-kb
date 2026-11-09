@@ -41,7 +41,7 @@ Enterprise KB 是一套面向企业内部的**本地知识库问答系统**。�
 | **四级混合召回** | 严格 AND → 宽松 OR → 文件名匹配 → 子串兜底，可选叠加向量相似度 |
 | **扫描件可检索** | 内置 Tesseract OCR（中文 + 英文），离线识别扫描版 PDF 和照片 |
 | **流式工具调用** | SSE 实时推送每个字和工具执行过程 |
-| **出处可点击** | 回答里的 `文件名:行号` 可点击，直接打开原文并定位到对应行 |
+| **出处可点击** | 回答里的 `文件名:行号` 显示成黄色编号，回答下方列出来源卡片，点击后在右侧打开原文并高亮被引用的行 |
 | **AI 工具接入** | 只读 API 密钥 + MCP 服务，Claude Code、Cursor 等可直接查询知识库 |
 | **重活不卡服务** | PDF/Office 提取、OCR、备份都在工作线程里运行 |
 | **大模型无关** | 对接任意兼容 OpenAI 接口的服务：Ollama、MiniMax、OpenAI 等 |
@@ -76,7 +76,6 @@ Enterprise KB 是一套面向企业内部的**本地知识库问答系统**。�
 | 原生 JS（Vanilla） | 没有框架，没有构建步骤，由 Express 直接提供静态文件 |
 | marked 18 | Markdown 渲染，由服务器本地提供（`/vendor/marked.min.js`） |
 | DOMPurify 3 | 净化 HTML，防止大模型输出注入脚本 |
-| p5.js 2 | 登录页的流场背景动画 |
 | Inter 字体 | 本地提供，内网环境不需要访问 CDN |
 | Server-Sent Events | 流式接收大模型输出和工具调用事件 |
 
@@ -695,28 +694,33 @@ return { response, turns, messages }
 
 | 页面 | 文件 | 内容 |
 |------|------|------|
-| 登录 | login.html | 登录表单，流场背景动画 |
-| 问答 | index.html + chat.js | 知识库列表、对话历史、流式问答、出处预览、知识库概况 |
-| 管理控制台 | manage.html + manage.js | 知识库与文档、成员、用户、审计、反馈与知识缺口、API 接入、设置与备份 |
+| 登录 | login.html | 居中的登录卡片，跟随浅色/深色主题 |
+| 问答 | index.html + chat.js | 知识库列表、对话历史、新对话首页、流式问答、出处编号与原文面板、知识库概况 |
+| 管理控制台 | manage.html + manage.js | 左侧导航；待处理（管理员首页）、知识库与文档、成员、用户、审计、反馈与知识缺口、API 接入、设置与备份 |
+| 图标 | icons.js | 两个页面共用的线条图标（`window.ICONS`），代替 emoji |
 
-静态资源带版本号（如 `style.css?v=40`），修改后要同步更新版本号，避免浏览器缓存旧文件。
+静态资源带版本号（如 `style.css?v=44`），修改后要同步更新版本号，避免浏览器缓存旧文件。
 
 ### CSS 设计变量（style.css）
 
+设计原则：中性灰打底，一个品牌蓝做强调，用细边框分层，阴影只给浮层用。
+
 ```css
 :root {
-  --bg, --surface, --border          /* 背景层次 */
-  --text, --muted, --light           /* 文字层次 */
-  --accent, --accent-d, --accent-lt  /* 强调色 */
-  --sb-bg, --sb-accent               /* 侧边栏（始终深色） */
-  --tool-bg, --tool-border           /* 工具调用区块 */
-  --code-bg, --code-text             /* 代码块 */
+  --surface, --bg, --surface-2       /* 页面白底、侧栏和次级底色、更深一档 */
+  --border, --border-strong          /* 边框 */
+  --text, --text-2, --muted, --light /* 文字层次（--light 只用于图标和占位符） */
+  --accent, --accent-d, --accent-lt, --accent-ring, --on-accent  /* 品牌蓝 */
+  --green, --red, --amber (+ -lt)    /* 状态色，只用于状态 */
+  --cite-bg, --cite-text, --cite-strong …  /* 荧光笔黄，只用于出处 */
+  --sb-*                             /* 侧栏，默认跟随页面变量 */
   --sh-xs … --sh-xl                  /* 阴影 */
   --r-sm, --r, --r-lg, --r-xl        /* 圆角 */
+  --font, --font-mono                /* 拉丁字母用本地 Inter，中文用系统字体 */
 }
 ```
 
-深色模式通过 `html[data-theme="dark"]` 覆盖同名变量实现。
+深色模式通过 `html[data-theme="dark"]` 覆盖同名变量实现，组件里不要写死颜色。键盘操作时所有可点元素显示 `:focus-visible` 焦点框；系统开启「减少动态效果」时关闭动画。
 
 ### SSE 流式渲染
 
@@ -733,7 +737,7 @@ switch (ev.type) {
 
 ### 出处跳转
 
-回答里的 `文件名:行号`（包括中文文件名和 `手册.md:12-15` 这样的范围）会被识别成链接。点击后打开文档预览，通过 `GET …/preview?line=N` 加载被引用行附近的内容并高亮。使用存储文件名的出处也能找到对应文档，并显示原始文件名。
+回答里的 `文件名:行号`（包括中文文件名和 `手册.md:12-15` 这样的范围）由 `decorateCitations()` 换成黄色编号，同一出处共用一个编号，回答下方列出来源卡片（文件名、第几行）。点编号或卡片，右侧面板通过 `GET …/preview?line=N` 加载被引用行附近的内容并高亮。使用存储文件名的出处也能找到对应文档，并显示原始文件名。检索过文档但回答没写出处时，回答下方显示灰色虚线提示，提醒用户自行核对。
 
 ### 安全的 Markdown 渲染
 
@@ -929,7 +933,8 @@ enterprise-kb/
 │   ├── index.html · chat.js        # 问答页
 │   ├── manage.html · manage.js     # 管理控制台
 │   ├── login.html                  # 登录页
-│   └── style.css                   # 设计系统
+│   ├── icons.js                    # 共用的线条图标
+│   └── style.css                   # 设计系统（颜色变量、组件、深色模式）
 ├── test/                     # Vitest 测试和测试用文件
 ├── e2e/                      # Playwright 浏览器测试和模拟大模型
 ├── scripts/                  # 冒烟检查、升级检查、性能测试

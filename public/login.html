@@ -3,137 +3,43 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>登录 — 知识库</title>
+  <title>登录 · 企业知识库</title>
   <script>
     if (localStorage.getItem('kb_theme') === 'dark' || (!localStorage.getItem('kb_theme') && matchMedia('(prefers-color-scheme: dark)').matches)) {
       document.documentElement.dataset.theme = 'dark'
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=43">
-  <script src="/vendor/p5.min.js"></script>
+  <link rel="stylesheet" href="style.css?v=44">
 </head>
 <body class="login-page">
-  <div id="tsparticles"></div>
-
-  <!-- 左侧品牌面板 -->
-  <div class="login-brand-panel">
-    <div class="login-brand-logo">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="26" height="26">
-        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-        <line x1="9" y1="8" x2="15" y2="8"/>
-        <line x1="9" y1="12" x2="13" y2="12"/>
-      </svg>
+  <main class="login-wrap">
+    <div class="login-head">
+      <span class="login-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+      </span>
+      <h1 class="login-title">登录企业知识库</h1>
+      <p class="login-sub">用公司分配的账号登录</p>
     </div>
-    <div class="login-brand-title">企业知识库<br>管理平台</div>
-    <div class="login-brand-desc">基于本地大模型，文档检索与问答一体化。数据不出局域网，安全可控。</div>
-    <div class="login-brand-features">
-      <div class="login-feature-item">
-        <span class="login-feature-dot"></span>
-        本地部署，数据完全自主掌控
-      </div>
-      <div class="login-feature-item">
-        <span class="login-feature-dot"></span>
-        多知识库隔离，权限精细管理
-      </div>
-      <div class="login-feature-item">
-        <span class="login-feature-dot"></span>
-        支持 PDF、Markdown、代码等多格式
-      </div>
-      <div class="login-feature-item">
-        <span class="login-feature-dot"></span>
-        全文检索 + 语义问答双引擎
-      </div>
-    </div>
-  </div>
 
-  <!-- 右侧表单面板 -->
-  <div class="login-form-panel">
-    <div class="login-box">
-      <div class="login-form-header">
-        <div class="login-form-title">欢迎回来</div>
-        <div class="login-form-sub">请输入账号信息以继续</div>
+    <form class="login-box" id="login-form">
+      <div class="login-error" id="login-error" role="alert"></div>
+      <div class="form-group">
+        <label class="form-label" for="username">用户名</label>
+        <input class="input" id="username" type="text" placeholder="请输入用户名" autocomplete="username" required autofocus>
       </div>
+      <div class="form-group">
+        <label class="form-label" for="password">密码</label>
+        <input class="input" id="password" type="password" placeholder="请输入密码" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary login-submit" type="submit" id="login-btn">登录</button>
+    </form>
 
-      <div class="login-error" id="login-error"></div>
-
-      <form id="login-form">
-        <div class="form-group">
-          <label class="form-label" for="username">用户名</label>
-          <input class="input" id="username" type="text" placeholder="请输入用户名" autocomplete="username" required>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="password">密码</label>
-          <input class="input" id="password" type="password" placeholder="请输入密码" autocomplete="current-password" required>
-        </div>
-        <button class="btn btn-primary login-submit" type="submit" id="login-btn">
-          登录
-        </button>
-      </form>
-    </div>
-  </div>
+    <p class="login-foot">忘记密码请联系管理员重置</p>
+  </main>
 
   <script>
     if (localStorage.getItem('kb_token')) location.href = '/index.html'
-
-    // p5.js 流场背景：基于 Perlin 噪声的向量场（p5.js 脚本加载失败时跳过，
-    // 这样即使网络拦截了脚本，下面的登录表单也照常可用）
-    if (window.p5) new p5(function (p) {
-      const N = 1400
-      const pts = []
-      let zoff = 0
-
-      p.setup = function () {
-        p.createCanvas(p.windowWidth, p.windowHeight).parent('tsparticles')
-        p.background(4, 8, 18)
-        for (let i = 0; i < N; i++) {
-          pts.push(p.createVector(p.random(p.width), p.random(p.height)))
-        }
-      }
-
-      p.draw = function () {
-        // 低透明度的叠加层形成长长的发光丝线拖尾
-        p.fill(4, 8, 18, 7)
-        p.noStroke()
-        p.rect(0, 0, p.width, p.height)
-
-        const mx = p.mouseX, my = p.mouseY
-        const hasMouse = mx > 0 && mx < p.width && my > 0 && my < p.height
-
-        for (const v of pts) {
-          const angle = p.noise(v.x * 0.0022, v.y * 0.0022, zoff) * p.TWO_PI * 4
-          const vel   = p5.Vector.fromAngle(angle)
-          vel.mult(1.6)
-
-          // 鼠标吸引：半径 220px，力度平滑衰减
-          if (hasMouse) {
-            const dx = mx - v.x, dy = my - v.y
-            const dist = Math.sqrt(dx * dx + dy * dy)
-            if (dist < 220) {
-              const pull = (1 - dist / 220) * 3.0
-              vel.x += dx * 0.004 * pull
-              vel.y += dy * 0.004 * pull
-            }
-          }
-
-          p.stroke(96, 165, 250, 65)
-          p.strokeWeight(1.1)
-          p.point(v.x, v.y)
-
-          v.add(vel)
-          if (v.x < 0 || v.x > p.width || v.y < 0 || v.y > p.height) {
-            v.set(p.random(p.width), p.random(p.height))
-          }
-        }
-        zoff += 0.00028
-      }
-
-      p.windowResized = function () {
-        p.resizeCanvas(p.windowWidth, p.windowHeight)
-        p.background(4, 8, 18)
-      }
-    })
 
     document.getElementById('login-form').addEventListener('submit', async e => {
       e.preventDefault()
