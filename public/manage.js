@@ -29,17 +29,17 @@ const isAdmin = user?.role === 'admin'
   if (isDark) document.documentElement.setAttribute('data-theme', 'dark')
   const btn = document.getElementById('theme-toggle-btn')
   if (btn) {
-    btn.textContent = isDark ? '☀️' : '🌙'
+    btn.innerHTML = isDark ? ICONS.sun : ICONS.moon
     btn.title = isDark ? '切换为浅色模式' : '切换为深色模式'
     btn.addEventListener('click', () => {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark'
       if (dark) {
         document.documentElement.removeAttribute('data-theme')
-        btn.textContent = '🌙'; btn.title = '切换为深色模式'
+        btn.innerHTML = ICONS.moon; btn.title = '切换为深色模式'
         localStorage.setItem('kb_theme', 'light')
       } else {
         document.documentElement.setAttribute('data-theme', 'dark')
-        btn.textContent = '☀️'; btn.title = '切换为浅色模式'
+        btn.innerHTML = ICONS.sun; btn.title = '切换为浅色模式'
         localStorage.setItem('kb_theme', 'dark')
       }
     })
@@ -75,8 +75,16 @@ const feedbackReasonLabels = {
 /* ── 初始化 ───────────────────────────────────────── */
 document.getElementById('user-badge').textContent = isAdmin ? '管理员' : '用户'
 document.getElementById('user-badge').className   = `badge badge-${user.role}`
+document.getElementById('user-name').textContent  = user.username
+document.getElementById('user-avatar').textContent = (user.username || '?').slice(0, 1).toUpperCase()
 
 if (isAdmin) {
+  // 管理员的首页是「待处理」：查不到、不满意、没能入库的情况
+  document.getElementById('inbox-tab').style.display = ''
+  document.querySelector('.tab-btn[data-tab="kbs"]').classList.remove('active')
+  document.getElementById('tab-kbs').classList.remove('active')
+  document.getElementById('inbox-tab').classList.add('active')
+  document.getElementById('tab-inbox').classList.add('active')
   document.getElementById('users-tab').style.display = ''
   document.getElementById('audit-tab').style.display = ''
   document.getElementById('feedback-tab').style.display = ''
@@ -111,6 +119,7 @@ if (isAdmin) initResetPwdModal()
 kbList.addEventListener('click', e => {
   const btn = e.target.closest('[data-action]')
   if (!btn) return
+  btn.closest('details.row-menu')?.removeAttribute('open')
   const id = Number(btn.dataset.id)
   const kb = allKbs.find(k => k.id === id)
   if (!kb) return
@@ -132,6 +141,11 @@ function showToast(msg, type = '') {
   toast._timer = setTimeout(() => toast.classList.add('hidden'), 3000)
 }
 
+/* 点击菜单以外的地方时，收起打开着的「更多」菜单 */
+document.addEventListener('click', e => {
+  document.querySelectorAll('details.row-menu[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open') })
+})
+
 /* ── 全局 Escape 关闭弹层 ────────────────────────── */
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return
@@ -146,6 +160,7 @@ function initTabs() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'))
       btn.classList.add('active')
       document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active')
+      if (btn.dataset.tab === 'inbox' && isAdmin) loadInbox()
       if (btn.dataset.tab === 'audit' && isAdmin) loadAuditLog(false)
       if (btn.dataset.tab === 'feedback' && isAdmin) loadFeedbackTab()
       if (btn.dataset.tab === 'settings' && isAdmin) loadBackups()
@@ -181,6 +196,8 @@ async function loadKbs() {
     renderKbList()
     renderDocKbSelect()
     applyInitialManageRoute()
+    if (isAdmin && document.getElementById('tab-inbox').classList.contains('active')) loadInbox()
+    else if (isAdmin) loadInbox({ countOnly: true })
   } catch {
     kbList.innerHTML = '<div class="empty-state"><div>加载失败，请刷新重试</div></div>'
   }
@@ -202,110 +219,171 @@ function applyInitialManageRoute() {
   }
 }
 
-function renderKbList() {
-  kbList.innerHTML = ''
+/* ── 待处理（管理员首页） ─────────────────────────────── */
+/**
+ * 把三类需要管理员动手的事情放在一页：
+ *   待补知识   近 30 天没找到答案的问题（/api/admin/gaps）
+ *   差评反馈   最近的差评（/api/admin/feedback/negative）
+ *   没能入库   解析失败的文件（逐个知识库读文档列表，筛出 index_status = error）
+ * 数据都来自已有接口，这里只是汇总展示。countOnly 为 true 时只更新导航上的数字。
+ */
+const INBOX_LIMIT = 5
+async function loadInbox({ countOnly = false } = {}) {
+  const contentEl = document.getElementById('inbox-content')
+  const countEl = document.getElementById('inbox-count')
+  if (!isAdmin) return
+  if (!countOnly) contentEl.innerHTML = '<div class="feedback-empty">加载中…</div>'
 
-  // 统计数据行
-  const totalDocs  = allKbs.reduce((s, k) => s + (k.doc_count  ?? 0), 0)
-  const totalConvs = allKbs.reduce((s, k) => s + (k.conv_count ?? 0), 0)
-  const statsRow = document.createElement('div')
-  statsRow.className = 'manage-stats-row'
-  const satisfactionHtml = isAdmin && feedbackTotals.satisfaction != null
-    ? `<div class="manage-stat-card">
-         <div class="manage-stat-value">${feedbackTotals.satisfaction}%</div>
-         <div class="manage-stat-label">回答满意度 👍${feedbackTotals.positive} 👎${feedbackTotals.negative}</div>
-       </div>`
-    : ''
-  statsRow.innerHTML = `
-    <div class="manage-stat-card accent">
-      <div class="manage-stat-value">${allKbs.length}</div>
-      <div class="manage-stat-label">知识库总数</div>
-    </div>
-    <div class="manage-stat-card">
-      <div class="manage-stat-value">${totalDocs.toLocaleString()}</div>
-      <div class="manage-stat-label">文档总数</div>
-    </div>
-    <div class="manage-stat-card">
-      <div class="manage-stat-value">${totalConvs.toLocaleString()}</div>
-      <div class="manage-stat-label">历史对话</div>
-    </div>
-    ${satisfactionHtml}
-  `
-  kbList.appendChild(statsRow)
+  const getJson = url => fetch(url, { headers: auth() }).then(r => r.ok ? r.json() : null).catch(() => null)
+  const [gapData, negData, docLists] = await Promise.all([
+    getJson('/api/admin/gaps?days=30'),
+    getJson(`/api/admin/feedback/negative?limit=${INBOX_LIMIT}&offset=0`),
+    Promise.all(allKbs.filter(kb => kb.doc_count > 0).map(kb =>
+      getJson(`/api/kbs/${kb.id}/docs`).then(docs => (Array.isArray(docs) ? docs : []).map(d => ({ ...d, kb })))
+    )),
+  ])
+  const gaps = gapData?.items ?? []
+  const negatives = negData?.items ?? []
+  const negativeTotal = negData?.total ?? negatives.length
+  const failedDocs = docLists.flat().filter(d => d.index_status === 'error')
 
-  if (!allKbs.length) {
-    const empty = document.createElement('div')
-    empty.className = 'empty-state'
-    empty.innerHTML = '<div class="empty-state-icon">📭</div><div class="empty-state-text">暂无知识库，点击「新建知识库」创建第一个</div>'
-    kbList.appendChild(empty)
+  // 导航上的数字只算「补上就会消失」的事：待补知识和入库失败的文件。
+  // 差评没有「已处理」状态，计进去数字会一直不减，所以只在页面里展示最近几条。
+  const total = gaps.length + failedDocs.length
+  countEl.textContent = total > 99 ? '99+' : String(total)
+  countEl.classList.toggle('hidden', total === 0)
+  if (countOnly) return
+
+  if (!total && !negatives.length) {
+    contentEl.innerHTML = `<div class="inbox-all-clear">
+      <div class="inbox-all-clear-title">暂时没有需要处理的事情</div>
+      <div class="inbox-all-clear-text">近 30 天员工的问题都找到了答案，没有差评，所有文件都已入库。</div>
+    </div>`
     return
   }
 
-  const grid = document.createElement('div')
-  grid.className = 'kb-card-grid'
-  kbList.appendChild(grid)
+  const section = (title, sub, rows, more) => `
+    <section class="inbox-section">
+      <div class="inbox-section-head">
+        <h2 class="inbox-section-title">${title}</h2>
+        <span class="inbox-section-sub">${sub}</span>
+        ${more ?? ''}
+      </div>
+      ${rows.length
+        ? `<div class="inbox-list">${rows.join('')}</div>`
+        : `<div class="inbox-empty">${ICONS.check}<span>没有需要处理的</span></div>`}
+    </section>`
 
-  // 按 kb.id 轮换强调色
-  const palette = [
-    { bar: '#1e40af', icon: '#1e40af', bg: 'rgba(30,64,175,.08)', border: 'rgba(30,64,175,.2)' },
-    { bar: '#7c3aed', icon: '#7c3aed', bg: 'rgba(124,58,237,.08)', border: 'rgba(124,58,237,.2)' },
-    { bar: '#0891b2', icon: '#0891b2', bg: 'rgba(8,145,178,.08)',  border: 'rgba(8,145,178,.2)'  },
-    { bar: '#059669', icon: '#059669', bg: 'rgba(5,150,105,.08)',  border: 'rgba(5,150,105,.2)'  },
-    { bar: '#d97706', icon: '#d97706', bg: 'rgba(217,119,6,.08)',  border: 'rgba(217,119,6,.2)'  },
-    { bar: '#db2777', icon: '#db2777', bg: 'rgba(219,39,119,.08)', border: 'rgba(219,39,119,.2)' },
-  ]
+  const gapRows = gaps.slice(0, INBOX_LIMIT).map(gap => `
+    <div class="inbox-row">
+      <div class="inbox-row-main">
+        <div class="inbox-row-title">${escHtml(gap.question)}</div>
+        <div class="inbox-row-meta">${escHtml(gap.kb_name ?? '全部知识库')}，被问到 ${gap.count} 次，最近一次 ${fmtDateTime(gap.last_at)}</div>
+      </div>
+      ${gap.kb_id ? `<button class="btn btn-secondary btn-sm" data-inbox-docs="${gap.kb_id}">补充文档</button>` : ''}
+    </div>`)
+
+  const negRows = negatives.map(item => {
+    const reasonKey = item.reason ?? 'none'
+    return `
+    <div class="inbox-row">
+      <div class="inbox-row-main">
+        <div class="inbox-row-title">${escHtml(item.question || '（无提问记录）')}<span class="inbox-tag">${escHtml(feedbackReasonLabels[reasonKey] || reasonKey)}</span></div>
+        ${item.comment ? `<div class="inbox-row-quote">“${escHtml(item.comment)}”</div>` : ''}
+        <div class="inbox-row-meta">${escHtml(item.username || '已删除用户')}，${escHtml(item.kb_name)}，${fmtDateTime(item.created_at)}</div>
+      </div>
+    </div>`
+  })
+
+  const failedRows = failedDocs.slice(0, INBOX_LIMIT).map(doc => `
+    <div class="inbox-row">
+      <div class="inbox-row-main">
+        <div class="inbox-row-title">${escHtml(doc.original_name)}</div>
+        <div class="inbox-row-error">${escHtml(doc.index_error || '解析失败')}</div>
+        <div class="inbox-row-meta">${escHtml(doc.kb.name)}</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" data-inbox-docs="${doc.kb.id}">去文档页处理</button>
+    </div>`)
+
+  contentEl.innerHTML =
+    section('待补知识', gaps.length ? `近 30 天有 ${gaps.length} 个问题没找到答案` : '近 30 天',
+      gapRows, gaps.length > INBOX_LIMIT ? '<button class="inbox-section-link" data-inbox-tab="feedback">查看全部</button>' : '') +
+    section('最近的差评', negativeTotal ? `共 ${negativeTotal} 条，这里显示最近 ${negatives.length} 条` : '',
+      negRows, negativeTotal > negatives.length ? '<button class="inbox-section-link" data-inbox-tab="feedback">查看全部</button>' : '') +
+    section('文件没能入库', failedDocs.length ? `${failedDocs.length} 份` : '', failedRows)
+
+  contentEl.querySelectorAll('[data-inbox-docs]').forEach(btn => btn.addEventListener('click', () => openDocsTab(Number(btn.dataset.inboxDocs))))
+  contentEl.querySelectorAll('[data-inbox-tab]').forEach(btn => btn.addEventListener('click', () =>
+    document.querySelector(`.tab-btn[data-tab="${btn.dataset.inboxTab}"]`)?.click()))
+}
+
+/** 切到文档页并选中某个知识库 */
+function openDocsTab(kbId) {
+  document.querySelector('.tab-btn[data-tab="docs"]').click()
+  if (kbId && allKbs.some(kb => kb.id === kbId)) {
+    docKbSelect.value = String(kbId)
+    docKbSelect.dispatchEvent(new Event('change'))
+  }
+}
+
+/** 知识库列表：每行一个知识库，常用操作直接可点，编辑、公开/私有、删除收进「更多」菜单 */
+function renderKbList() {
+  kbList.innerHTML = ''
+
+  if (!allKbs.length) {
+    kbList.innerHTML = `<div class="inbox-all-clear">
+      <div class="inbox-all-clear-title">还没有知识库</div>
+      <div class="inbox-all-clear-text">点右上角「新建知识库」创建第一个，然后上传文档。</div>
+    </div>`
+    return
+  }
+
+  const totalDocs  = allKbs.reduce((s, k) => s + (k.doc_count  ?? 0), 0)
+  const totalConvs = allKbs.reduce((s, k) => s + (k.conv_count ?? 0), 0)
+  const summary = document.createElement('p')
+  summary.className = 'kb-summary'
+  summary.textContent = `${allKbs.length} 个知识库，共 ${totalDocs.toLocaleString()} 份文档、${totalConvs.toLocaleString()} 次对话` +
+    (isAdmin && feedbackTotals.satisfaction != null ? `；回答满意度 ${feedbackTotals.satisfaction}%` : '')
+  kbList.appendChild(summary)
+
+  const list = document.createElement('div')
+  list.className = 'kb-list'
+  kbList.appendChild(list)
 
   for (const kb of allKbs) {
-    const c = palette[kb.id % palette.length]
     const isOwner = kb.owner_id === user.id || isAdmin
-
-    const card = document.createElement('div')
-    card.className = 'kb-card'
-    card.innerHTML = `
-      <div class="kb-card-accent-bar" style="background:${c.bar}"></div>
-      <div class="kb-card-inner">
-        <div class="kb-card-header">
-          <div class="kb-card-icon" style="color:${c.icon};background:${c.bg};border-color:${c.border}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20">
-              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-            </svg>
-          </div>
-          <div class="kb-card-title-area">
-            <div class="kb-card-name">
-              ${escHtml(kb.name)}
-              ${kb.is_public ? '<span class="badge badge-public">公开</span>' : ''}
+    const fb = feedbackMap[kb.id]
+    const row = document.createElement('div')
+    row.className = 'kb-row'
+    row.innerHTML = `
+      <div class="kb-row-main">
+        <div class="kb-row-name">
+          <span>${escHtml(kb.name)}</span>
+          ${kb.is_public ? '<span class="badge badge-public">公开</span>' : '<span class="badge badge-private">私有</span>'}
+        </div>
+        <div class="kb-row-desc">${kb.description ? escHtml(kb.description) : '还没有说明'}</div>
+      </div>
+      <div class="kb-row-stats">
+        <span><strong>${kb.doc_count ?? 0}</strong> 份文档</span>
+        <span>${kb.conv_count ? `<strong>${kb.conv_count}</strong> 次对话` : '暂无对话'}</span>
+        ${fb && (fb.positive || fb.negative) ? `<span title="用户对回答的评价">${fb.positive} 个有帮助，${fb.negative} 个没帮助</span>` : ''}
+      </div>
+      <div class="kb-row-actions">
+        <button class="btn btn-secondary btn-sm" data-action="open-chat" data-id="${kb.id}">进入问答</button>
+        ${isOwner ? `
+          <button class="btn btn-secondary btn-sm" data-action="members" data-id="${kb.id}">成员</button>
+          <details class="row-menu">
+            <summary aria-label="${escHtml(kb.name)} 的更多操作" title="更多操作">${ICONS.more}</summary>
+            <div class="row-menu-pop" role="menu">
+              <button type="button" role="menuitem" data-action="edit" data-id="${kb.id}">编辑名称和说明</button>
+              <button type="button" role="menuitem" data-action="toggle-public" data-id="${kb.id}" data-public="${kb.is_public ? '1' : '0'}">${kb.is_public ? '设为私有' : '设为公开'}</button>
+              <div class="row-menu-sep"></div>
+              <button type="button" role="menuitem" class="danger" data-action="delete-kb" data-id="${kb.id}">删除知识库</button>
             </div>
-            ${kb.description ? `<div class="kb-card-desc">${escHtml(kb.description)}</div>` : '<div class="kb-card-desc" style="color:var(--light)">暂无描述</div>'}
-          </div>
-        </div>
-        <div class="kb-card-stats">
-          <span class="kb-stat-pill">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="11" height="11"><path d="M9 1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5L9 1z"/><polyline points="9 1 9 5 13 5"/></svg>
-            ${kb.doc_count ?? 0} 文档
-          </span>
-          <span class="kb-stat-pill">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="11" height="11"><path d="M14 1H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l3 3 3-3h3a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1z"/></svg>
-            ${kb.conv_count ?? 0} 对话
-          </span>
-          ${kb.last_active ? `<span class="kb-stat-pill">活跃 ${fmtTime(kb.last_active)}</span>` : ''}
-          ${(() => { const fb = feedbackMap[kb.id]; return (fb && (fb.positive || fb.negative)) ? `<span class="kb-stat-pill" title="用户反馈">👍 ${fb.positive} 👎 ${fb.negative}</span>` : '' })()}
-          <span class="kb-stat-pill" style="margin-left:auto;color:var(--light);font-size:10.5px">ID ${kb.id} · ${fmtTime(kb.created_at)}</span>
-        </div>
-        <div class="kb-card-actions">
-          <button class="btn btn-primary btn-sm" data-action="open-chat" data-id="${kb.id}">进入问答</button>
-          ${isOwner ? `
-            <button class="btn btn-secondary btn-sm" data-action="edit" data-id="${kb.id}">编辑</button>
-            <button class="btn btn-secondary btn-sm" data-action="members" data-id="${kb.id}">成员</button>
-            <button class="btn btn-secondary btn-sm" data-action="toggle-public" data-id="${kb.id}" data-public="${kb.is_public ? '1' : '0'}">
-              ${kb.is_public ? '设为私有' : '设为公开'}
-            </button>
-            <button class="btn btn-danger btn-sm" data-action="delete-kb" data-id="${kb.id}">删除</button>
-          ` : ''}
-        </div>
+          </details>` : ''}
       </div>
     `
-    grid.appendChild(card)
+    list.appendChild(row)
   }
 }
 
@@ -511,7 +589,7 @@ function vectorBadge(doc) {
   if (!chunks) return ''
   const pct = Math.round((vecs / chunks) * 100)
   const cls  = pct >= 90 ? 'vec-badge-full' : pct >= 40 ? 'vec-badge-partial' : 'vec-badge-low'
-  return `<span class="doc-vec-badge ${cls}" title="向量覆盖率 ${pct}%（${vecs}/${chunks} 块）">⚡ ${pct}%</span>`
+  return `<span class="doc-vec-badge ${cls}" title="向量覆盖率 ${pct}%（${vecs}/${chunks} 块）">${pct}%</span>`
 }
 
 /** 加载当前知识库的文档列表（分页，append 为 true 时是"加载更多"） */
@@ -543,7 +621,7 @@ async function loadDocs(append = false) {
   if (tableHeader) tableHeader.style.display = !docs.length && !append ? 'none' : ''
 
   if (!docs.length && !append) {
-    docList.innerHTML = '<div class="empty-state" style="padding:24px"><div class="empty-state-icon">📄</div><div class="empty-state-text">暂无文档，请上传</div></div>'
+    docList.innerHTML = `<div class="inbox-all-clear"><div class="inbox-all-clear-title">这个知识库还没有文档</div><div class="inbox-all-clear-text">把文件拖到上面的上传区，或点击上传区选择文件。</div></div>`
     document.getElementById('doc-bulk-bar').classList.add('hidden')
     selectedDocIds.clear()
     return
@@ -860,7 +938,7 @@ async function previewDoc(docId, originalName, summary) {
   contentEl.textContent = '加载中…'
   hintEl.classList.add('hidden')
   if (summary) {
-    summaryEl.textContent = `💡 AI 摘要：${summary}`
+    summaryEl.textContent = `AI 摘要：${summary}`
     summaryEl.classList.remove('hidden')
   } else {
     summaryEl.classList.add('hidden')
@@ -1326,11 +1404,11 @@ async function loadFeedbackSummary() {
       </div>
       <div class="manage-stat-card">
         <div class="manage-stat-value">${data.total_positive.toLocaleString()}</div>
-        <div class="manage-stat-label">👍 有帮助</div>
+        <div class="manage-stat-label">有帮助</div>
       </div>
       <div class="manage-stat-card">
         <div class="manage-stat-value">${data.total_negative.toLocaleString()}</div>
-        <div class="manage-stat-label">👎 没帮助</div>
+        <div class="manage-stat-label">没帮助</div>
       </div>
     `
     const reasons = data.reasons || []
@@ -1523,7 +1601,7 @@ async function loadMembers(kbId) {
     const row = document.createElement('div')
     row.className = 'doc-item'
     row.innerHTML = `
-      <span>👤</span>
+      <span class="manage-nav-avatar" aria-hidden="true">${escHtml((m.username || '?').slice(0, 1).toUpperCase())}</span>
       <span style="flex:1;font-size:13.5px">${escHtml(m.username)}</span>
       <span class="badge badge-${m.role}" style="margin-right:6px">${m.role === 'admin' ? '管理员' : '用户'}</span>
       <button class="btn btn-danger btn-sm" data-uid="${m.id}">移除</button>
@@ -1870,8 +1948,8 @@ function renderBackupStatus(status) {
     const how = last.trigger === 'manual' ? '手动' : '自动'
     lastEl.className = `backup-last ${last.ok ? 'ok' : 'failed'}`
     lastEl.textContent = last.ok
-      ? `✓ 上次${how}备份成功 · ${fmtIsoTime(last.at)}`
-      : `✗ 上次${how}备份失败 · ${fmtIsoTime(last.at)} · ${last.error}`
+      ? `上次${how}备份成功 · ${fmtIsoTime(last.at)}`
+      : `上次${how}备份失败 · ${fmtIsoTime(last.at)} · ${last.error}`
   }
 
   listEl.innerHTML = status.backups.length

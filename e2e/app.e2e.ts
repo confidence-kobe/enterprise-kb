@@ -87,13 +87,20 @@ test('opens the cited line when a source with a Chinese file name is clicked', a
   await page.fill('#question-input', '年假有几天？请给出处')
   await page.keyboard.press('Enter')
 
-  const ref = page.locator('.msg-assistant').last().locator('.source-ref')
-  await expect(ref).toHaveText('请假制度.md:1')
+  // 正文里的出处变成编号，回答下方列出来源卡片
+  const answer = page.locator('.msg-assistant').last()
+  await expect(answer.locator('.response-text .cite-num').first()).toHaveText('1')
+  const ref = answer.locator('.cite-card')
+  await expect(ref).toHaveCount(1)
+  await expect(ref).toContainText('请假制度.md')
+  await expect(ref).toContainText('第 1 行')
   // 回答由 marked 渲染（而不是加载失败后的简易降级渲染）
   expect(await page.evaluate(() => typeof (window as unknown as { marked?: { parse?: unknown } }).marked?.parse)).toBe('function')
   await ref.click()
   await expect(page.locator('#src-modal')).toBeVisible()
+  await expect(page.locator('#src-modal-sub')).toHaveText('已定位到被引用的第 1 行')
   await expect(page.locator('#src-modal-content .src-line-highlight')).toHaveText('年假为每年 10 天。')
+  await expect(ref).toHaveClass(/is-active/)
   expect(errors).toEqual([])
 })
 
@@ -122,7 +129,13 @@ test('admin feedback tab shows stats, reasons and knowledge gaps', async ({ page
   await page.keyboard.press('Enter')
   await expect(page.locator('.msg-assistant').last()).toContainText('未找到相关内容')
 
+  // 管理员打开管理台，首页是「待处理」：能看到没找到答案的问题和最近的差评，导航上有数字
   await page.goto('/manage.html')
+  await expect(page.locator('#tab-inbox')).toBeVisible()
+  await expect(page.locator('#inbox-content')).toContainText('出差补贴标准是多少')
+  await expect(page.locator('#inbox-content')).toContainText('已改为 15 天')
+  await expect(page.locator('#inbox-count')).toBeVisible()
+
   await page.click('[data-tab=feedback]')
   await expect(page.locator('#feedback-stats')).toContainText('回答满意度')
   await expect(page.locator('#feedback-reason-bars')).toContainText('信息过时')
@@ -332,7 +345,7 @@ test('admin console fits a phone screen', async ({ page, request }) => {
   const errors = trackErrors(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
-  for (const tab of ['kbs', 'docs', 'users', 'feedback', 'api', 'settings']) {
+  for (const tab of ['inbox', 'kbs', 'docs', 'users', 'feedback', 'api', 'settings']) {
     await page.goto('/manage.html')
     await page.click(`[data-tab=${tab}]`)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)

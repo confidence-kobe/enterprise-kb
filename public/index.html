@@ -10,7 +10,7 @@
     }
   </script>
   <link href="/vendor/inter/wght.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=40">
+  <link rel="stylesheet" href="style.css?v=44">
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
 </head>
@@ -22,7 +22,7 @@
   <!-- ── 侧边栏 ── -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top-bar">
-      <span class="sidebar-app-name">知识库</span>
+      <span class="sidebar-app-name">企业知识库</span>
       <button class="new-conv-btn" id="global-search-btn" title="全局搜索 (Ctrl+K)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </button>
@@ -34,11 +34,11 @@
       <div class="no-kb-hint">加载中…</div>
     </div>
 
-    <!-- 全局搜索覆盖层（点击 🔍 后展开） -->
+    <!-- 全局搜索覆盖层（点击搜索图标后展开） -->
     <div class="global-search-panel hidden" id="global-search-panel">
       <div class="global-search-input-wrap">
         <input type="search" id="global-search-input" placeholder="搜索所有对话内容…" autocomplete="off">
-        <button class="new-conv-btn" id="global-search-close" title="关闭">✕</button>
+        <button class="new-conv-btn" id="global-search-close" title="关闭" aria-label="关闭搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
       </div>
       <div id="global-search-results" class="global-search-results">
         <div class="no-kb-hint" style="font-size:12px;text-align:center;padding:16px 8px">输入关键词搜索…</div>
@@ -80,7 +80,7 @@
         <button class="sidebar-action-btn" id="change-pwd-btn" title="修改密码">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         </button>
-        <button class="sidebar-action-btn theme-toggle-btn" id="theme-toggle-btn" title="切换主题">🌙</button>
+        <button class="sidebar-action-btn theme-toggle-btn" id="theme-toggle-btn" title="切换主题" aria-label="切换主题"></button>
         <button class="sidebar-action-btn" id="logout-btn" title="退出">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </button>
@@ -110,76 +110,19 @@
     </div>
 
     <div id="content">
-      <!-- 欢迎屏 -->
+      <!-- 新对话首页：知识库名、有哪些文档、示例问题 -->
       <div id="welcome">
-        <div class="dashboard-head">
-          <div>
-            <div class="dashboard-eyebrow" id="welcome-kb-name">知识库工作台</div>
-            <h1 class="welcome-title" id="welcome-title">开始处理知识工作</h1>
-            <p class="welcome-sub" id="welcome-sub">选择知识库后查看文档、继续会话或发起新的检索问答。</p>
+        <div class="welcome-inner">
+          <div class="welcome-head">
+            <h1 class="welcome-title" id="welcome-title">企业知识库</h1>
+            <p class="welcome-sub" id="welcome-sub">正在加载知识库…</p>
           </div>
-          <div class="dashboard-head-actions">
-            <button class="dashboard-btn dashboard-btn-secondary" id="welcome-stats-action" type="button">查看统计</button>
-            <button class="dashboard-btn dashboard-btn-primary" id="welcome-manage-action" type="button">管理知识库</button>
+          <div class="welcome-docs" id="welcome-recent-docs"></div>
+          <div class="welcome-empty hidden" id="welcome-empty"></div>
+          <div class="welcome-hints" id="welcome-hints" style="display:none">
+            <span class="welcome-hint-label">可以这样问</span>
+            <div class="welcome-chips" id="welcome-chips"></div>
           </div>
-        </div>
-
-        <div class="welcome-metrics" id="welcome-metrics">
-          <div class="welcome-metric">
-            <span class="welcome-metric-label">文档总数</span>
-            <span class="welcome-metric-value" id="welcome-doc-count">0</span>
-            <span class="welcome-metric-note">可用于检索和问答</span>
-          </div>
-          <div class="welcome-metric">
-            <span class="welcome-metric-label">历史会话</span>
-            <span class="welcome-metric-value" id="welcome-conv-count">0</span>
-            <span class="welcome-metric-note">可继续之前的工作</span>
-          </div>
-          <div class="welcome-metric">
-            <span class="welcome-metric-label">访问权限</span>
-            <span class="welcome-metric-value" id="welcome-access-count">受限</span>
-            <span class="welcome-metric-note">由知识库成员策略控制</span>
-          </div>
-        </div>
-
-        <div class="dashboard-grid">
-          <section class="dashboard-panel dashboard-ask-panel">
-            <div class="dashboard-panel-head">
-              <div>
-                <div class="dashboard-panel-title">快速提问</div>
-                <div class="dashboard-panel-sub">选择一个常用问题，或直接在下方输入。</div>
-              </div>
-            </div>
-            <div class="welcome-hints" id="welcome-hints" style="display:none">
-              <div class="welcome-chips" id="welcome-chips"></div>
-            </div>
-          </section>
-
-          <section class="dashboard-panel">
-            <div class="dashboard-panel-head">
-              <div>
-                <div class="dashboard-panel-title">最近文档</div>
-                <div class="dashboard-panel-sub">当前知识库最新内容</div>
-              </div>
-              <button class="dashboard-link-btn" id="welcome-docs-action" type="button">管理文档</button>
-            </div>
-            <div class="dashboard-list" id="welcome-recent-docs">
-              <div class="dashboard-empty">加载文档中…</div>
-            </div>
-          </section>
-
-          <section class="dashboard-panel">
-            <div class="dashboard-panel-head">
-              <div>
-                <div class="dashboard-panel-title">最近会话</div>
-                <div class="dashboard-panel-sub">继续最近的知识检索</div>
-              </div>
-              <button class="dashboard-link-btn" id="welcome-new-conv-action" type="button">新建会话</button>
-            </div>
-            <div class="dashboard-list" id="welcome-recent-convs">
-              <div class="dashboard-empty">加载会话中…</div>
-            </div>
-          </section>
         </div>
       </div>
 
@@ -190,13 +133,11 @@
     <!-- 输入区 -->
     <div id="input-area">
       <div id="input-inner">
+        <div id="llm-offline-banner" class="notice notice-error hidden" role="alert"></div>
         <div id="input-wrap">
-          <textarea id="question-input" placeholder="输入问题，Enter 发送，Shift+Enter 换行" rows="1" autocomplete="off" spellcheck="false"></textarea>
+          <textarea id="question-input" placeholder="输入问题" aria-label="输入问题" rows="1" autocomplete="off" spellcheck="false"></textarea>
           <button id="send-btn" title="发送" aria-label="发送">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <line x1="22" y1="2" x2="11" y2="13"/>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
           </button>
         </div>
         <div id="status-bar">
@@ -283,15 +224,15 @@
 
   <!-- 会话过期提示 -->
   <div id="session-toast" class="session-toast hidden">
-    <span id="session-toast-msg">⚠️ 会话将在 5 分钟后过期</span>
+    <span id="session-toast-msg">会话将在 5 分钟后过期</span>
     <button class="btn btn-primary btn-sm" id="session-relogin-btn">重新登录</button>
   </div>
 
   <!-- 来源文件预览弹层 -->
-  <div id="src-modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div id="src-modal" class="modal src-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="src-modal-title">
     <div class="modal-box src-modal-box">
       <div class="modal-header">
-        <span id="src-modal-title">来源预览</span>
+        <span class="src-modal-heading"><span id="src-modal-title">来源预览</span><span id="src-modal-sub" class="src-modal-sub"></span></span>
         <button class="modal-close" id="src-modal-close" aria-label="关闭">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -303,6 +244,7 @@
   </div>
 
   <div id="toast" class="hidden"></div>
-<script src="chat.js?v=26"></script>
+<script src="icons.js?v=2"></script>
+<script src="chat.js?v=28"></script>
 </body>
 </html>

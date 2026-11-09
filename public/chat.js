@@ -47,7 +47,7 @@ if (!token || !user) { location.href = '/login.html' }
         const sessionMsg   = document.getElementById('session-toast-msg')
         if (sessionToast) {
           sessionToast.classList.remove('hidden')
-          sessionMsg.textContent = `⚠️ 会话将在 ${mins} 分钟后过期`
+          sessionMsg.textContent = `会话将在 ${mins} 分钟后过期`
         }
       }
     }
@@ -104,16 +104,9 @@ const SOURCE_REF_RE = /^(.+\.[\w]+):(\d+)(?:[-–]\d+)?$/
 /* ── DOM 元素 ──────────────────────────────────────────── */
 const messagesEl   = document.getElementById('messages')
 const welcomeEl    = document.getElementById('welcome')
-const welcomeKbName = document.getElementById('welcome-kb-name')
-const welcomeDocCount = document.getElementById('welcome-doc-count')
-const welcomeConvCount = document.getElementById('welcome-conv-count')
-const welcomeAccessCount = document.getElementById('welcome-access-count')
-const welcomeStatsAction = document.getElementById('welcome-stats-action')
-const welcomeManageAction = document.getElementById('welcome-manage-action')
-const welcomeDocsAction = document.getElementById('welcome-docs-action')
-const welcomeNewConvAction = document.getElementById('welcome-new-conv-action')
 const welcomeRecentDocs = document.getElementById('welcome-recent-docs')
-const welcomeRecentConvs = document.getElementById('welcome-recent-convs')
+const welcomeEmpty = document.getElementById('welcome-empty')
+const llmOfflineBanner = document.getElementById('llm-offline-banner')
 const welcomeTitle = document.getElementById('welcome-title')
 const welcomeSub   = document.getElementById('welcome-sub')
 const inputEl      = document.getElementById('question-input')
@@ -166,6 +159,8 @@ fetch('/api/config', { headers: auth() })
       llmOnline = false
       topbarModel.title = '模型服务连接失败，请检查模型配置'
       topbarModel.style.color = 'var(--red)'
+      llmOfflineBanner.innerHTML = `${ICONS.alert}<span>暂时连不上问答模型，现在提问不会有回答。请稍后再试；一直这样请联系管理员检查模型配置。</span>`
+      llmOfflineBanner.classList.remove('hidden')
       if (currentKb) {
         sendBtn.disabled = true
         sendBtn.title = '模型服务连接失败，无法发送'
@@ -185,26 +180,6 @@ fetch('/api/config', { headers: auth() })
 loadKbs()
 clearAutofilledSidebarSearches()
 
-welcomeStatsAction?.addEventListener('click', () => {
-  if (!currentKb) return
-  openStats()
-})
-
-welcomeManageAction?.addEventListener('click', () => {
-  location.href = '/manage.html'
-})
-
-welcomeDocsAction?.addEventListener('click', () => {
-  if (!currentKb) return
-  location.href = `/manage.html?tab=docs&kb=${currentKb.id}`
-})
-
-welcomeNewConvAction?.addEventListener('click', () => {
-  if (!currentKb) return
-  startNewConversation()
-})
-
-/** 请求头里带上登录 Token；所有 fetch 都要用 */
 function auth() {
   return { Authorization: `Bearer ${token}` }
 }
@@ -242,7 +217,11 @@ async function loadKbs() {
     sidebarKbs.innerHTML = ''
     if (!kbs.length) {
       sidebarKbs.innerHTML = '<div class="no-kb-hint">暂无知识库<br><a href="/manage.html">去管理页创建</a></div>'
-      setDashboardPlaceholder('还没有知识库，请先到管理页创建。', '还没有知识库，暂无会话。')
+      welcomeTitle.textContent = '还没有可用的知识库'
+      welcomeSub.textContent = user?.role === 'admin'
+        ? '先在管理控制台创建一个知识库并上传文档，就可以在这里提问了。'
+        : '你还没有被加入任何知识库，请联系管理员开通。'
+      if (user?.role === 'admin') showWelcomeEmpty('', { href: '/manage.html', label: '去创建知识库' })
       return
     }
 
@@ -281,7 +260,8 @@ async function loadKbs() {
 
   } catch (e) {
     sidebarKbs.innerHTML = `<div class="no-kb-hint" style="color:var(--red)">加载失败</div>`
-    setDashboardPlaceholder('知识库加载失败，请刷新重试。', '知识库加载失败，请刷新重试。')
+    welcomeTitle.textContent = '知识库加载失败'
+    welcomeSub.textContent = '请检查网络后刷新页面重试。'
   }
 }
 
@@ -291,10 +271,9 @@ function renderWelcomeChips(kb) {
   if (!hintsEl || !chipsEl) return
 
   const suggestions = [
-    `${kb.name} 包含哪些核心内容？`,
-    '有没有相关的使用指南或操作步骤？',
-    '总结一下最重要的几个知识点',
-    '有哪些常见问题和解决方案？',
+    `总结「${kb.name}」的要点`,
+    '有哪些需要特别注意的规定？',
+    '有没有具体的操作步骤？',
   ]
 
   chipsEl.innerHTML = ''
@@ -330,41 +309,39 @@ async function selectKb(kb) {
   const isAll = kb.id === 'all'
 
   topbarKb.textContent = kb.name
-  if (welcomeTitle) welcomeTitle.textContent = kb.name
+  welcomeTitle.textContent = kb.name
   sendBtn.disabled = !llmOnline
   sendBtn.title = llmOnline ? '发送' : '模型服务连接失败，无法发送'
   statsBtn.disabled = isAll
   exportBtn.disabled = history.length === 0
-  inputEl.placeholder = isAll ? '跨所有知识库提问，Enter 发送' : `在「${kb.name}」中提问，Enter 发送`
+  inputEl.placeholder = isAll ? '在全部知识库中提问…' : `在「${kb.name}」中提问…`
+  welcomeEl.classList.remove('hidden')
+  welcomeRecentDocs.innerHTML = ''
+  welcomeEmpty.classList.add('hidden')
 
   if (isAll) {
-    if (welcomeKbName) welcomeKbName.textContent = '跨库搜索'
-    if (welcomeDocCount) welcomeDocCount.textContent = '—'
-    if (welcomeConvCount) welcomeConvCount.textContent = '—'
-    if (welcomeAccessCount) welcomeAccessCount.textContent = '—'
-    welcomeSub.textContent = '将同时搜索你可访问的全部知识库'
-    welcomeEl.classList.remove('hidden')
+    welcomeSub.textContent = '同时在你能访问的所有知识库里查找，回答会注明来自哪份文档。跨库提问不保存为对话记录。'
+    document.getElementById('welcome-hints').style.display = 'none'
     convSection.classList.add('hidden')
     convSearchWrap.classList.add('hidden')
     sidebarConvs.classList.add('hidden')
     document.getElementById('new-conv-btn')?.classList.add('hidden')
     kbDocMap.clear()
-    setDashboardPlaceholder('跨库模式下请直接提问，结果会注明来源文档。', '跨库提问不保存为会话。')
     return
   }
 
-  if (welcomeKbName) welcomeKbName.textContent = kb.is_public ? '公开知识库' : '私有知识库'
-  if (welcomeDocCount) welcomeDocCount.textContent = kb.doc_count ?? 0
-  if (welcomeConvCount) welcomeConvCount.textContent = kb.conv_count ?? 0
-  if (welcomeAccessCount) welcomeAccessCount.textContent = kb.is_public ? '公开' : '受限'
-  welcomeEl.classList.remove('hidden')
-
-  const descPart = kb.description ? `${kb.description}` : ''
-  const statPart = kb.doc_count != null ? `${kb.doc_count} 份文档` : ''
-  const accessPart = kb.is_public ? '公开可访问' : '成员权限控制'
-  welcomeSub.textContent = [descPart, statPart, accessPart].filter(Boolean).join('　·　') || '暂无文档，请前往管理页上传'
+  const docCount = kb.doc_count ?? 0
+  const desc = kb.description?.trim()
+  welcomeSub.textContent = docCount
+    ? `${desc ? desc.replace(/[。.]$/, '') + '。' : ''}${docCount} 份文档可供检索，回答会标出依据的原文段落。`
+    : (desc || '')
+  if (!docCount) {
+    showWelcomeEmpty(`「${kb.name}」还没有文档，上传后就能在这里提问。`,
+      kb.can_write ? { href: `/manage.html?tab=docs&kb=${kb.id}`, label: '上传文档' } : null,
+      kb.can_write ? '' : '请联系知识库管理员上传文档。')
+  }
   renderWelcomeChips(kb)
-  loadDashboardDocs(kb.id)
+  loadWelcomeDocs(kb.id, docCount)
 
   // 加载文档名→ID 映射，供 source-ref 点击使用
   kbDocMap.clear()
@@ -382,68 +359,39 @@ async function selectKb(kb) {
   await loadConversations(kb.id)
 }
 
-/** 没有可展示的知识库内容时，替换首页两个面板里的"加载中…"占位 */
-function setDashboardPlaceholder(docsText, convsText) {
-  if (welcomeRecentDocs) welcomeRecentDocs.innerHTML = `<div class="dashboard-empty">${escHtml(docsText)}</div>`
-  if (welcomeRecentConvs) welcomeRecentConvs.innerHTML = `<div class="dashboard-empty">${escHtml(convsText)}</div>`
+/** 首页的空状态：一句说明，加一个操作按钮（有权限时）或一句补充说明 */
+function showWelcomeEmpty(text, action, note = '') {
+  welcomeEmpty.innerHTML = `
+    ${text ? `<p class="welcome-empty-text">${escHtml(text)}</p>` : ''}
+    ${action ? `<a class="btn btn-primary" href="${escHtml(action.href)}">${escHtml(action.label)}</a>` : ''}
+    ${note ? `<p class="welcome-empty-text">${escHtml(note)}</p>` : ''}`
+  welcomeEmpty.classList.remove('hidden')
 }
 
-async function loadDashboardDocs(kbId) {
-  if (!welcomeRecentDocs) return
-  welcomeRecentDocs.innerHTML = '<div class="dashboard-empty">加载文档中…</div>'
+/** 首页列出知识库里的文档名，点击直接预览；文档多时只列前几份 */
+async function loadWelcomeDocs(kbId, total) {
+  if (!total) return
+  const SHOW = 6
   try {
-    const res = await fetch(`/api/kbs/${kbId}/docs?limit=5&offset=0`, { headers: auth() })
-    if (!res.ok) throw new Error('加载失败')
+    const res = await fetch(`/api/kbs/${kbId}/docs?limit=${SHOW}&offset=0`, { headers: auth() })
+    if (!res.ok) return
     const data = await res.json()
+    if (currentKb?.id !== kbId) return   // 加载期间已切换到别的知识库
     const docs = Array.isArray(data) ? data : data.items
     welcomeRecentDocs.innerHTML = ''
-    if (!docs.length) {
-      welcomeRecentDocs.innerHTML = '<div class="dashboard-empty">这个知识库还没有文档。</div>'
-      return
-    }
-    docs.forEach(doc => {
+    docs.slice(0, SHOW).forEach(doc => {
       const item = document.createElement('button')
-      item.className = 'dashboard-list-item'
+      item.className = 'welcome-doc'
       item.type = 'button'
-      item.innerHTML = `
-        <span class="dashboard-list-icon">DOC</span>
-        <span class="dashboard-list-copy">
-          <span class="dashboard-list-title">${escHtml(doc.original_name)}</span>
-          <span class="dashboard-list-meta">${formatFileSize(doc.size)} · ${formatDashboardTime(doc.uploaded_at)}</span>
-        </span>
-        <span class="dashboard-list-arrow">›</span>
-      `
+      item.title = `预览 ${doc.original_name}`
+      item.innerHTML = `${ICONS.file}<span>${escHtml(doc.original_name)}</span>`
       item.addEventListener('click', () => openSrcPreview(doc.id, doc.original_name, 0))
       welcomeRecentDocs.appendChild(item)
     })
-  } catch {
-    welcomeRecentDocs.innerHTML = '<div class="dashboard-empty">文档加载失败。</div>'
-  }
-}
-
-function renderDashboardConversations() {
-  if (!welcomeRecentConvs) return
-  welcomeRecentConvs.innerHTML = ''
-  const recent = conversations.slice(0, 5)
-  if (!recent.length) {
-    welcomeRecentConvs.innerHTML = '<div class="dashboard-empty">还没有会话，先发起一个问题。</div>'
-    return
-  }
-  recent.forEach(conv => {
-    const item = document.createElement('button')
-    item.className = 'dashboard-list-item'
-    item.type = 'button'
-    item.innerHTML = `
-      <span class="dashboard-list-icon">${conv.is_pinned ? 'PIN' : 'AI'}</span>
-      <span class="dashboard-list-copy">
-        <span class="dashboard-list-title">${escHtml(conv.title)}</span>
-        <span class="dashboard-list-meta">${formatDashboardTime(conv.updated_at)}</span>
-      </span>
-      <span class="dashboard-list-arrow">›</span>
-    `
-    item.addEventListener('click', () => loadConversation(conv))
-    welcomeRecentConvs.appendChild(item)
-  })
+    if (total > SHOW) {
+      welcomeRecentDocs.insertAdjacentHTML('beforeend', `<span class="welcome-doc-more">等 ${total} 份</span>`)
+    }
+  } catch { /* 文档列表只是辅助信息，加载失败不打扰用户 */ }
 }
 
 function formatFileSize(bytes) {
@@ -451,11 +399,6 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function formatDashboardTime(ts) {
-  if (!ts) return '暂无更新时间'
-  return new Date(ts * 1000).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
 function startNewConversation() {
@@ -523,7 +466,7 @@ function renderKbHealth(data) {
     <div class="health-cards">
       ${card('文档', docs.total, docs.lastUploadedAt ? `最近更新 ${new Date(docs.lastUploadedAt * 1000).toLocaleDateString('zh-CN')}` : '还没有上传')}
       ${card(`近 ${data.days} 天提问`, qa.questions, qa.activeUsers ? `${qa.activeUsers} 人在用` : '还没有人提问')}
-      ${card('回答满意度', satisfaction, rated ? `👍 ${qa.positive} · 👎 ${qa.negative}` : '暂无评价')}
+      ${card('回答满意度', satisfaction, rated ? `${qa.positive} 个有帮助，${qa.negative} 个没帮助` : '暂无评价')}
       ${card('待补知识', gaps, gaps ? '没找到答案的问题' : '暂未发现', gaps ? 'health-card-warn' : '')}
     </div>
     <div class="health-section">
@@ -585,7 +528,7 @@ async function sendQuestion(question, { skipUserMsg = false } = {}) {
         responseText.innerHTML = '<span style="color:var(--muted)">（已停止）</span>'
       }
     } else {
-      responseText.innerHTML = `<span style="color:var(--red)">⚠️ ${escHtml(err.message)}</span>`
+      responseText.innerHTML = `<span class="msg-error">${ICONS.alert}${escHtml(err.message)}</span>`
       appendRetryBtn(row, question)
     }
     setLoading(false)
@@ -595,7 +538,7 @@ async function sendQuestion(question, { skipUserMsg = false } = {}) {
 function appendRetryBtn(row, question) {
   const btn = document.createElement('button')
   btn.className = 'msg-retry-btn'
-  btn.textContent = '↻ 重试'
+  btn.innerHTML = `${ICONS.retry}重试`
   btn.addEventListener('click', () => {
     row.remove()
     sendQuestion(question, { skipUserMsg: true })
@@ -662,12 +605,12 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
         }
         case 'done': {
           cursorEl.remove()
-          renderMd(responseText, responseText.dataset.raw ?? '', false)
+          renderMd(responseText, responseText.dataset.raw ?? '', false, { usedTools: !!toolsLog.querySelector('.tool-call') })
           if (Array.isArray(ev.messages)) history = [...history, ...ev.messages]
           updateHistoryCount()
           row.querySelector('.msg-meta-info').textContent = ev.context?.truncated
-            ? `${ev.turns} 轮检索 · 已使用最近上下文`
-            : `${ev.turns} 轮检索`
+            ? `检索 ${ev.turns} 轮，已带上最近的对话`
+            : `检索 ${ev.turns} 轮`
           if (copyBtn) copyBtn.classList.remove('hidden')
           setLoading(false)
           scrollBottom()
@@ -684,7 +627,7 @@ async function readSSE(response, { toolsLog, responseText, cursorEl, row, copyBt
         }
         case 'error': {
           cursorEl.remove()
-          responseText.innerHTML = `<span style="color:var(--red)">⚠️ ${escHtml(ev.message ?? '未知错误')}</span>`
+          responseText.innerHTML = `<span class="msg-error">${ICONS.alert}${escHtml(ev.message ?? '未知错误')}</span>`
           appendRetryBtn(row, question)
           setLoading(false)
           break
@@ -708,11 +651,6 @@ function appendAssistantSkeleton() {
   const row = document.createElement('div')
   row.className = 'msg-assistant'
 
-  // 头像
-  const avatar = document.createElement('div')
-  avatar.className = 'msg-ai-avatar'
-  avatar.textContent = 'AI'
-
   // 内容卡片
   const content = document.createElement('div')
   content.className = 'msg-ai-content'
@@ -734,25 +672,26 @@ function appendAssistantSkeleton() {
   const copyBtn = document.createElement('button')
   copyBtn.className = 'msg-copy-btn hidden'
   copyBtn.title = '复制回答'
-  copyBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="5" y="5" width="9" height="9" rx="1"/><path d="M3 11V3a1 1 0 0 1 1-1h8"/></svg>`
+  copyBtn.setAttribute('aria-label', '复制回答')
+  copyBtn.innerHTML = ICONS.copy
   copyBtn.addEventListener('click', () => {
     const text = responseText.dataset.raw ?? ''
     navigator.clipboard.writeText(text).then(() => {
-      copyBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><polyline points="2 8 6 12 14 4"/></svg>`
-      setTimeout(() => {
-        copyBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="5" y="5" width="9" height="9" rx="1"/><path d="M3 11V3a1 1 0 0 1 1-1h8"/></svg>`
-      }, 1500)
+      copyBtn.innerHTML = ICONS.check
+      setTimeout(() => { copyBtn.innerHTML = ICONS.copy }, 1500)
     })
   })
   const thumbUp = document.createElement('button')
   thumbUp.className = 'msg-feedback-btn hidden'
   thumbUp.title = '有帮助'
-  thumbUp.textContent = '👍'
+  thumbUp.setAttribute('aria-label', '有帮助')
+  thumbUp.innerHTML = ICONS.thumbUp
 
   const thumbDown = document.createElement('button')
   thumbDown.className = 'msg-feedback-btn hidden'
   thumbDown.title = '没帮助'
-  thumbDown.textContent = '👎'
+  thumbDown.setAttribute('aria-label', '没帮助')
+  thumbDown.innerHTML = ICONS.thumbDown
 
   function submitFeedback(rating, detail = {}) {
     const convId = row.dataset.conversationId
@@ -784,7 +723,7 @@ function appendAssistantSkeleton() {
   meta.append(metaInfo, copyBtn, thumbUp, thumbDown)
 
   content.append(toolsLog, responseText, meta, reasonPanel.el)
-  row.append(avatar, content)
+  row.append(content)
   messagesEl.appendChild(row)
   scrollBottom()
 
@@ -865,7 +804,7 @@ function addToolCall(container, name, input) {
   const statusSpan = document.createElement('span')
   statusSpan.className = 'tool-call-status tool-status-wait'
   statusSpan.textContent = '执行中'
-  summary.innerHTML = `<span class="tool-toggle">▶</span><span class="tool-call-label">🔍 ${escHtml(name)} ${summarizeInput(name, input)}</span>`
+  summary.innerHTML = `<span class="tool-toggle">${ICONS.chevron}</span><span class="tool-call-label">${escHtml(name)} ${summarizeInput(name, input)}</span>`
   summary.appendChild(statusSpan)
 
   const body = document.createElement('div')
@@ -905,7 +844,7 @@ function ensureMarked() {
  * 渲染完再找出形如 `文件名:行号` 的行内代码，变成可点击的出处。
  * streaming 为 true 时保留末尾的闪烁光标。
  */
-function renderMd(el, raw, streaming) {
+function renderMd(el, raw, streaming, { usedTools = false } = {}) {
   const cursor = el.querySelector('.cursor')
   ensureMarked()
 
@@ -942,31 +881,81 @@ function renderMd(el, raw, streaming) {
   el.innerHTML = html
   if (streaming && cursor) el.appendChild(cursor)
 
-  // source-ref 补标 + 点击跳转
-  el.querySelectorAll('code').forEach(c => {
-    const text = c.textContent ?? ''
-    const m = text.includes('://') ? null : text.trim().match(SOURCE_REF_RE)
+  decorateCitations(el, { streaming, usedTools })
+}
+
+/**
+ * 把回答里形如 `文件名:行号` 的出处换成编号 ①②，并在回答下方列出来源卡片。
+ * 同一处出处（同一文件同一行）重复出现时共用一个编号。点编号或卡片都会在右侧打开原文。
+ * 回答结束后如果一个出处都没有，而且确实检索过文档，就提示用户自己核对，
+ * 免得没有依据的回答看起来和有依据的一样可信。
+ */
+function decorateCitations(el, { streaming, usedTools }) {
+  const sources = []           // [{ key, name, line, doc }]
+  const indexByKey = new Map()
+
+  el.querySelectorAll('code, .source-ref').forEach(c => {
+    if (c.closest('pre')) return
+    const text = (c.textContent ?? '').trim()
+    const m = text.includes('://') ? null : text.match(SOURCE_REF_RE)
     if (!m) return
-    c.className = 'source-ref'
-    const basename = m[1].split(/[/\\]/).pop()?.toLowerCase() ?? ''
+    const basename = m[1].split(/[/\\]/).pop() ?? m[1]
+    const doc = kbDocMap.get(m[1].toLowerCase()) ?? kbDocMap.get(basename.toLowerCase())
+    const name = doc?.name ?? basename
     const line = Number(m[2])
-    const doc = kbDocMap.get(m[1].toLowerCase()) ?? kbDocMap.get(basename)
-    if (doc) {
-      // 存储文件名对用户没有意义，显示成原始文件名
-      if (basename !== doc.name.toLowerCase()) c.textContent = `${doc.name}:${text.trim().slice(m[1].length + 1)}`
-      c.dataset.docId = doc.id
-      c.title = '点击查看原文'
-      c.addEventListener('click', () => openSrcPreview(doc.id, doc.name, line))
-    } else {
-      c.addEventListener('click', () => showToast(`文档 "${m[1]}" 暂无预览`, 'error'))
+    const key = `${doc?.id ?? name}:${line}`
+    if (!indexByKey.has(key)) {
+      indexByKey.set(key, sources.length)
+      sources.push({ key, name, line, doc })
     }
+    const n = indexByKey.get(key) + 1
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'cite-num'
+    btn.dataset.cite = String(n)
+    btn.textContent = String(n)
+    btn.title = `${name} 第 ${line} 行`
+    btn.setAttribute('aria-label', `出处 ${n}：${name} 第 ${line} 行`)
+    c.replaceWith(btn)
   })
+
+  if (sources.length) {
+    const list = document.createElement('div')
+    list.className = 'cite-sources'
+    sources.forEach((src, i) => {
+      const card = document.createElement('button')
+      card.type = 'button'
+      card.className = 'cite-card' + (src.doc ? '' : ' is-missing')
+      card.dataset.cite = String(i + 1)
+      card.innerHTML = `<span class="cite-num">${i + 1}</span><span class="cite-card-name">${escHtml(src.name)}</span><span class="cite-card-loc">第 ${src.line} 行</span>`
+      card.title = src.doc ? '在右侧查看原文' : '这份文档暂时无法预览'
+      list.appendChild(card)
+    })
+    el.appendChild(list)
+  } else if (!streaming && usedTools) {
+    const raw = el.dataset.raw ?? ''
+    // 「没找到」类的回答本身就说明了没有依据，不再重复提示
+    if (raw.trim() && !/未找到|没有找到|找不到/.test(raw)) {
+      el.insertAdjacentHTML('beforeend',
+        `<div class="cite-missing">${ICONS.info}<span>这条回答没有标注具体出处，请展开上方的检索步骤，对照找到的原文核实。</span></div>`)
+    }
+  }
+
+  // 点击编号或卡片：高亮这一条出处，并在右侧打开原文
+  el.querySelectorAll('[data-cite]').forEach(node => node.addEventListener('click', () => {
+    const src = sources[Number(node.dataset.cite) - 1]
+    if (!src) return
+    if (!src.doc) { showToast(`「${src.name}」暂时无法预览`, 'error'); return }
+    document.querySelectorAll('.cite-num.is-active, .cite-card.is-active').forEach(x => x.classList.remove('is-active'))
+    el.querySelectorAll(`[data-cite="${node.dataset.cite}"]`).forEach(x => x.classList.add('is-active'))
+    openSrcPreview(src.doc.id, src.doc.name, src.line)
+  }))
 }
 
 /* ── 辅助 ─────────────────────────────────────────── */
 
-const SEND_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`
-const STOP_ICON = `<svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>`
+const SEND_ICON = ICONS.arrowUp
+const STOP_ICON = ICONS.stop
 
 function setLoading(val) {
   isLoading = val
@@ -976,11 +965,13 @@ function setLoading(val) {
     sendBtn.disabled = false
     sendBtn.classList.add('stop-mode')
     sendBtn.title = '停止生成'
+    sendBtn.setAttribute('aria-label', '停止生成')
     sendBtn.innerHTML = STOP_ICON
   } else {
     sendBtn.classList.remove('stop-mode')
     sendBtn.disabled = !currentKb || !llmOnline
     sendBtn.title = (currentKb && !llmOnline) ? '模型服务连接失败，无法发送' : '发送'
+    sendBtn.setAttribute('aria-label', '发送')
     sendBtn.innerHTML = SEND_ICON
   }
 }
@@ -1062,7 +1053,7 @@ function exportConversation() {
       }
       lines.push('## Assistant', '')
       if (toolCalls.length > 0) {
-        lines.push('<details>', `<summary>🔍 工具调用（共 ${toolCalls.length} 次）</summary>`, '')
+        lines.push('<details>', `<summary>工具调用（共 ${toolCalls.length} 次）</summary>`, '')
         for (const tc of toolCalls) {
           let inputStr = ''
           try { inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input) } catch { inputStr = String(tc.input) }
@@ -1114,7 +1105,6 @@ async function loadConversations(kbId, reset = true) {
     convHasMore   = data.hasMore
     convOffset    = data.nextOffset
     renderConversations()
-    renderDashboardConversations()
   } catch {
     if (reset) sidebarConvs.innerHTML = '<div class="no-kb-hint" style="color:var(--red)">加载失败</div>'
   } finally {
@@ -1189,14 +1179,11 @@ function appendConvItem(conv) {
   btn.innerHTML = `
     <input type="checkbox" class="conv-item-cb ${convBulkMode ? 'visible' : ''}"
            data-id="${conv.id}" ${isChecked ? 'checked' : ''} title="选择">
-    <span class="conv-item-icon">${isPinned
-      ? `<svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11" style="color:#fbbf24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`
-      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="11" height="11"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`
-    }</span>
+    ${isPinned ? `<span class="conv-item-icon" title="已收藏">${ICONS.star}</span>` : ''}
     <span class="conv-item-title">${escHtml(conv.title)}</span>
     <button class="conv-item-pin ${isPinned ? 'pinned' : ''}" data-id="${conv.id}"
-            title="${isPinned ? '取消收藏' : '收藏对话'}">★</button>
-    <button class="conv-item-del" data-id="${conv.id}" title="删除对话">×</button>
+            title="${isPinned ? '取消收藏' : '收藏对话'}" aria-label="${isPinned ? '取消收藏' : '收藏对话'}">${ICONS.star}</button>
+    <button class="conv-item-del" data-id="${conv.id}" title="删除对话" aria-label="删除对话">${ICONS.x}</button>
   `
     btn.addEventListener('click', e => {
       if (e.target.closest('.conv-item-del') || e.target.closest('.conv-item-pin')) return
@@ -1276,15 +1263,19 @@ async function loadConversation(conv) {
 
 /** 打开历史对话时，用保存的消息重新画出聊天记录（只画用户问题和最终回答，工具调用过程不重放） */
 function rebuildChatUI(msgs) {
+  let usedTools = false   // 这个问题的回答过程中是否检索过文档
   for (let i = 0; i < msgs.length; i++) {
     const msg = msgs[i]
     if (msg.role === 'user' && msg.content) {
       appendUserMessage(msg.content)
+      usedTools = false
     } else if (msg.role === 'assistant') {
+      if (msg.tool_calls?.length) usedTools = true
       if (msg.content) {
         const { responseText, cursorEl, copyBtn } = appendAssistantSkeleton()
         cursorEl.remove()
-        renderMd(responseText, msg.content, false)
+        responseText.dataset.raw = msg.content
+        renderMd(responseText, msg.content, false, { usedTools })
         if (copyBtn) copyBtn.classList.remove('hidden')
       }
       // 只有 tool_calls 的消息不单独显示，需要时在后面的 tool_result 里展示
@@ -1644,12 +1635,12 @@ convBulkDeleteBtn.addEventListener('click', async () => {
 function applyTheme(dark) {
   if (dark) {
     document.documentElement.setAttribute('data-theme', 'dark')
-    themeToggleBtn.textContent = '☀️'
+    themeToggleBtn.innerHTML = ICONS.sun
     themeToggleBtn.title = '切换为浅色模式'
     localStorage.setItem('kb_theme', 'dark')
   } else {
     document.documentElement.removeAttribute('data-theme')
-    themeToggleBtn.textContent = '🌙'
+    themeToggleBtn.innerHTML = ICONS.moon
     themeToggleBtn.title = '切换为深色模式'
     localStorage.setItem('kb_theme', 'light')
   }
@@ -1763,9 +1754,16 @@ document.addEventListener('keydown', e => {
 const srcModal    = document.getElementById('src-modal')
 const srcTitle    = document.getElementById('src-modal-title')
 const srcContent  = document.getElementById('src-modal-content')
+const srcSub      = document.getElementById('src-modal-sub')
 
-document.getElementById('src-modal-close').addEventListener('click', () => srcModal.classList.add('hidden'))
-srcModal.addEventListener('click', e => { if (e.target === srcModal) srcModal.classList.add('hidden') })
+/** 关闭原文面板时，同时取消回答里引用编号的高亮 */
+function closeSrcPreview() {
+  srcModal.classList.add('hidden')
+  document.querySelectorAll('.cite-num.is-active, .cite-card.is-active').forEach(x => x.classList.remove('is-active'))
+}
+
+document.getElementById('src-modal-close').addEventListener('click', closeSrcPreview)
+srcModal.addEventListener('click', e => { if (e.target === srcModal) closeSrcPreview() })
 
 /**
  * 打开出处预览：向服务端要被引用行附近的内容（?line=N），而不是整篇文档，
@@ -1773,6 +1771,7 @@ srcModal.addEventListener('click', e => { if (e.target === srcModal) srcModal.cl
  */
 async function openSrcPreview(docId, label, targetLine) {
   srcTitle.textContent = label
+  srcSub.textContent = targetLine > 0 ? `已定位到被引用的第 ${targetLine} 行` : ''
   srcContent.textContent = '加载中…'
   srcModal.classList.remove('hidden')
 
@@ -1793,8 +1792,10 @@ async function openSrcPreview(docId, label, targetLine) {
     if (startLine > 1) frag.appendChild(Object.assign(document.createElement('span'), { className: 'src-gap', textContent: `…… 前 ${startLine - 1} 行未显示\n` }))
     lines.forEach((ln, i) => {
       const span = document.createElement('span')
-      span.textContent = ln + '\n'
-      if (i + startLine === targetLine) { span.className = 'src-line-highlight'; target = span }
+      const isTarget = i + startLine === targetLine
+      // 高亮行是块级元素，自带换行，不再加 \n，否则下面会多出一个空行
+      span.textContent = isTarget ? ln : ln + '\n'
+      if (isTarget) { span.className = 'src-line-highlight'; target = span }
       frag.appendChild(span)
     })
     if (data.truncated && data.truncatedHint) frag.appendChild(Object.assign(document.createElement('span'), { className: 'src-gap', textContent: `\n…… ${data.truncatedHint}` }))

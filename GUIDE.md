@@ -79,7 +79,7 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 ### 第 6 步：前端（按需）
 
-`public/chat.js` 和 `public/manage.js` 开头都有文件结构说明。重点看 chat.js 的 `readSSE()`（怎么接收流式回答）和 `renderMd()`（怎么安全地渲染 Markdown、怎么把出处变成链接）。
+`public/chat.js` 和 `public/manage.js` 开头都有文件结构说明。重点看 chat.js 的 `readSSE()`（怎么接收流式回答）、`renderMd()`（怎么安全地渲染 Markdown）和 `decorateCitations()`（怎么把出处变成编号和来源卡片）。
 
 ### 第 7 步：其余功能（按兴趣）
 
@@ -122,8 +122,8 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 ④ 服务端收尾  保存新消息、给新对话起标题、记审计日志 qa.ask，发送 done 事件
           │
 ⑤ 浏览器  readSSE()  逐个处理 text / tool_call / tool_result / done 事件
-          renderMd()  渲染回答，把 `员工手册.md:42` 变成可点击的出处
-          点击出处 → openSrcPreview() → GET …/preview?line=42 → 高亮第 42 行
+          renderMd()  渲染回答，decorateCitations() 把 `员工手册.md:42` 变成编号 ① 和来源卡片
+          点击编号 → openSrcPreview() → GET …/preview?line=42 → 右侧面板高亮第 42 行
 ```
 
 **自己动手验证**：

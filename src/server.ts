@@ -848,7 +848,6 @@ const NODE_MODULES_DIR = path.join(__dirname, '../node_modules')
 const VENDOR_SCRIPTS: Record<string, string> = {
   'marked.min.js': 'marked/lib/marked.umd.js',
   'purify.min.js': 'dompurify/dist/purify.min.js',
-  'p5.min.js':     'p5/lib/p5.min.js',
 }
 for (const [name, rel] of Object.entries(VENDOR_SCRIPTS)) {
   app.get(`/vendor/${name}`, (_req, res) => res.sendFile(path.join(NODE_MODULES_DIR, rel)))
