@@ -175,6 +175,25 @@ test('shows text document history with a diff and restores an old version', asyn
   expect(errors).toEqual([])
 })
 
+test('document search shows HTML inside a document as text instead of running it', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  const kb = await (await request.post('/api/kbs', { headers: auth(), data: { name: '搜索转义' } })).json()
+  await request.post(`/api/kbs/${kb.id}/docs/text`, { headers: auth(), data: { title: '出差规定', content: '出差补贴 <img src=x onerror="window.__xss=1"> 每天 100 元。' } })
+
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=docs]')
+  await page.selectOption('#doc-kb-select', String(kb.id))
+  await page.fill('#doc-search', '出差补贴')
+
+  const snippet = page.locator('.doc-search-result .doc-snippet')
+  await expect(snippet).toContainText('<img src=x onerror="window.__xss=1">')
+  await expect(snippet.locator('mark')).toHaveText('出差补贴')
+  await expect(snippet.locator('img')).toHaveCount(0)
+  expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined()
+  expect(errors).toEqual([])
+})
+
 test('uploads a photo of a paper document and finds it through OCR', async ({ page, request }) => {
   const errors = trackErrors(page)
   const kb = await (await request.post('/api/kbs', { headers: auth(), data: { name: '扫描件测试' } })).json()
