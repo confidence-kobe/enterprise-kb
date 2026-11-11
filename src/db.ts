@@ -436,8 +436,19 @@ export function createUser(username: string, password: string, role: 'admin' | '
   return getUserById(result.lastInsertRowid as number)!
 }
 
-export function deleteUser(id: number): void {
-  db.prepare('DELETE FROM users WHERE id = ?').run(id)
+/**
+ * 删除用户。知识库必须有主人（数据库外键），所以先把他名下的知识库转给 transferKbsTo
+ * （通常是执行删除的管理员），再删人；新主人原来的成员记录随之去掉。返回转移的知识库数。
+ */
+export function deleteUser(id: number, transferKbsTo: number): number {
+  return db.transaction(() => {
+    const kbIds = (db.prepare('SELECT id FROM knowledge_bases WHERE owner_id = ?').all(id) as { id: number }[]).map(r => r.id)
+    const removeAccess = db.prepare('DELETE FROM kb_access WHERE kb_id = ? AND user_id = ?')
+    for (const kbId of kbIds) removeAccess.run(kbId, transferKbsTo)
+    db.prepare('UPDATE knowledge_bases SET owner_id = ? WHERE owner_id = ?').run(transferKbsTo, id)
+    db.prepare('DELETE FROM users WHERE id = ?').run(id)
+    return kbIds.length
+  })()
 }
 
 // ── 知识库操作 ────────────────────────────────────────

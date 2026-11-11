@@ -1213,8 +1213,11 @@ app.get('/api/kbs/:id/docs', requireAuth, (req: AuthRequest, res) => {
   if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
     res.status(403).json({ error: '无权限' }); return
   }
-  const limit  = req.query.limit  ? Math.min(Number(req.query.limit),  200) : undefined
-  const offset = req.query.offset ? Number(req.query.offset) : undefined
+  // 参数不是正整数时按默认值处理，不让非法值传进 SQL 导致 500
+  const limitRaw  = Number(req.query.limit)
+  const offsetRaw = Number(req.query.offset)
+  const limit  = req.query.limit != null ? Math.min(Number.isInteger(limitRaw) && limitRaw > 0 ? limitRaw : 50, 200) : undefined
+  const offset = Number.isInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : undefined
   const total  = countDocs(kbId)
   const items  = limit != null
     ? listDocsWithCounts(kbId, limit, offset ?? 0).map(doc => publicDoc(doc, kb, req.user))
@@ -2187,8 +2190,14 @@ app.post('/api/admin/users', requireAdmin, (req, res) => {
   const { username, password, role } = req.body as {
     username: string; password: string; role?: 'admin' | 'user'
   }
-  if (!username?.trim() || !password) {
+  if (typeof username !== 'string' || !username.trim() || typeof password !== 'string' || !password) {
     res.status(400).json({ error: '用户名和密码不能为空' }); return
+  }
+  if (password.length < 6) {
+    res.status(400).json({ error: '密码至少 6 位' }); return
+  }
+  if (role != null && role !== 'admin' && role !== 'user') {
+    res.status(400).json({ error: '角色值无效' }); return
   }
   if (getUserByUsername(username)) {
     res.status(409).json({ error: '用户名已存在' }); return
@@ -2207,12 +2216,14 @@ app.delete('/api/admin/users/:id', requireAdmin, (req: AuthRequest, res) => {
     res.status(400).json({ error: '不能删除自己' }); return
   }
   const target = getUserById(id)
-  deleteUser(id)
+  if (!target) { res.status(404).json({ error: '用户不存在' }); return }
+  // 他名下的知识库转给执行删除的管理员，文档和对话都保留
+  const transferredKbs = deleteUser(id, req.user!.userId)
   audit(req, 'admin.user_delete', 'user', {
     entityId: id,
-    detail: { username: target?.username ?? null },
+    detail: { username: target.username, transferredKbs },
   })
-  res.json({ ok: true })
+  res.json({ ok: true, transferredKbs })
 })
 
 app.patch('/api/admin/users/:id/role', requireAdmin, (req: AuthRequest, res) => {

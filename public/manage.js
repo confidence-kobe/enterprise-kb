@@ -531,7 +531,8 @@ async function searchDocContent(q) {
     for (const r of results) {
       const item = document.createElement('div')
       item.className = 'doc-item doc-search-result'
-      const snippet = r.snippet.replace(/>>>/g, '<mark>').replace(/<<</g, '</mark>')
+      // 片段是文档原文，必须先转义再把 >>> <<< 高亮标记换成 <mark>，否则文档里的 HTML 会被执行
+      const snippet = escHtml(r.snippet).replace(/&gt;&gt;&gt;/g, '<mark>').replace(/&lt;&lt;&lt;/g, '</mark>')
       item.innerHTML = `
         <span class="doc-name" title="${escHtml(r.original_name)}">${escHtml(r.original_name)}</span>
         <span class="doc-size" style="color:var(--light);font-size:11px">行 ${r.chunk_line}</span>
@@ -985,8 +986,8 @@ async function previewDoc(docId, originalName, summary) {
       relatedPane.classList.add('hidden')
     } else {
       relatedEl.innerHTML = data.items.map(item => `
-        <div class="related-doc-item" data-doc-id="${item.doc_id}" title="${item.original_name}">
-          <span class="related-doc-name">${item.original_name}</span>
+        <div class="related-doc-item" data-doc-id="${Number(item.doc_id)}" title="${escHtml(item.original_name)}">
+          <span class="related-doc-name">${escHtml(item.original_name)}</span>
           <span class="related-doc-score">${Math.round(item.similarity * 100)}%</span>
         </div>
       `).join('')
@@ -1169,10 +1170,16 @@ async function loadUsers() {
 }
 
 async function deleteUser(id, name) {
-  if (!confirm(`确认删除用户「${name}」？该用户的数据将保留但无法登录。`)) return
+  if (!confirm(`确认删除用户「${name}」？\n他将无法登录，API 密钥同时作废；他创建的知识库会转到你名下，文档和对话都保留。`)) return
   const res = await fetch(`/api/admin/users/${id}`, { method: 'DELETE', headers: auth() })
-  if (res.ok) { showToast('用户已删除', 'success'); loadUsers() }
-  else { showToast('删除失败', 'error') }
+  const data = await res.json().catch(() => ({}))
+  if (res.ok) {
+    showToast(data.transferredKbs ? `用户已删除，${data.transferredKbs} 个知识库已转到你名下` : '用户已删除', 'success')
+    loadUsers()
+    if (data.transferredKbs) loadKbs()
+  } else {
+    showToast(data.error ?? '删除失败', 'error')
+  }
 }
 
 function initUserModal() {

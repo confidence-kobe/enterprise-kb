@@ -1436,3 +1436,49 @@ describe('api keys and MCP', () => {
     expect(batch.body).toEqual([{ jsonrpc: '2.0', id: 1, result: {} }])
   })
 })
+
+describe('代码审计修复', () => {
+  it('删除名下有知识库的用户时，知识库转给执行删除的管理员', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    const created = await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: 'leaver', password: 'Leaver@123' }).expect(201)
+    const leaver = await login('leaver', 'Leaver@123')
+    const leaverAuth = { Authorization: `Bearer ${leaver.token}` }
+    const kb = await request(app).post('/api/kbs').set(leaverAuth).send({ name: '离职员工的库' }).expect(201)
+    await request(app).post(`/api/kbs/${kb.body.id}/docs/text`).set(leaverAuth)
+      .send({ title: '交接', content: '交接说明' }).expect(201)
+    // 管理员原本就是成员：转移后不应留下重复的成员记录
+    await request(app).post(`/api/kbs/${kb.body.id}/members`).set(leaverAuth).send({ username: 'admin' }).expect(201)
+
+    const del = await request(app).delete(`/api/admin/users/${created.body.id}`).set(adminAuth).expect(200)
+    expect(del.body.transferredKbs).toBe(1)
+
+    const moved = await request(app).get(`/api/kbs/${kb.body.id}`).set(adminAuth).expect(200)
+    expect(moved.body.owner_id).toBe(admin.user.id)
+    const docs = await request(app).get(`/api/kbs/${kb.body.id}/docs`).set(adminAuth).expect(200)
+    expect(docs.body).toHaveLength(1)
+    const members = await request(app).get(`/api/kbs/${kb.body.id}/members`).set(adminAuth).expect(200)
+    expect(members.body).toEqual([])
+
+    await request(app).delete(`/api/admin/users/${created.body.id}`).set(adminAuth).expect(404)
+  })
+
+  it('新建用户校验密码长度和角色', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    await request(app).post('/api/admin/users').set(adminAuth).send({ username: 'weak', password: 'x' }).expect(400)
+    await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: 'badrole', password: 'Strong@123', role: 'root' }).expect(400)
+    await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: 123, password: 'Strong@123' }).expect(400)
+  })
+
+  it('文档列表的分页参数不合法时按默认值处理', async () => {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    const kb = await request(app).post('/api/kbs').set(adminAuth).send({ name: '分页参数' }).expect(201)
+    const res = await request(app).get(`/api/kbs/${kb.body.id}/docs?limit=abc&offset=-3`).set(adminAuth).expect(200)
+    expect(res.body).toMatchObject({ items: [], total: 0, hasMore: false })
+  })
+})
