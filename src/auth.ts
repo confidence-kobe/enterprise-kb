@@ -44,12 +44,28 @@ export function verifyToken(token: string): JwtPayload {
   return jwt.verify(token, JWT_SECRET) as JwtPayload
 }
 
-export function verifyPassword(plain: string, hash: string): boolean {
-  return bcrypt.compareSync(plain, hash)
+/**
+ * 密码校验和哈希都用异步版：bcrypt 故意算得慢（约几十毫秒），同步版会在这段时间里卡住整个服务，
+ * 多人同时登录时其他请求都要排队。
+ */
+export function verifyPassword(plain: string, hash: string): Promise<boolean> {
+  return bcrypt.compare(plain, hash)
 }
 
-export function hashPassword(plain: string): string {
-  return bcrypt.hashSync(plain, 10)
+export function hashPassword(plain: string): Promise<string> {
+  return bcrypt.hash(plain, 10)
+}
+
+/**
+ * 用户名不存在时拿来比对的假哈希。没有它，"用户不存在"会比"密码错误"快几十毫秒返回，
+ * 别人能据此试探出哪些用户名存在。启动时生成一次，原文是随机数，不可能被比对成功。
+ */
+const DUMMY_HASH = bcrypt.hashSync(randomBytes(16).toString('hex'), 10)
+
+/** 按用户名登录时的密码校验：用户不存在也花同样的时间，返回 false */
+export async function verifyLogin(plain: string, hash: string | undefined): Promise<boolean> {
+  const ok = await verifyPassword(plain, hash ?? DUMMY_HASH)
+  return ok && hash !== undefined
 }
 
 // ── 接口密钥 ──────────────────────────────────────────

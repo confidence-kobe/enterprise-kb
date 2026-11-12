@@ -440,6 +440,31 @@ describe('knowledge base access control', () => {
     expect(around.body.content.split('\n')[30]).toBe('第 2500 行：员工手册条款内容')
     expect(around.body.truncatedHint).toMatch(/显示第 2470–\d+ 行（共 3000 行）/)
 
+    // 改成边读边找后，结果和原来整份读进内存再 split('\n') 的做法逐字一致
+    // （带 \r 的行、末尾换行、超长的行、行号超出末尾都要一样）
+    const oldPreview = (text: string, line: number) => {
+      const lines = text.split('\n')
+      const startLine = Math.max(1, Math.min(line, lines.length) - 30)
+      let end = startLine - 1
+      let chars = 0
+      while (end < lines.length && (end === startLine - 1 || chars + lines[end].length < 10_000)) {
+        chars += lines[end].length + 1
+        end++
+      }
+      return { startLine, content: lines.slice(startLine - 1, end).join('\n'), hint: `显示第 ${startLine}–${end} 行（共 ${lines.length} 行）` }
+    }
+    const tricky = Array.from({ length: 4000 }, (_, i) =>
+      i % 7 === 0 ? `第 ${i + 1} 行\r` : i % 500 === 0 ? '长'.repeat(3000) : `第 ${i + 1} 行：报销与出差规定`).join('\n') + '\n'
+    const [trickyDoc] = (await request(app).post(`/api/kbs/${kbId}/docs`).set(auth)
+      .attach('files', Buffer.from(tricky, 'utf-8'), 'tricky.txt').expect(201)).body
+    for (const line of [1, 31, 500, 1001, 2500, 3999, 4000, 4001, 99999]) {
+      const res = await request(app).get(`/api/kbs/${kbId}/docs/${trickyDoc.id}/preview`).query({ line }).set(auth).expect(200)
+      const expected = oldPreview(tricky, line)
+      expect(res.body.startLine, `line=${line}`).toBe(expected.startLine)
+      expect(res.body.content, `line=${line}`).toBe(expected.content)
+      expect(res.body.truncatedHint, `line=${line}`).toBe(`内容过长，${expected.hint}`)
+    }
+
     // 短文档忽略行号，照常返回全文
     const [short] = (await request(app).post(`/api/kbs/${kbId}/docs`).set(auth)
       .attach('files', Buffer.from('一\n二\n三', 'utf-8'), 'short.md').expect(201)).body
@@ -1434,6 +1459,40 @@ describe('api keys and MCP', () => {
     const batch = await request(app).post('/mcp').set('Authorization', `Bearer ${key}`)
       .send([{ jsonrpc: '2.0', id: 1, method: 'ping' }, { jsonrpc: '2.0', method: 'notifications/initialized' }])
     expect(batch.body).toEqual([{ jsonrpc: '2.0', id: 1, result: {} }])
+  })
+})
+
+describe('安全加固', () => {
+  it('不存在的用户名和错误密码一样慢，参数不是字符串时返回 400', async () => {
+    const time = async (body: object) => {
+      const t = performance.now()
+      await request(app).post('/api/auth/login').send(body).expect(401)
+      return performance.now() - t
+    }
+    // 先各跑一次预热
+    await time({ username: 'admin', password: 'wrong-password' })
+    await time({ username: 'nobody-here', password: 'wrong-password' })
+    const wrongPassword = await time({ username: 'admin', password: 'wrong-password' })
+    const noSuchUser    = await time({ username: 'nobody-here', password: 'wrong-password' })
+    // 修复前不存在的用户几乎立即返回（不到 1 毫秒），错误密码要做一次 bcrypt 比对
+    expect(noSuchUser).toBeGreaterThan(wrongPassword / 3)
+
+    await request(app).post('/api/auth/login').send({ username: 'admin', password: ['Admin@123'] }).expect(400)
+    await request(app).post('/api/auth/login').send({ username: { $ne: 1 }, password: 'x' }).expect(400)
+    const admin = await login('admin', 'Admin@123')
+    const auth = { Authorization: `Bearer ${admin.token}` }
+    await request(app).patch('/api/me/password').set(auth).send({ currentPassword: 'Admin@123', newPassword: 1234567 }).expect(400)
+    await request(app).post(`/api/admin/users/${admin.user.id}/reset-password`).set(auth).send({ newPassword: 1234567 }).expect(400)
+  })
+
+  it('过期的限速计数会被清掉', async () => {
+    const { sweepExpired } = await import('../src/server.ts')
+    const map = new Map<string, { count: number; resetAt: number }>([
+      ['old', { count: 3, resetAt: 1000 }],
+      ['live', { count: 1, resetAt: 5000 }],
+    ])
+    sweepExpired(map, 2000)
+    expect([...map.keys()]).toEqual(['live'])
   })
 })
 
