@@ -788,7 +788,7 @@ Permissions-Policy: camera=(), microphone=(), geolocation=()
 ### 密码存储
 
 ```typescript
-bcrypt.hashSync(password, 10)  // cost factor 10，自带 salt
+await bcrypt.hash(password, 10)  // cost factor 10，自带 salt；用异步版，不卡住其他请求
 ```
 
 ### 依赖漏洞门禁

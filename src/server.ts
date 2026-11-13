@@ -48,7 +48,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
 import { chunkDocument } from './documentChunker.js'
-import { requireAuth, requireAdmin, signToken, verifyPassword, hashPassword, generateApiKey } from './auth.js'
+import { requireAuth, requireAdmin, signToken, verifyPassword, verifyLogin, hashPassword, generateApiKey } from './auth.js'
 import type { AuthRequest } from './auth.js'
 import { LLMExecutor } from './executor.js'
 import { ALL_TOOLS, collectKbStats, scopeForKbPath, searchAcrossKbs } from './tools.js'
@@ -919,16 +919,22 @@ function qaRateLimit(req: AuthRequest, res: Response, next: NextFunction): void 
   next()
 }
 
+/** 删掉已过期的计数，否则每个新 IP + 用户名组合都会在内存里留一条，长期运行越积越多 */
+export function sweepExpired(map: Map<unknown, { resetAt: number }>, now = Date.now()): void {
+  for (const [key, state] of map) if (state.resetAt <= now) map.delete(key)
+}
+setInterval(() => { sweepExpired(loginAttempts); sweepExpired(qaAttempts) }, 60_000).unref()
+
 // ── 认证路由 ──────────────────────────────────────────
 
-app.post('/api/auth/login', loginRateLimit, (req, res) => {
-  const { username, password } = req.body as { username: string; password: string }
-  if (!username || !password) {
+app.post('/api/auth/login', loginRateLimit, async (req, res) => {
+  const { username, password } = req.body as { username: unknown; password: unknown }
+  if (!username || !password || typeof username !== 'string' || typeof password !== 'string') {
     res.status(400).json({ error: '用户名和密码不能为空' }); return
   }
 
   const user = getUserByUsername(username)
-  if (!user || !verifyPassword(password, user.password_hash)) {
+  if (!await verifyLogin(password, user?.password_hash) || !user) {
     audit(req, 'auth.login_failed', 'auth', {
       userId: user?.id ?? null,
       username: username || null,
@@ -946,11 +952,11 @@ app.get('/api/me', requireAuth, (req: AuthRequest, res) => {
   res.json(req.user)
 })
 
-app.patch('/api/me/password', requireAuth, (req: AuthRequest, res) => {
+app.patch('/api/me/password', requireAuth, async (req: AuthRequest, res) => {
   const { currentPassword, newPassword } = req.body as {
     currentPassword: string; newPassword: string
   }
-  if (!currentPassword || !newPassword) {
+  if (!currentPassword || !newPassword || typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
     res.status(400).json({ error: '请填写当前密码和新密码' }); return
   }
   if (newPassword.length < 6) {
@@ -958,11 +964,11 @@ app.patch('/api/me/password', requireAuth, (req: AuthRequest, res) => {
   }
 
   const user = getUserById(req.user!.userId)
-  if (!user || !verifyPassword(currentPassword, user.password_hash)) {
+  if (!user || !await verifyPassword(currentPassword, user.password_hash)) {
     res.status(401).json({ error: '当前密码错误' }); return
   }
 
-  updateUserPassword(req.user!.userId, hashPassword(newPassword))
+  updateUserPassword(req.user!.userId, await hashPassword(newPassword))
   audit(req, 'user.password_changed', 'user', { entityId: req.user!.userId })
   // 改密会使所有旧 Token 失效（含其他设备）；为当前会话签发新 Token
   const updated = getUserById(req.user!.userId)!
@@ -1436,7 +1442,53 @@ function docTextFile(kbId: number, doc: Document): { readPath: string; origExt: 
     : { readPath: path.join(kbDir, doc.filename), origExt, displayExt: origExt, extracted }
 }
 
-app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res) => {
+/**
+ * 按行读文件，取第 line 行附近的内容：前面留 PREVIEW_LINES_BEFORE 行，总长不超过 PREVIEW_MAX_CHARS。
+ * 边读边丢，内存里只留要返回的几十行，不会把几十 MB 的文件整个读进来；读完是为了数出总行数。
+ * line 超过总行数时，和以前一样显示文件末尾。
+ */
+async function readLinesAround(filePath: string, line: number): Promise<{ startLine: number; endLine: number; totalLines: number; content: string }> {
+  /** 还没读到目标行时，最近读到的 PREVIEW_LINES_BEFORE + 1 行（含当前行） */
+  const recent: string[] = []
+  const picked: string[] = []
+  let startLine = 0
+  let chars = 0
+  let full = false
+  let n = 0
+  // 第一行总要显示；之后的行放得下才放，放不下就停（后面的行只计数）
+  const take = (text: string) => {
+    if (full) return
+    if (picked.length > 0 && chars + text.length >= PREVIEW_MAX_CHARS) { full = true; return }
+    picked.push(text)
+    chars += text.length + 1
+  }
+  const onLine = (text: string) => {
+    n++
+    if (startLine) { take(text); return }
+    recent.push(text)
+    if (recent.length > PREVIEW_LINES_BEFORE + 1) recent.shift()
+    if (n === line) {
+      startLine = n - recent.length + 1
+      recent.forEach(take)
+    }
+  }
+  // 按 '\n' 切分，行号和索引、Read 工具用的 split('\n') 完全一致（包括 '\r' 留在行尾、末尾换行后算一个空行）
+  let rest = ''
+  for await (const chunk of fs.createReadStream(filePath, { encoding: 'utf-8' })) {
+    const parts = (rest + chunk).split('\n')
+    rest = parts.pop()!
+    parts.forEach(onLine)
+  }
+  onLine(rest)
+  if (!startLine) {
+    // 目标行超出文件末尾：显示最后几行
+    startLine = n - recent.length + 1
+    recent.forEach(take)
+  }
+  return { startLine, endLine: startLine + picked.length - 1, totalLines: n, content: picked.join('\n') }
+}
+
+app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, async (req: AuthRequest, res) => {
   const kbId  = Number(req.params.id)
   const docId = Number(req.params.docId)
   if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
@@ -1457,18 +1509,11 @@ app.get('/api/kbs/:id/docs/:docId/preview', requireAuth, (req: AuthRequest, res)
   const line = Number(req.query.line)
   // 引用跳转：长文档里被引用的行不在开头时，返回那一行附近的内容
   if (Number.isInteger(line) && line > 0 && totalBytes > PREVIEW_MAX_CHARS * 3 && totalBytes <= PREVIEW_AROUND_MAX_BYTES) {
-    const lines = fs.readFileSync(readPath, 'utf-8').split('\n')
-    const startLine = Math.max(1, Math.min(line, lines.length) - PREVIEW_LINES_BEFORE)
-    let end = startLine - 1
-    let chars = 0
-    while (end < lines.length && (end === startLine - 1 || chars + lines[end].length < PREVIEW_MAX_CHARS)) {
-      chars += lines[end].length + 1
-      end++
-    }
+    const { startLine, endLine, totalLines, content } = await readLinesAround(readPath, line)
     res.json({
       filename: doc.original_name, ext: origExt, displayExt, totalBytes,
-      content: lines.slice(startLine - 1, end).join('\n'), startLine, truncated: true,
-      truncatedHint: `内容过长，显示第 ${startLine}–${end} 行（共 ${lines.length} 行）`,
+      content, startLine, truncated: true,
+      truncatedHint: `内容过长，显示第 ${startLine}–${endLine} 行（共 ${totalLines} 行）`,
     })
     return
   }
@@ -2240,14 +2285,14 @@ app.patch('/api/admin/users/:id/role', requireAdmin, (req: AuthRequest, res) => 
   res.json({ ok: true })
 })
 
-app.post('/api/admin/users/:id/reset-password', requireAdmin, (req, res) => {
+app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) => {
   const id = Number(req.params.id)
-  const { newPassword } = req.body as { newPassword: string }
-  if (!newPassword || newPassword.length < 6) {
+  const { newPassword } = req.body as { newPassword: unknown }
+  if (typeof newPassword !== 'string' || newPassword.length < 6) {
     res.status(400).json({ error: '新密码至少 6 位' }); return
   }
   if (!getUserById(id)) { res.status(404).json({ error: '用户不存在' }); return }
-  updateUserPassword(id, hashPassword(newPassword))
+  updateUserPassword(id, await hashPassword(newPassword))
   audit(req, 'admin.user_password_reset', 'user', { entityId: id })
   res.json({ ok: true })
 })
