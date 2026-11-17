@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import request from 'supertest'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Express } from 'express'
 import { addDocVersion, countDocVersions, createConversation, insertMessages, isDocIndexed, MAX_DOC_VERSIONS, removeDocFromIndex } from '../src/db.ts'
 
@@ -1408,6 +1408,58 @@ describe('待补知识的处理状态', () => {
     expect(isApiKeyAllowed('GET', '/api/gaps')).toBe(true)
   })
 
+  it('重新验证：用模型重问一遍并记下结果，不建对话、不新增缺口', async () => {
+    const { alice, bob, aliceKb, ask } = await setup()
+    ask(alice.id, aliceKb, '年假怎么算')
+    const { LLMExecutor } = await import('../src/executor.ts')
+    const run = vi.spyOn(LLMExecutor.prototype, 'run')
+    const verify = (body: object, who = alice.auth) => request(app).post('/api/gaps/verify').set(who).send(body)
+    const body = { kbId: aliceKb, question: '年假怎么算' }
+    const gaps = async () => (await request(app).get('/api/gaps').set(alice.auth).query({ status: 'all' }).expect(200)).body
+    const conversations = async () => (await request(app).get(`/api/kbs/${aliceKb}/conversations`).set(alice.auth).expect(200)).body
+
+    try {
+      const before = await gaps()
+      const convsBefore = await conversations()
+      expect(before.items[0].check).toBeNull()
+
+      // 能答上：模型给出了回答
+      run.mockResolvedValue({ response: '年假每年 5 天，见 `请假制度.md:3`', turns: 2, messages: [] })
+      const ok = await verify(body).expect(200)
+      expect(ok.body).toMatchObject({ answerable: true, answer: expect.stringContaining('5 天') })
+      expect(run.mock.calls[0][0]).toBe('年假怎么算')
+      expect((await gaps()).items[0].check).toMatchObject({ answerable: true, checked_by: expect.stringMatching(/^alice_/) })
+
+      // 仍答不上：模型说未找到。已补上的缺口不会因为验证失败被弹回待处理，次数也不增加
+      await request(app).put('/api/gaps/status').set(alice.auth).send({ ...body, status: 'resolved' }).expect(200)
+      run.mockResolvedValue({ response: '抱歉，知识库中未找到相关内容。', turns: 1, messages: [] })
+      expect((await verify(body).expect(200)).body.answerable).toBe(false)
+      const after = await gaps()
+      expect(after.items[0]).toMatchObject({ status: 'resolved', reopened: false, count: before.items[0].count })
+      expect(after.items[0].check).toMatchObject({ answerable: false })
+      expect(await conversations()).toEqual(convsBefore)
+
+      // 模型调用失败：返回 502，不覆盖上一次的结果
+      run.mockRejectedValue(new Error('模型服务不可用'))
+      const failed = await verify(body).expect(502)
+      expect(failed.body.error).toContain('模型服务不可用')
+      expect((await gaps()).items[0].check).toMatchObject({ answerable: false })
+
+      // 参数和权限
+      await verify({ ...body, kbId: null }).expect(400)
+      await verify({ ...body, kbId: '1' }).expect(400)
+      await verify({ ...body, question: '  ' }).expect(400)
+      await verify({ ...body, question: 5 }).expect(400)
+      await verify({ ...body, kbId: 999999 }).expect(404)
+      await verify(body, bob.auth).expect(403)
+      await request(app).post('/api/gaps/verify').send(body).expect(401)
+      const { isApiKeyAllowed } = await import('../src/auth.ts')
+      expect(isApiKeyAllowed('POST', '/api/gaps/verify')).toBe(false)
+    } finally {
+      run.mockRestore()
+    }
+  })
+
   it('知识库的统计只数待处理的缺口；删除知识库时一并清掉状态', async () => {
     const { adminAuth, alice, aliceKb, ask } = await setup()
     ask(alice.id, aliceKb, '年假怎么算')
@@ -1417,9 +1469,14 @@ describe('待补知识的处理状态', () => {
     await request(app).put('/api/gaps/status').set(alice.auth).send({ kbId: aliceKb, question: '年假怎么算', status: 'resolved' }).expect(200)
     expect(await gapsOf()).toBe(1)
 
+    const { listGapStatuses, listGapChecks, saveGapCheck } = await import('../src/db.ts')
+    saveGapCheck({ kbId: aliceKb, fingerprint: 'x', answerable: true, answer: '答', userId: alice.id, username: 'alice' })
+    expect(listGapStatuses().some(s => s.kb_id === aliceKb)).toBe(true)
+    expect(listGapChecks().some(c => c.kb_id === aliceKb)).toBe(true)
+
     await request(app).delete(`/api/kbs/${aliceKb}`).set(adminAuth).expect(200)
-    const { listGapStatuses } = await import('../src/db.ts')
     expect(listGapStatuses().filter(s => s.kb_id === aliceKb)).toEqual([])
+    expect(listGapChecks().filter(c => c.kb_id === aliceKb)).toEqual([])
   })
 })
 

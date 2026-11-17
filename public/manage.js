@@ -1253,6 +1253,7 @@ const auditActionLabels = {
   'qa.ask': '知识库问答',
   'qa.ask_global': '跨库问答',
   'gap.status': '处理待补知识',
+  'gap.verify': '验证待补知识',
   'backup.create': '创建备份',
   'backup.failed': '备份失败',
 }
@@ -1271,7 +1272,7 @@ const auditDetailLabels = {
   added: '新增', updated: '更新', removed: '移除', queued: '排队', unchanged: '未变', scanned: '扫描', skipped: '跳过',
   errors: '错误', error: '错误', documents: '文档数', versionId: '版本', changed: '有改动',
   path: '路径', sourcePath: '同步目录', prefix: '密钥', owner: '所属用户', expiresAt: '过期时间',
-  via: '方式', apiKey: '密钥', status: '状态',
+  via: '方式', apiKey: '密钥', status: '状态', answerable: '能答上',
 }
 
 const auditDetailValues = {
@@ -1387,6 +1388,7 @@ function initGapsTab() {
     const gap = gapItems[Number(btn.dataset.gapIndex)]
     if (!gap) return
     if (btn.dataset.gapAction === 'docs') { openDocsTab(gap.kb_id); return }
+    if (btn.dataset.gapAction === 'verify') { await verifyGap(gap, btn); return }
     btn.disabled = true
     try {
       const res = await fetch('/api/gaps/status', {
@@ -1404,6 +1406,33 @@ function initGapsTab() {
       showToast(err.message, 'error')
     }
   })
+}
+
+/**
+ * 重新验证：把缺口的问题用真实模型再问一遍。要等十几秒，期间按钮显示「验证中…」。
+ * 能答上时提示去标「已补上」，但不替人做决定——答得对不对还得人看一眼回答。
+ */
+async function verifyGap(gap, btn) {
+  const label = btn.textContent
+  btn.disabled = true
+  btn.textContent = '验证中…'
+  try {
+    const res = await fetch('/api/gaps/verify', {
+      method: 'POST',
+      headers: { ...auth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kbId: gap.kb_id, question: gap.question }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || '验证失败')
+    showToast(data.answerable
+      ? '现在能答上了，看一眼回答没问题就可以标为已补上'
+      : '还是答不上，试试补充或修改文档后再验证')
+    await loadKnowledgeGaps()
+  } catch (err) {
+    btn.disabled = false
+    btn.textContent = label
+    showToast(err.message, 'error')
+  }
 }
 
 /** 只有管理员和至少拥有一个知识库的人才有这个标签 */
@@ -1452,20 +1481,27 @@ async function loadKnowledgeGaps({ countOnly = false } = {}) {
         gap.sources.feedback_not_found ? `<span class="gap-tag gap-tag-user">用户反馈 ×${gap.sources.feedback_not_found}</span>` : '',
         gap.sources.search_empty ? `<span class="gap-tag" title="AI 助手通过 MCP 检索，没有找到任何内容">检索无结果 ×${gap.sources.search_empty}</span>` : '',
       ].join('')
+      const check = gap.check
+        ? `<span class="gap-tag ${gap.check.answerable ? 'gap-tag-ok' : 'gap-tag-user'}" title="${escHtml(`${gap.check.checked_by || '未知'}，${fmtDateTime(gap.check.checked_at)}`)}">验证：${gap.check.answerable ? '能答上了' : '仍答不上'}</span>`
+        : ''
+      const checkAnswer = gap.check
+        ? `<details class="gap-check"><summary>查看验证时的回答</summary><div class="gap-check-answer">${escHtml(gap.check.answer || '（模型没有给出回答）')}</div></details>`
+        : ''
       const handled = gap.status !== 'open'
         ? ` · ${gap.status === 'resolved' ? '已补上' : '不需要补'}（${escHtml(gap.status_by || '未知')}，${fmtDateTime(gap.status_at)}）`
         : ''
       const btn = (action, label, kind = 'secondary') =>
         `<button class="btn btn-${kind} btn-sm" data-gap-action="${action}" data-gap-index="${index}">${label}</button>`
       const actions = gap.status === 'open'
-        ? [gap.kb_id ? btn('docs', '补充文档') : '', btn('resolved', '已补上'), btn('dismissed', '不需要补')]
-        : [btn('open', '重新打开')]
+        ? [gap.kb_id ? btn('docs', '补充文档') : '', gap.kb_id ? btn('verify', '重新验证') : '', btn('resolved', '已补上'), btn('dismissed', '不需要补')]
+        : [gap.status === 'resolved' && gap.kb_id ? btn('verify', '重新验证') : '', btn('open', '重新打开')]
       return `
         <div class="gap-row">
           <span class="gap-count" title="被问到的次数">${gap.count}</span>
           <div class="gap-main">
             <div class="gap-question">${escHtml(gap.question)}</div>
-            <div class="gap-meta">${escHtml(gap.kb_name ?? '全部知识库')} · 最近 ${fmtDateTime(gap.last_at)}${handled} ${tags}</div>
+            <div class="gap-meta">${escHtml(gap.kb_name ?? '全部知识库')} · 最近 ${fmtDateTime(gap.last_at)}${handled} ${tags} ${check}</div>
+            ${checkAnswer}
           </div>
           <div class="gap-actions">${actions.join('')}</div>
         </div>`

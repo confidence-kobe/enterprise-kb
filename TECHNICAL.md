@@ -201,6 +201,7 @@ response_feedback     id · conversation_id · user_id · rating · 差评原因
 doc_versions          id · doc_id · title · content · size · user_id · username · note · created_at
 gap_events            id · kb_id（可为空）· user_id · question · source · channel · created_at
 gap_status            kb_id（0 = 跨全部知识库）· fingerprint · status · user_id · username · updated_at
+gap_checks            kb_id · fingerprint · answerable · answer · user_id · username · checked_at
 api_keys              id · user_id · name · prefix · key_hash · created_at · expires_at · last_used_at
 audit_events          id · user_id · username · action · entity_type · entity_id · kb_id · detail · ip
 system_config         key · value（例如当前选用的模型）
@@ -670,9 +671,12 @@ return { response, turns, messages }
 |------|--------|------|
 | `GET /api/gaps?days=&kbId=&status=` | 已登录用户 | `status` 取 `open`（默认）、`resolved`、`dismissed`、`all`；返回各状态的数量 `counts`。管理员看全部，普通用户只看自己是所有者的知识库 |
 | `PUT /api/gaps/status` | 管理员、知识库所有者 | 请求体 `{ kbId, question, status }`，`status` 取 `open`（重新打开）、`resolved`、`dismissed`。`kbId` 为 `null`（跨全部知识库的缺口）只有管理员能改。记入审计日志（`gap.status`） |
+| `POST /api/gaps/verify` | 管理员、知识库所有者 | 请求体 `{ kbId, question }`，`kbId` 必填（跨全部知识库的缺口不能验证）。用真实模型在该知识库里把问题重问一遍，回答没有"未找到相关内容"就算答上了，保存最近一次结果（`gap_checks`）。不建对话、不记缺口，受问答频率限制，记入审计日志（`gap.verify`） |
 | `GET /api/admin/gaps` | 管理员 | 旧路径，行为与 `/api/gaps` 一致 |
 
-接口密钥只能调用 `GET /api/gaps`，不能改状态。
+接口密钥只能调用 `GET /api/gaps`，不能改状态，也不能触发验证。
+
+**验证只能判断模型有没有放弃，判断不了答得对不对。** "答上了"只代表回答里没有"未找到相关内容"；模型编一个答案同样会显示"能答上了"。所以界面上能展开看回答原文，由人确认后再标「已补上」。要系统地衡量答得准不准，用 `npm run eval:qa`（见 `eval/README.md`）。
 
 ---
 

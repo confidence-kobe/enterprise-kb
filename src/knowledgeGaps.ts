@@ -2,7 +2,7 @@
  * 知识空白分析 — 把"AI 答不上来"的问题按知识库和问题归并，按出现次数排序
  */
 
-import type { GapStatusRow, KnowledgeGapRow, KnowledgeGapSource } from './db.js'
+import type { GapCheckRow, GapStatusRow, KnowledgeGapRow, KnowledgeGapSource } from './db.js'
 
 export interface KnowledgeGap {
   /** null 表示跨全部知识库（网页跨库提问、MCP 不指定知识库的检索） */
@@ -18,7 +18,17 @@ export interface KnowledgeGap {
 /** open = 待处理；resolved = 已补上；dismissed = 不需要补 */
 export type GapState = 'open' | 'resolved' | 'dismissed'
 
+/** 最近一次「重新验证」的结果 */
+export interface GapCheck {
+  answerable: boolean
+  answer: string
+  checked_at: number
+  checked_by: string | null
+}
+
 export interface KnowledgeGapWithStatus extends KnowledgeGap {
+  /** 没验证过为 null */
+  check: GapCheck | null
   status: GapState
   /** 标记"已补上"之后又有人问到同一个问题：补的内容没解决问题，缺口自动回到待处理 */
   reopened: boolean
@@ -62,22 +72,42 @@ export function groupKnowledgeGaps(rows: KnowledgeGapRow[], limit = 100): Knowle
 }
 
 /**
- * 把处理状态贴到缺口上。
+ * 把处理状态和最近一次验证结果贴到缺口上。
  * 已补上的缺口如果之后又有人问到（最近一次提问晚于处理时间），说明补得不对或不够，自动回到待处理并标上 reopened。
  * 不需要补的缺口保持不动，要重新处理必须手动重新打开。
  */
-export function applyGapStatuses(gaps: KnowledgeGap[], statuses: GapStatusRow[]): KnowledgeGapWithStatus[] {
-  const byKey = new Map(statuses.map(s => [`${s.kb_id}:${s.fingerprint}`, s]))
+export function applyGapStatuses(
+  gaps: KnowledgeGap[],
+  statuses: GapStatusRow[],
+  checks: GapCheckRow[] = [],
+): KnowledgeGapWithStatus[] {
+  const statusByKey = new Map(statuses.map(s => [`${s.kb_id}:${s.fingerprint}`, s]))
+  const checkByKey = new Map(checks.map(c => [`${c.kb_id}:${c.fingerprint}`, c]))
   return gaps.map(gap => {
-    const record = byKey.get(`${gap.kb_id ?? 0}:${gapFingerprint(gap.question)}`)
-    if (!record) return { ...gap, status: 'open', reopened: false, status_at: null, status_by: null }
+    const key = `${gap.kb_id ?? 0}:${gapFingerprint(gap.question)}`
+    const check = checkByKey.get(key)
+    const checked: GapCheck | null = check
+      ? { answerable: check.answerable === 1, answer: check.answer, checked_at: check.checked_at, checked_by: check.username }
+      : null
+    const record = statusByKey.get(key)
+    if (!record) return { ...gap, check: checked, status: 'open', reopened: false, status_at: null, status_by: null }
     const reopened = record.status === 'resolved' && gap.last_at > record.updated_at
     return {
       ...gap,
+      check: checked,
       status: reopened ? 'open' : record.status,
       reopened,
       status_at: record.updated_at,
       status_by: record.username,
     }
   })
+}
+
+/**
+ * 验证时模型的回答算不算"答上了"：有内容，并且没说"未找到相关内容"。
+ * 这只能判断模型有没有放弃，判断不了答得对不对——答得对不对看回答原文，或者跑 npm run eval:qa。
+ */
+export function isAnswerable(answer: string, notFoundMarker: string): boolean {
+  const text = answer.trim()
+  return text.length > 0 && !text.includes(notFoundMarker)
 }

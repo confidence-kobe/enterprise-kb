@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyGapStatuses, gapFingerprint, groupKnowledgeGaps, normalizeQuestion } from '../src/knowledgeGaps.js'
-import type { GapStatusRow, KnowledgeGapRow } from '../src/db.js'
+import { applyGapStatuses, gapFingerprint, groupKnowledgeGaps, isAnswerable, normalizeQuestion } from '../src/knowledgeGaps.js'
+import type { GapCheckRow, GapStatusRow, KnowledgeGapRow } from '../src/db.js'
 
 const row = (kb_id: number, question: string, created_at: number, source: KnowledgeGapRow['source'] = 'ai_not_found'): KnowledgeGapRow =>
   ({ kb_id, kb_name: `KB${kb_id}`, question, created_at, source })
@@ -66,5 +66,28 @@ describe('applyGapStatuses', () => {
     const result = applyGapStatuses(groupKnowledgeGaps([row(1, '年假有几天', 100), row(2, '年假有几天', 100)]), [record(1, '年假有几天', 'resolved', 200)])
     expect(result.find(g => g.kb_id === 1)?.status).toBe('resolved')
     expect(result.find(g => g.kb_id === 2)?.status).toBe('open')
+  })
+})
+
+describe('验证结果', () => {
+  const check = (kb_id: number, question: string, answerable: number): GapCheckRow =>
+    ({ kb_id, fingerprint: gapFingerprint(question), answerable, answer: '年假 5 天', username: 'alice', checked_at: 500 })
+
+  it('贴到对应的缺口上，没验证过的是 null', () => {
+    const result = applyGapStatuses(
+      groupKnowledgeGaps([row(1, '年假有几天？', 100), row(1, '报销流程', 100)]), [], [check(1, '年假有几天', 1)])
+    expect(result.find(g => g.question === '年假有几天？')?.check)
+      .toEqual({ answerable: true, answer: '年假 5 天', checked_at: 500, checked_by: 'alice' })
+    expect(result.find(g => g.question === '报销流程')?.check).toBeNull()
+  })
+
+  it('不传验证结果也能用（旧调用方式）', () => {
+    expect(applyGapStatuses(groupKnowledgeGaps([row(1, '年假', 100)]), [])[0].check).toBeNull()
+  })
+
+  it('isAnswerable：有内容且没说未找到才算答上', () => {
+    expect(isAnswerable('年假每年 5 天，见 `请假制度.md:3`', '未找到相关内容')).toBe(true)
+    expect(isAnswerable('抱歉，知识库中未找到相关内容。', '未找到相关内容')).toBe(false)
+    expect(isAnswerable('  \n ', '未找到相关内容')).toBe(false)
   })
 })
