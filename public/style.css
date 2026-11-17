@@ -2333,6 +2333,14 @@ html:not([data-theme="dark"]) .doc-status-processing { color: #7a3e06; }
 .api-snippet-hint { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .gap-tag { padding: 1px 6px; border-radius: 5px; background: var(--surface-2); color: var(--muted); font-size: 12px; }
 .gap-tag-user { color: var(--red); background: var(--red-lt); }
+.gap-row .gap-main { flex: 1; }
+.gap-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+#tab-gaps .audit-filter-bar select.input { width: 120px; height: 30px; }
+@media (max-width: 640px) {
+  .gap-row { flex-wrap: wrap; }
+  .gap-row .gap-main { flex-basis: calc(100% - 44px); }
+  .gap-actions { margin-left: 44px; justify-content: flex-start; }
+}
 .feedback-item-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .feedback-reason-tag {
   font-size: 12px;
