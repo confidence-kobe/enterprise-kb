@@ -291,6 +291,37 @@ function renderWelcomeChips(kb) {
   hintsEl.style.display = kb.doc_count > 0 ? '' : 'none'
 }
 
+/**
+ * 「最近补充了这些问题的答案」：管理员或所有者把某个没找到答案的问题标为已补上之后，大家在首页能看到。
+ * 点一下就把问题填进输入框，想问的人不用重新打字。接口只返回问题原文，不带是谁问的。
+ */
+async function loadRecentAnswers(kb) {
+  const box = document.getElementById('welcome-answered')
+  const chipsEl = document.getElementById('welcome-answered-chips')
+  if (!box || !chipsEl) return
+  box.classList.add('hidden')
+  chipsEl.innerHTML = ''
+  try {
+    const res = await fetch(`/api/kbs/${kb.id}/recent-answers`, { headers: auth() })
+    if (!res.ok) return
+    const { items } = await res.json()
+    if (currentKb?.id !== kb.id || !items?.length) return  // 加载期间已经切到别的知识库
+    for (const item of items) {
+      const chip = document.createElement('button')
+      chip.className = 'welcome-chip'
+      chip.textContent = item.question
+      chip.title = '点击把这个问题填进输入框'
+      chip.addEventListener('click', () => {
+        inputEl.value = item.question
+        inputEl.dispatchEvent(new Event('input'))
+        inputEl.focus()
+      })
+      chipsEl.appendChild(chip)
+    }
+    box.classList.remove('hidden')
+  } catch { /* 这只是个提示，加载失败不影响提问 */ }
+}
+
 /** 切换到某个知识库（或"全部知识库"）：重置当前对话，加载文档列表和对话历史 */
 async function selectKb(kb) {
   currentKb = kb
@@ -318,6 +349,7 @@ async function selectKb(kb) {
   welcomeEl.classList.remove('hidden')
   welcomeRecentDocs.innerHTML = ''
   welcomeEmpty.classList.add('hidden')
+  document.getElementById('welcome-answered')?.classList.add('hidden')
 
   if (isAll) {
     welcomeSub.textContent = '同时在你能访问的所有知识库里查找，回答会注明来自哪份文档。跨库提问不保存为对话记录。'
@@ -341,6 +373,7 @@ async function selectKb(kb) {
       kb.can_write ? '' : '请联系知识库管理员上传文档。')
   }
   renderWelcomeChips(kb)
+  loadRecentAnswers(kb)
   loadWelcomeDocs(kb.id, docCount)
 
   // 加载文档名→ID 映射，供 source-ref 点击使用

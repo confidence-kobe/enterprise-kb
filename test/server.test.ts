@@ -1460,6 +1460,43 @@ describe('待补知识的处理状态', () => {
     }
   })
 
+  it('聊天页的「最近补充」：能访问知识库的人看到，不带任何人的信息，可以不公开', async () => {
+    const { alice, bob, aliceKb, ask } = await setup()
+    ask(alice.id, aliceKb, '年假怎么算')
+    const recent = (who = alice.auth) => request(app).get(`/api/kbs/${aliceKb}/recent-answers`).set(who)
+    const mark = (body: object) =>
+      request(app).put('/api/gaps/status').set(alice.auth).send({ kbId: aliceKb, question: '年假怎么算', ...body })
+
+    // 还没补上：什么都没有
+    expect((await recent().expect(200)).body.items).toEqual([])
+
+    await mark({ status: 'resolved' }).expect(200)
+    const shown = (await recent().expect(200)).body.items
+    expect(shown).toEqual([{ question: '年假怎么算', resolved_at: expect.any(Number) }])
+    // 只有这两个字段：没有处理人、提问人、数量
+    expect(Object.keys(shown[0]).sort()).toEqual(['question', 'resolved_at'])
+
+    // 私有知识库：非成员看不到；加成员后看到；公开后任何登录用户看到
+    await recent(bob.auth).expect(403)
+    await request(app).patch(`/api/kbs/${aliceKb}/public`).set(alice.auth).send({ is_public: true }).expect(200)
+    expect((await recent(bob.auth).expect(200)).body.items).toHaveLength(1)
+    await request(app).get(`/api/kbs/${aliceKb}/recent-answers`).expect(401)
+    await request(app).get('/api/kbs/999999/recent-answers').set(alice.auth).expect(403)
+
+    // 所有者可以选择不公开：仍是已补上，只是不在聊天页显示；再公开即恢复
+    await mark({ status: 'resolved', announce: false }).expect(200)
+    expect((await recent(bob.auth).expect(200)).body.items).toEqual([])
+    const listed = (await request(app).get('/api/gaps').set(alice.auth).query({ status: 'resolved' }).expect(200)).body.items[0]
+    expect(listed).toMatchObject({ status: 'resolved', announce: false })
+    await mark({ status: 'resolved', announce: true }).expect(200)
+    expect((await recent(bob.auth).expect(200)).body.items).toHaveLength(1)
+
+    // 重新打开后不再显示；announce 必须是布尔值
+    await mark({ status: 'open' }).expect(200)
+    expect((await recent(bob.auth).expect(200)).body.items).toEqual([])
+    await mark({ status: 'resolved', announce: 'no' }).expect(400)
+  })
+
   it('知识库的统计只数待处理的缺口；删除知识库时一并清掉状态', async () => {
     const { adminAuth, alice, aliceKb, ask } = await setup()
     ask(alice.id, aliceKb, '年假怎么算')

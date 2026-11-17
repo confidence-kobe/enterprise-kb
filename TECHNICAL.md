@@ -200,7 +200,7 @@ messages              id · conversation_id · role · content · tool_calls · 
 response_feedback     id · conversation_id · user_id · rating · 差评原因与问答快照 · created_at
 doc_versions          id · doc_id · title · content · size · user_id · username · note · created_at
 gap_events            id · kb_id（可为空）· user_id · question · source · channel · created_at
-gap_status            kb_id（0 = 跨全部知识库）· fingerprint · status · user_id · username · updated_at
+gap_status            kb_id（0 = 跨全部知识库）· fingerprint · status · announce · user_id · username · updated_at
 gap_checks            kb_id · fingerprint · answerable · answer · user_id · username · checked_at
 api_keys              id · user_id · name · prefix · key_hash · created_at · expires_at · last_used_at
 audit_events          id · user_id · username · action · entity_type · entity_id · kb_id · detail · ip
@@ -672,9 +672,14 @@ return { response, turns, messages }
 | `GET /api/gaps?days=&kbId=&status=` | 已登录用户 | `status` 取 `open`（默认）、`resolved`、`dismissed`、`all`；返回各状态的数量 `counts`。管理员看全部，普通用户只看自己是所有者的知识库 |
 | `PUT /api/gaps/status` | 管理员、知识库所有者 | 请求体 `{ kbId, question, status }`，`status` 取 `open`（重新打开）、`resolved`、`dismissed`。`kbId` 为 `null`（跨全部知识库的缺口）只有管理员能改。记入审计日志（`gap.status`） |
 | `POST /api/gaps/verify` | 管理员、知识库所有者 | 请求体 `{ kbId, question }`，`kbId` 必填（跨全部知识库的缺口不能验证）。用真实模型在该知识库里把问题重问一遍，回答没有"未找到相关内容"就算答上了，保存最近一次结果（`gap_checks`）。不建对话、不记缺口，受问答频率限制，记入审计日志（`gap.verify`） |
+| `GET /api/kbs/:id/recent-answers` | 能访问该知识库的人 | 聊天首页的「最近补充」：最近 30 天内标为已补上、没有关闭公开、之后没人再问到、没有被验证为仍答不上的缺口，最多 5 条，只返回 `{ question, resolved_at }` |
 | `GET /api/admin/gaps` | 管理员 | 旧路径，行为与 `/api/gaps` 一致 |
 
 接口密钥只能调用 `GET /api/gaps`，不能改状态，也不能触发验证。
+
+#### 通知提问者的取舍
+
+系统**不记录是谁问的**，所以没法定向通知提问者；改为在聊天首页公共位置显示"最近补充了这些问题的答案"，能访问该知识库的人都看得到，不针对具体的人。代价是当初的提问者可能错过。如果以后要定向通知，需要先在 `gap_events` 和对话里保留提问者身份，并更新 `SECURITY_OWNERSHIP.md` 里"缺口不带提问者身份"的约束。
 
 **验证只能判断模型有没有放弃，判断不了答得对不对。** "答上了"只代表回答里没有"未找到相关内容"；模型编一个答案同样会显示"能答上了"。所以界面上能展开看回答原文，由人确认后再标「已补上」。要系统地衡量答得准不准，用 `npm run eval:qa`（见 `eval/README.md`）。
 

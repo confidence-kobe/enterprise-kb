@@ -868,6 +868,8 @@ html[data-theme="dark"] .kb-item.active { color: var(--sb-accent); }
   cursor: pointer;
   transition: border-color .12s, background .12s, color .12s;
 }
+.welcome-answered .welcome-hint-label { color: var(--green); font-weight: 500; }
+.welcome-answered .welcome-chip { height: auto; min-height: 36px; padding: 8px 14px; text-align: left; line-height: 1.4; border-color: var(--green); background: var(--green-lt); }
 .welcome-chip:hover { border-color: var(--border-strong); background: var(--bg); color: var(--text); }
 
 /* 知识库里还没有文档、没有可用的知识库等空状态 */

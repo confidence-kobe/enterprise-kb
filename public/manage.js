@@ -1272,7 +1272,7 @@ const auditDetailLabels = {
   added: '新增', updated: '更新', removed: '移除', queued: '排队', unchanged: '未变', scanned: '扫描', skipped: '跳过',
   errors: '错误', error: '错误', documents: '文档数', versionId: '版本', changed: '有改动',
   path: '路径', sourcePath: '同步目录', prefix: '密钥', owner: '所属用户', expiresAt: '过期时间',
-  via: '方式', apiKey: '密钥', status: '状态', answerable: '能答上',
+  via: '方式', apiKey: '密钥', status: '状态', answerable: '能答上', announce: '聊天页公开',
 }
 
 const auditDetailValues = {
@@ -1394,11 +1394,20 @@ function initGapsTab() {
       const res = await fetch('/api/gaps/status', {
         method: 'PUT',
         headers: { ...auth(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kbId: gap.kb_id, question: gap.question, status: btn.dataset.gapAction }),
+        body: JSON.stringify({
+          kbId: gap.kb_id, question: gap.question,
+          // 在已补上的缺口上点「不公开」「公开」：保持已补上，只改是否显示在聊天页
+          status: btn.dataset.gapAction.startsWith('announce') ? 'resolved' : btn.dataset.gapAction,
+          ...(btn.dataset.gapAction.startsWith('announce') ? { announce: btn.dataset.gapAction === 'announce-on' } : {}),
+        }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || '操作失败')
-      showToast({ resolved: '已标记为已补上', dismissed: '已标记为不需要补', open: '已重新打开' }[btn.dataset.gapAction])
+      showToast({
+        resolved: gap.kb_id ? '已标记为已补上，这个问题会显示在聊天页的「最近补充」里' : '已标记为已补上',
+        dismissed: '已标记为不需要补', open: '已重新打开',
+        'announce-on': '已在聊天页公开', 'announce-off': '已不在聊天页公开',
+      }[btn.dataset.gapAction])
       loadKnowledgeGaps()
       if (isAdmin) loadInbox({ countOnly: true })
     } catch (err) {
@@ -1489,12 +1498,15 @@ async function loadKnowledgeGaps({ countOnly = false } = {}) {
         : ''
       const handled = gap.status !== 'open'
         ? ` · ${gap.status === 'resolved' ? '已补上' : '不需要补'}（${escHtml(gap.status_by || '未知')}，${fmtDateTime(gap.status_at)}）`
+          + (gap.status === 'resolved' && gap.kb_id ? (gap.announce ? ' · 显示在聊天页' : ' · 不在聊天页显示') : '')
         : ''
       const btn = (action, label, kind = 'secondary') =>
         `<button class="btn btn-${kind} btn-sm" data-gap-action="${action}" data-gap-index="${index}">${label}</button>`
       const actions = gap.status === 'open'
         ? [gap.kb_id ? btn('docs', '补充文档') : '', gap.kb_id ? btn('verify', '重新验证') : '', btn('resolved', '已补上'), btn('dismissed', '不需要补')]
-        : [gap.status === 'resolved' && gap.kb_id ? btn('verify', '重新验证') : '', btn('open', '重新打开')]
+        : [gap.status === 'resolved' && gap.kb_id ? btn('verify', '重新验证') : '',
+           gap.status === 'resolved' && gap.kb_id ? btn(gap.announce ? 'announce-off' : 'announce-on', gap.announce ? '不公开' : '公开') : '',
+           btn('open', '重新打开')]
       return `
         <div class="gap-row">
           <span class="gap-count" title="被问到的次数">${gap.count}</span>

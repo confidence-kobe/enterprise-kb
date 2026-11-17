@@ -195,6 +195,46 @@ test('knowledge gaps tab: re-verify a question against the knowledge base', asyn
   expect(errors).toEqual([])
 })
 
+test('chat home shows recently answered questions and fills the input on click', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  // 造一条缺口并标为已补上
+  const question = '加班怎么调休？'
+  const asked = await request.post(`/api/kbs/${kbId}/ask`, { headers: auth(), data: { question } })
+  const done = (await asked.text()).split('\n\n').filter(p => p.startsWith('data: ')).map(p => JSON.parse(p.slice(6)))
+    .find(event => event.type === 'done')
+  await request.post(`/api/conversations/${done.conversationId}/feedback`, { headers: auth(), data: { rating: -1, reason: 'not_found' } })
+
+  const session = await apiLogin(request, 'admin', ADMIN_PASSWORD)
+  await signIn(page, session)
+  await page.goto('/manage.html')
+  await page.click('[data-tab=gaps]')
+  const row = page.locator('#gap-list .gap-row', { hasText: '加班怎么调休' })
+  await row.getByRole('button', { name: '已补上' }).click()
+  await expect(row).toHaveCount(0)
+
+  // 聊天首页能看到，点一下填进输入框
+  await page.evaluate(id => localStorage.setItem('kb_last_selected_id', String(id)), kbId)
+  await page.goto('/')
+  const answered = page.locator('#welcome-answered')
+  await expect(answered).toBeVisible()
+  await expect(answered).toContainText('最近补充了这些问题的答案')
+  await answered.getByRole('button', { name: question }).click()
+  await expect(page.locator('#question-input')).toHaveValue(question)
+
+  // 在已补上里点「不公开」，聊天首页就不再显示
+  await page.goto('/manage.html')
+  await page.click('[data-tab=gaps]')
+  await page.selectOption('#gap-status', 'resolved')
+  const resolved = page.locator('#gap-list .gap-row', { hasText: '加班怎么调休' })
+  await expect(resolved).toContainText('显示在聊天页')
+  await resolved.getByRole('button', { name: '不公开' }).click()
+  await expect(resolved).toContainText('不在聊天页显示')
+  await page.goto('/')
+  await expect(page.locator('#welcome-title')).not.toHaveText('正在加载知识库…')
+  await expect(page.locator('#welcome-answered')).toBeHidden()
+  expect(errors).toEqual([])
+})
+
 test('knowledge base owners see the gaps tab for their own knowledge bases only', async ({ page, request }) => {
   const errors = trackErrors(page)
   await request.post('/api/admin/users', { headers: auth(), data: { username: 'gap_owner', password: 'Owner@12345', role: 'user' } })
