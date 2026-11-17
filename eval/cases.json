@@ -1,0 +1,366 @@
+{
+  "kbName": "评测用制度库",
+  "cases": [
+    {
+      "id": "leave-annual-days",
+      "kind": "answer",
+      "question": "我入职 3 年，每年有几天年假？",
+      "expect": [
+        [
+          "5 天",
+          "5天",
+          "五天"
+        ]
+      ],
+      "sources": [
+        "请假制度.md"
+      ]
+    },
+    {
+      "id": "leave-annual-carry",
+      "kind": "answer",
+      "question": "年假没休完，最晚可以顺延到什么时候？",
+      "expect": [
+        [
+          "3 月 31 日",
+          "3月31日"
+        ]
+      ],
+      "sources": [
+        "请假制度.md"
+      ]
+    },
+    {
+      "id": "leave-annual-notice",
+      "kind": "answer",
+      "question": "我想请 4 天年假，需要提前多久申请？",
+      "expect": [
+        [
+          "5 个工作日",
+          "5个工作日",
+          "五个工作日"
+        ]
+      ],
+      "sources": [
+        "请假制度.md"
+      ]
+    },
+    {
+      "id": "leave-sick-pay",
+      "kind": "answer",
+      "question": "请病假期间工资怎么发？",
+      "expect": [
+        [
+          "80%",
+          "八成",
+          "百分之八十"
+        ]
+      ],
+      "sources": [
+        "请假制度.md"
+      ]
+    },
+    {
+      "id": "leave-personal-limit",
+      "kind": "answer",
+      "question": "事假一年最多能请多少天？",
+      "expect": [
+        [
+          "15 天",
+          "15天"
+        ]
+      ],
+      "sources": [
+        "请假制度.md"
+      ]
+    },
+    {
+      "id": "leave-maternity",
+      "kind": "answer",
+      "question": "产假一共多少天？",
+      "expect": [
+        [
+          "158"
+        ]
+      ],
+      "sources": [
+        "请假制度.md"
+      ]
+    },
+    {
+      "id": "leave-dystocia",
+      "kind": "answer",
+      "question": "难产的话产假会增加几天？",
+      "expect": [
+        [
+          "15 天",
+          "15天"
+        ]
+      ],
+      "sources": [
+        "请假制度.md"
+      ]
+    },
+    {
+      "id": "reimb-deadline",
+      "kind": "answer",
+      "question": "费用发生后多久内必须提交报销？",
+      "expect": [
+        [
+          "30 个自然日",
+          "30个自然日",
+          "30 天",
+          "30天"
+        ]
+      ],
+      "sources": [
+        "报销制度.md"
+      ]
+    },
+    {
+      "id": "reimb-approval-3000",
+      "kind": "answer",
+      "question": "一笔 3000 元的报销需要谁审批？",
+      "expect": [
+        [
+          "财务经理"
+        ],
+        [
+          "部门负责人"
+        ]
+      ],
+      "sources": [
+        "报销制度.md"
+      ]
+    },
+    {
+      "id": "reimb-entertain-limit",
+      "kind": "answer",
+      "question": "业务招待费人均标准上限是多少？",
+      "expect": [
+        [
+          "300"
+        ]
+      ],
+      "sources": [
+        "报销制度.md"
+      ]
+    },
+    {
+      "id": "reimb-handwritten",
+      "kind": "answer",
+      "question": "手写发票可以报销吗？",
+      "expect": [
+        [
+          "不予",
+          "不能",
+          "不可",
+          "不得",
+          "不允许"
+        ]
+      ],
+      "sources": [
+        "报销制度.md"
+      ]
+    },
+    {
+      "id": "reimb-payment-time",
+      "kind": "answer",
+      "question": "报销审批完成后多久打款？",
+      "expect": [
+        [
+          "5 个工作日",
+          "5个工作日",
+          "五个工作日"
+        ]
+      ],
+      "sources": [
+        "报销制度.md"
+      ]
+    },
+    {
+      "id": "trip-hotel-shanghai",
+      "kind": "answer",
+      "question": "去上海出差，住宿每晚最多报多少？",
+      "expect": [
+        [
+          "600"
+        ]
+      ],
+      "sources": [
+        "出差管理.md"
+      ]
+    },
+    {
+      "id": "trip-short-flight",
+      "kind": "answer",
+      "question": "去单程 3 小时车程的城市出差，可以坐飞机吗？",
+      "expect": [
+        [
+          "高铁",
+          "二等座"
+        ],
+        [
+          "不得",
+          "不能",
+          "不可",
+          "不允许",
+          "不应"
+        ]
+      ],
+      "sources": [
+        "出差管理.md"
+      ]
+    },
+    {
+      "id": "trip-subsidy-roundtrip",
+      "kind": "answer",
+      "question": "当天往返的出差，补助是多少？",
+      "expect": [
+        [
+          "50 元",
+          "50元",
+          "减半",
+          "一半"
+        ]
+      ],
+      "sources": [
+        "出差管理.md"
+      ]
+    },
+    {
+      "id": "sec-password-rotation",
+      "kind": "answer",
+      "question": "密码多久需要更换一次？",
+      "expect": [
+        [
+          "90 天",
+          "90天"
+        ]
+      ],
+      "sources": [
+        "信息安全规范.md"
+      ]
+    },
+    {
+      "id": "sec-lost-device",
+      "kind": "answer",
+      "question": "公司电脑丢了，要在多久内报告 IT？",
+      "expect": [
+        [
+          "2 小时",
+          "2小时",
+          "两小时"
+        ]
+      ],
+      "sources": [
+        "信息安全规范.md"
+      ]
+    },
+    {
+      "id": "onboard-probation-pay",
+      "kind": "answer",
+      "question": "试用期工资是转正工资的多少？",
+      "expect": [
+        [
+          "90%",
+          "九成",
+          "百分之九十"
+        ]
+      ],
+      "sources": [
+        "新员工入职指南.md"
+      ]
+    },
+    {
+      "id": "onboard-fund-rate",
+      "kind": "answer",
+      "question": "公司公积金缴存比例是多少？",
+      "expect": [
+        [
+          "12%",
+          "百分之十二"
+        ]
+      ],
+      "sources": [
+        "新员工入职指南.md"
+      ]
+    },
+    {
+      "id": "cross-trip-paperwork",
+      "kind": "answer",
+      "question": "紧急出差回来后，补办手续和提交报销，最晚分别要在多久内完成？",
+      "expect": [
+        [
+          "2 个工作日",
+          "2个工作日",
+          "两个工作日"
+        ],
+        [
+          "30"
+        ]
+      ],
+      "sources": [
+        "出差管理.md",
+        "报销制度.md"
+      ]
+    },
+    {
+      "id": "cross-day-one",
+      "kind": "answer",
+      "question": "入职第一天需要带哪些材料？",
+      "expect": [
+        [
+          "身份证"
+        ],
+        [
+          "学历证书"
+        ],
+        [
+          "银行卡"
+        ]
+      ],
+      "sources": [
+        "新员工入职指南.md"
+      ]
+    },
+    {
+      "id": "cross-leave-contact",
+      "kind": "answer",
+      "question": "想咨询请假和社保的问题，应该找哪个部门？",
+      "expect": [
+        [
+          "HR"
+        ]
+      ],
+      "sources": [
+        "新员工入职指南.md"
+      ]
+    },
+    {
+      "id": "none-canteen",
+      "kind": "refuse",
+      "question": "公司的食堂补贴是多少钱？"
+    },
+    {
+      "id": "none-overtime",
+      "kind": "refuse",
+      "question": "加班费怎么计算？"
+    },
+    {
+      "id": "none-bonus",
+      "kind": "refuse",
+      "question": "年终奖一般什么时候发？"
+    },
+    {
+      "id": "none-remote",
+      "kind": "refuse",
+      "question": "公司允许居家办公吗？"
+    },
+    {
+      "id": "none-equity",
+      "kind": "refuse",
+      "question": "公司的股权激励方案是什么？"
+    }
+  ]
+}

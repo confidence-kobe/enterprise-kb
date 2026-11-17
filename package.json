@@ -17,6 +17,7 @@
     "codex:smoke": "node scripts/codex-smoke.mjs",
     "smoke:full": "node scripts/full-smoke.mjs",
     "bench:search": "node scripts/bench-search.mjs",
+    "eval:qa": "node scripts/eval-qa.mjs",
     "upgrade:check": "node scripts/upgrade-check.mjs",
     "backup": "node dist/backup-cli.js backup",
     "backup:list": "node dist/backup-cli.js list",
