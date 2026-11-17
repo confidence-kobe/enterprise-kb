@@ -98,6 +98,7 @@ if (isAdmin) {
 
 loadKbs()
 initTabs()
+initGapsTab()
 initApiAccess()
 initVersionHistory()
 initKbModal()
@@ -163,6 +164,7 @@ function initTabs() {
       if (btn.dataset.tab === 'inbox' && isAdmin) loadInbox()
       if (btn.dataset.tab === 'audit' && isAdmin) loadAuditLog(false)
       if (btn.dataset.tab === 'feedback' && isAdmin) loadFeedbackTab()
+      if (btn.dataset.tab === 'gaps') loadKnowledgeGaps()
       if (btn.dataset.tab === 'settings' && isAdmin) loadBackups()
       if (btn.dataset.tab === 'api') loadApiKeys()
     })
@@ -195,6 +197,7 @@ async function loadKbs() {
 
     renderKbList()
     renderDocKbSelect()
+    updateGapsTabVisibility()
     applyInitialManageRoute()
     if (isAdmin && document.getElementById('tab-inbox').classList.contains('active')) loadInbox()
     else if (isAdmin) loadInbox({ countOnly: true })
@@ -307,7 +310,7 @@ async function loadInbox({ countOnly = false } = {}) {
 
   contentEl.innerHTML =
     section('待补知识', gaps.length ? `近 30 天有 ${gaps.length} 个问题没找到答案` : '近 30 天',
-      gapRows, gaps.length > INBOX_LIMIT ? '<button class="inbox-section-link" data-inbox-tab="feedback">查看全部</button>' : '') +
+      gapRows, gaps.length > INBOX_LIMIT ? '<button class="inbox-section-link" data-inbox-tab="gaps">查看全部</button>' : '') +
     section('最近的差评', negativeTotal ? `共 ${negativeTotal} 条，这里显示最近 ${negatives.length} 条` : '',
       negRows, negativeTotal > negatives.length ? '<button class="inbox-section-link" data-inbox-tab="feedback">查看全部</button>' : '') +
     section('文件没能入库', failedDocs.length ? `${failedDocs.length} 份` : '', failedRows)
@@ -1215,6 +1218,8 @@ const AUDIT_PAGE_SIZE = 40
 let auditOffset = 0
 let auditTotal = 0
 let auditLoading = false
+/** 上一次加载还没结束时又改了筛选条件：等它结束后按新条件重新加载，而不是把这次操作吞掉 */
+let auditReloadQueued = false
 
 const auditActionLabels = {
   'auth.login': '登录成功',
@@ -1247,6 +1252,7 @@ const auditActionLabels = {
   'doc.restore_version': '恢复历史版本',
   'qa.ask': '知识库问答',
   'qa.ask_global': '跨库问答',
+  'gap.status': '处理待补知识',
   'backup.create': '创建备份',
   'backup.failed': '备份失败',
 }
@@ -1265,13 +1271,14 @@ const auditDetailLabels = {
   added: '新增', updated: '更新', removed: '移除', queued: '排队', unchanged: '未变', scanned: '扫描', skipped: '跳过',
   errors: '错误', error: '错误', documents: '文档数', versionId: '版本', changed: '有改动',
   path: '路径', sourcePath: '同步目录', prefix: '密钥', owner: '所属用户', expiresAt: '过期时间',
-  via: '方式', apiKey: '密钥',
+  via: '方式', apiKey: '密钥', status: '状态',
 }
 
 const auditDetailValues = {
   via: { api_key: 'API 密钥' },
   channel: { mcp: 'MCP' },
   role: { admin: '管理员', user: '普通用户' },
+  status: { open: '重新打开', resolved: '已补上', dismissed: '不需要补' },
 }
 
 function initAuditLog() {
@@ -1292,7 +1299,11 @@ function initAuditLog() {
 }
 
 async function loadAuditLog(append = false) {
-  if (!isAdmin || auditLoading || !auditList) return
+  if (!isAdmin || !auditList) return
+  if (auditLoading) {
+    if (!append) auditReloadQueued = true
+    return
+  }
   // 操作下拉框在第一次打开审计页时填充（页面初始化时操作名称表还没定义）
   const actionSelect = document.getElementById('audit-action-filter')
   if (actionSelect && actionSelect.options.length <= 1) {
@@ -1333,6 +1344,10 @@ async function loadAuditLog(append = false) {
     auditList.innerHTML = `<tr><td colspan="6" style="color:var(--red)">加载失败：${escHtml(e.message)}</td></tr>`
   } finally {
     auditLoading = false
+    if (auditReloadQueued) {
+      auditReloadQueued = false
+      loadAuditLog(false)
+    }
   }
 }
 
@@ -1348,47 +1363,115 @@ function initFeedbackTab() {
     filter.insertAdjacentHTML('beforeend', `<option value="${value}">${escHtml(label)}</option>`)
   }
   filter.addEventListener('change', () => loadNegativeFeedback(false))
-  document.getElementById('gap-days')?.addEventListener('change', () => loadKnowledgeGaps())
   document.getElementById('feedback-refresh-btn').addEventListener('click', () => loadFeedbackTab())
   document.getElementById('feedback-load-more').addEventListener('click', () => loadNegativeFeedback(true))
 }
 
 function loadFeedbackTab() {
   loadFeedbackSummary()
-  loadKnowledgeGaps()
   loadNegativeFeedback(false)
 }
 
-async function loadKnowledgeGaps() {
+/* ── 待补知识 ─────────────────────────────────────────
+ * 管理员看全部，知识库所有者只看自己的知识库（后端按身份过滤，这里不用区分）。
+ * 每个缺口可以标成「已补上」或「不需要补」；已补上之后又有人问到，会自动回到待处理。
+ */
+let gapItems = []
+
+function initGapsTab() {
+  document.getElementById('gap-status')?.addEventListener('change', () => loadKnowledgeGaps())
+  document.getElementById('gap-days')?.addEventListener('change', () => loadKnowledgeGaps())
+  document.getElementById('gap-list')?.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-gap-action]')
+    if (!btn) return
+    const gap = gapItems[Number(btn.dataset.gapIndex)]
+    if (!gap) return
+    if (btn.dataset.gapAction === 'docs') { openDocsTab(gap.kb_id); return }
+    btn.disabled = true
+    try {
+      const res = await fetch('/api/gaps/status', {
+        method: 'PUT',
+        headers: { ...auth(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kbId: gap.kb_id, question: gap.question, status: btn.dataset.gapAction }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '操作失败')
+      showToast({ resolved: '已标记为已补上', dismissed: '已标记为不需要补', open: '已重新打开' }[btn.dataset.gapAction])
+      loadKnowledgeGaps()
+      if (isAdmin) loadInbox({ countOnly: true })
+    } catch (err) {
+      btn.disabled = false
+      showToast(err.message, 'error')
+    }
+  })
+}
+
+/** 只有管理员和至少拥有一个知识库的人才有这个标签 */
+function updateGapsTabVisibility() {
+  const tab = document.getElementById('gaps-tab')
+  if (!tab) return
+  const visible = isAdmin || allKbs.some(kb => kb.owner_id === user.id)
+  tab.style.display = visible ? '' : 'none'
+  if (visible) loadKnowledgeGaps({ countOnly: true })
+}
+
+async function loadKnowledgeGaps({ countOnly = false } = {}) {
   const listEl = document.getElementById('gap-list')
-  if (!listEl) return
+  const statusEl = document.getElementById('gap-status')
+  if (!listEl || !statusEl) return
   const days = document.getElementById('gap-days')?.value || '30'
-  listEl.innerHTML = '<div class="feedback-empty">加载中…</div>'
+  const status = countOnly ? 'open' : statusEl.value
+  if (!countOnly) listEl.innerHTML = '<div class="feedback-empty">加载中…</div>'
   try {
-    const res = await fetch(`/api/admin/gaps?days=${encodeURIComponent(days)}`, { headers: auth() })
+    const res = await fetch(`/api/gaps?days=${encodeURIComponent(days)}&status=${status}`, { headers: auth() })
     const data = await res.json()
     if (!res.ok) throw new Error(data.error || '加载失败')
+
+    // 各状态的数量标在下拉选项上，导航上的数字是待处理数
+    const labels = { open: '待处理', resolved: '已补上', dismissed: '不需要补' }
+    for (const option of statusEl.options) option.textContent = `${labels[option.value]}（${data.counts[option.value]}）`
+    const countEl = document.getElementById('gaps-count')
+    countEl.textContent = data.counts.open > 99 ? '99+' : String(data.counts.open)
+    countEl.classList.toggle('hidden', data.counts.open === 0)
+    if (countOnly) return
+
+    gapItems = data.items
     if (!data.items.length) {
-      listEl.innerHTML = `<div class="feedback-empty">近 ${data.days} 天没有发现知识空白。</div>`
+      const empty = {
+        open: `近 ${data.days} 天没有待处理的缺口。`,
+        resolved: `近 ${data.days} 天没有标记为已补上的缺口。`,
+        dismissed: `近 ${data.days} 天没有标记为不需要补的缺口。`,
+      }[data.status]
+      listEl.innerHTML = `<div class="feedback-empty">${empty}</div>`
       return
     }
-    listEl.innerHTML = data.items.map(gap => {
+    listEl.innerHTML = data.items.map((gap, index) => {
       const tags = [
+        gap.reopened ? '<span class="gap-tag gap-tag-user" title="标记已补上之后，又有人问到同一个问题">补上后又被问到</span>' : '',
         gap.sources.ai_not_found ? `<span class="gap-tag">AI 未找到 ×${gap.sources.ai_not_found}</span>` : '',
         gap.sources.feedback_not_found ? `<span class="gap-tag gap-tag-user">用户反馈 ×${gap.sources.feedback_not_found}</span>` : '',
         gap.sources.search_empty ? `<span class="gap-tag" title="AI 助手通过 MCP 检索，没有找到任何内容">检索无结果 ×${gap.sources.search_empty}</span>` : '',
       ].join('')
+      const handled = gap.status !== 'open'
+        ? ` · ${gap.status === 'resolved' ? '已补上' : '不需要补'}（${escHtml(gap.status_by || '未知')}，${fmtDateTime(gap.status_at)}）`
+        : ''
+      const btn = (action, label, kind = 'secondary') =>
+        `<button class="btn btn-${kind} btn-sm" data-gap-action="${action}" data-gap-index="${index}">${label}</button>`
+      const actions = gap.status === 'open'
+        ? [gap.kb_id ? btn('docs', '补充文档') : '', btn('resolved', '已补上'), btn('dismissed', '不需要补')]
+        : [btn('open', '重新打开')]
       return `
         <div class="gap-row">
           <span class="gap-count" title="被问到的次数">${gap.count}</span>
           <div class="gap-main">
             <div class="gap-question">${escHtml(gap.question)}</div>
-            <div class="gap-meta">${escHtml(gap.kb_name ?? '全部知识库')} · 最近 ${fmtDateTime(gap.last_at)} ${tags}</div>
+            <div class="gap-meta">${escHtml(gap.kb_name ?? '全部知识库')} · 最近 ${fmtDateTime(gap.last_at)}${handled} ${tags}</div>
           </div>
+          <div class="gap-actions">${actions.join('')}</div>
         </div>`
     }).join('')
   } catch (e) {
-    listEl.innerHTML = `<div class="feedback-empty" style="color:var(--red)">加载失败：${escHtml(e.message)}</div>`
+    if (!countOnly) listEl.innerHTML = `<div class="feedback-empty" style="color:var(--red)">加载失败：${escHtml(e.message)}</div>`
   }
 }
 

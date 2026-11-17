@@ -44,6 +44,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS, listKnowledgeGapRows,
          getConfig, setConfig,
          recordGapEvent, NOT_FOUND_MARKER, getKbHealth, listUserActivity,
+         listGapStatuses, setGapStatus, clearGapStatus,
          createApiKey, getApiKeyById, listApiKeys, countApiKeys, deleteApiKey, MAX_API_KEYS_PER_USER } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
@@ -61,7 +62,8 @@ import { BINARY_DOCUMENT_EXTS } from './documentText.js'
 import { extractDocumentTextInWorker, extractPdfInWorker, ocrInWorker } from './extractInWorker.js'
 import { OCR_IMAGE_EXTS, isScannedPageText } from './ocr.js'
 import { BackupBusyError, BackupScheduler } from './backupScheduler.js'
-import { groupKnowledgeGaps } from './knowledgeGaps.js'
+import { groupKnowledgeGaps, applyGapStatuses, gapFingerprint } from './knowledgeGaps.js'
+import type { GapState } from './knowledgeGaps.js'
 import { createKnowledgeBaseTools, handleMcpMessage, McpToolError, MCP_PROTOCOL_VERSIONS } from './mcp.js'
 
 const activeProxy = configureProxyFromEnv()
@@ -1644,7 +1646,8 @@ app.get('/api/kbs/:id/stats', requireAuth, (req: AuthRequest, res) => {
     health: {
       ...health,
       // 只给数量：知识空白里是其他人的提问，公开知识库的读者不应看到原文
-      gaps: groupKnowledgeGaps(listKnowledgeGapRows(since, kbId)).length,
+      gaps: applyGapStatuses(groupKnowledgeGaps(listKnowledgeGapRows(since, kbId), Infinity), listGapStatuses())
+        .filter(gap => gap.status === 'open').length,
       canManage: canManageKb(kb, req.user),
     },
   })
@@ -2153,13 +2156,77 @@ app.get('/api/admin/feedback', requireAdmin, (_req, res) => {
   res.json({ items, total_positive, total_negative, satisfaction, reasons: getNegativeFeedbackReasons() })
 })
 
-/** 知识空白：近 N 天 AI 未能回答（或用户反馈"没找到相关资料"）的问题，按出现次数排序 */
-app.get('/api/admin/gaps', requireAdmin, (req, res) => {
-  const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365)
-  const kbId = Number(req.query.kbId) || undefined
+const GAP_FILTERS = ['open', 'resolved', 'dismissed', 'all'] as const
+
+/**
+ * 知识缺口：近 N 天没找到答案的问题，按出现次数排序，附带处理状态。
+ * 管理员看全部（含跨全部知识库的）；普通用户只看自己是所有者的知识库，看不到别人的知识库，也看不到跨库的。
+ * 缺口里只有问题原文，不带提问者身份。
+ * 返回 null 表示无权查看指定的知识库。
+ */
+function listGapsForUser(user: NonNullable<AuthRequest['user']>, query: { days?: unknown; kbId?: unknown; status?: unknown }) {
+  const days = Math.min(Math.max(Number(query.days) || 30, 1), 365)
+  const kbId = Number(query.kbId) || undefined
+  const filter = (GAP_FILTERS as readonly unknown[]).includes(query.status) ? query.status as typeof GAP_FILTERS[number] : 'open'
   const since = Math.floor(Date.now() / 1000) - days * 86400
-  const rows = listKnowledgeGapRows(since, kbId)
-  res.json({ days, total: rows.length, items: groupKnowledgeGaps(rows) })
+
+  let rows = listKnowledgeGapRows(since, kbId)
+  if (user.role !== 'admin') {
+    const owned = new Set(listKbsForUser(user.userId).filter(kb => kb.owner_id === user.userId).map(kb => kb.id))
+    if (kbId && !owned.has(kbId)) return null
+    rows = rows.filter(row => row.kb_id != null && owned.has(row.kb_id))
+  }
+  const all = applyGapStatuses(groupKnowledgeGaps(rows, Infinity), listGapStatuses())
+  const items = all.filter(gap => filter === 'all' || gap.status === filter)
+  // 各状态的数量一起返回，页面上切换筛选时不用再请求
+  const counts = { open: 0, resolved: 0, dismissed: 0 }
+  for (const gap of all) counts[gap.status]++
+  // total 是这些缺口被问到的次数合计（和以前一致），不是缺口条数
+  return { days, status: filter, total: items.reduce((n, gap) => n + gap.count, 0), counts, items: items.slice(0, 100) }
+}
+
+app.get('/api/gaps', requireAuth, (req: AuthRequest, res) => {
+  const result = listGapsForUser(req.user!, req.query)
+  if (!result) { res.status(403).json({ error: '只有知识库所有者可以查看待补知识' }); return }
+  res.json(result)
+})
+
+/** 旧路径，管理员专用，行为与 /api/gaps 一致 */
+app.get('/api/admin/gaps', requireAdmin, (req: AuthRequest, res) => {
+  res.json(listGapsForUser(req.user!, req.query))
+})
+
+/**
+ * 标记缺口的处理状态：resolved 已补上、dismissed 不需要补、open 重新打开。
+ * 管理员或知识库所有者可操作；跨全部知识库的缺口（kbId 为 null）只有管理员能处理。
+ * 通过接口密钥调用会被 isApiKeyAllowed 拒绝（只允许 GET 和问答）。
+ */
+app.put('/api/gaps/status', requireAuth, (req: AuthRequest, res) => {
+  const { kbId, question, status } = req.body as { kbId?: unknown; question?: unknown; status?: unknown }
+  if (typeof question !== 'string' || !question.trim()) { res.status(400).json({ error: '问题不能为空' }); return }
+  if (status !== 'open' && status !== 'resolved' && status !== 'dismissed') {
+    res.status(400).json({ error: '状态只能是 open、resolved 或 dismissed' }); return
+  }
+  if (kbId !== null && (typeof kbId !== 'number' || !Number.isInteger(kbId) || kbId <= 0)) {
+    res.status(400).json({ error: 'kbId 必须是知识库编号，或 null（跨全部知识库）' }); return
+  }
+  const user = req.user!
+  if (kbId === null) {
+    if (user.role !== 'admin') { res.status(403).json({ error: '只有管理员可以处理跨全部知识库的缺口' }); return }
+  } else {
+    const kb = getKbById(kbId)
+    if (!kb) { res.status(404).json({ error: '知识库不存在' }); return }
+    if (!canManageKb(kb, user)) { res.status(403).json({ error: '只有知识库所有者或管理员可以处理待补知识' }); return }
+  }
+  const fingerprint = gapFingerprint(question)
+  if (!fingerprint) { res.status(400).json({ error: '问题不能为空' }); return }
+
+  if (status === 'open') clearGapStatus(kbId, fingerprint)
+  else setGapStatus({ kbId, fingerprint, status, userId: user.userId, username: user.username })
+  audit(req, 'gap.status', 'kb', {
+    entityId: kbId, kbId, detail: { question: question.trim().slice(0, 200), status: status as GapState },
+  })
+  res.json({ ok: true })
 })
 
 /* ── 数据备份 ─────────────────────────────────────── */

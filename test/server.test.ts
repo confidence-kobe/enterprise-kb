@@ -1307,6 +1307,122 @@ describe('conversation search and pinning', () => {
   })
 })
 
+describe('待补知识的处理状态', () => {
+  async function setup() {
+    const admin = await login('admin', 'Admin@123')
+    const adminAuth = { Authorization: `Bearer ${admin.token}` }
+    const suffix = Math.random().toString(36).slice(2, 8)
+    const mkUser = async (name: string) => {
+      const username = `${name}_${suffix}`
+      await request(app).post('/api/admin/users').set(adminAuth).send({ username, password: 'Owner@12345', role: 'user' }).expect(201)
+      const u = await login(username, 'Owner@12345')
+      return { id: u.user.id as number, auth: { Authorization: `Bearer ${u.token}` } }
+    }
+    const alice = await mkUser('alice')
+    const bob = await mkUser('bob')
+    const aliceKb = (await request(app).post('/api/kbs').set(alice.auth).send({ name: `Alice库${suffix}` }).expect(201)).body.id as number
+    const bobKb = (await request(app).post('/api/kbs').set(bob.auth).send({ name: `Bob库${suffix}` }).expect(201)).body.id as number
+    const ask = (userId: number, kbId: number, q: string) => {
+      const conv = createConversation(userId, kbId, q)
+      insertMessages(conv.id, [
+        { role: 'user', content: q, tool_calls: null, tool_call_id: null, seq: 0 },
+        { role: 'assistant', content: '抱歉，知识库中未找到相关内容。', tool_calls: null, tool_call_id: null, seq: 1 },
+      ])
+    }
+    return { admin, adminAuth, alice, bob, aliceKb, bobKb, ask, suffix }
+  }
+
+  it('所有者只看到自己知识库的缺口，管理员看到全部', async () => {
+    const { adminAuth, alice, bob, aliceKb, bobKb, ask } = await setup()
+    ask(alice.id, aliceKb, '年假怎么算')
+    ask(bob.id, bobKb, '报销流程')
+
+    const mine = await request(app).get('/api/gaps').set(alice.auth).expect(200)
+    expect(mine.body.items.map((g: { question: string }) => g.question)).toEqual(['年假怎么算'])
+    expect(mine.body.counts).toEqual({ open: 1, resolved: 0, dismissed: 0 })
+
+    // 指定别人的知识库：拒绝，而不是返回空列表
+    await request(app).get('/api/gaps').set(alice.auth).query({ kbId: bobKb }).expect(403)
+
+    const all = (await request(app).get('/api/gaps').set(adminAuth).expect(200)).body.items.map((g: { question: string }) => g.question)
+    expect(all).toEqual(expect.arrayContaining(['年假怎么算', '报销流程']))
+
+    // 没有知识库的人什么也看不到，也不报错
+    const nobody = await request(app).post('/api/admin/users').set(adminAuth)
+      .send({ username: `nobody_${Date.now()}`, password: 'Owner@12345', role: 'user' }).expect(201)
+    const nobodyLogin = await login(nobody.body.username, 'Owner@12345')
+    const empty = await request(app).get('/api/gaps').set('Authorization', `Bearer ${nobodyLogin.token}`).expect(200)
+    expect(empty.body.items).toEqual([])
+    await request(app).get('/api/gaps').expect(401)
+  })
+
+  it('标记已补上、不需要补、重新打开，各状态分开列出', async () => {
+    const { alice, aliceKb, ask } = await setup()
+    ask(alice.id, aliceKb, '年假怎么算')
+    ask(alice.id, aliceKb, '报销流程')
+    const put = (question: string, status: string, kbId: number | null = aliceKb) =>
+      request(app).put('/api/gaps/status').set(alice.auth).send({ kbId, question, status })
+    const list = async (status?: string) =>
+      (await request(app).get('/api/gaps').set(alice.auth).query(status ? { status } : {}).expect(200)).body
+
+    await put('年假怎么算', 'resolved').expect(200)
+    await put('报销 流程？', 'dismissed').expect(200) // 标点和空格不同，仍是同一条
+
+    expect((await list()).items).toEqual([])
+    const resolved = await list('resolved')
+    expect(resolved.items).toHaveLength(1)
+    expect(resolved.items[0]).toMatchObject({ question: '年假怎么算', status: 'resolved', reopened: false })
+    expect(resolved.items[0].status_by).toMatch(/^alice_/)
+    expect((await list('dismissed')).items[0]).toMatchObject({ question: '报销流程', status: 'dismissed' })
+    const everything = await list('all')
+    expect(everything.counts).toEqual({ open: 0, resolved: 1, dismissed: 1 })
+    expect(everything.items).toHaveLength(2)
+
+    await put('年假怎么算', 'open').expect(200)
+    expect((await list()).items.map((g: { question: string }) => g.question)).toEqual(['年假怎么算'])
+    expect((await list('bogus')).status).toBe('open') // 不认识的筛选值按待处理
+  })
+
+  it('只有所有者和管理员能改状态；跨全部知识库的缺口只有管理员能改', async () => {
+    const { adminAuth, alice, bob, aliceKb, ask } = await setup()
+    ask(alice.id, aliceKb, '年假怎么算')
+    const body = { kbId: aliceKb, question: '年假怎么算', status: 'resolved' }
+
+    await request(app).put('/api/gaps/status').set(bob.auth).send(body).expect(403)
+    await request(app).put('/api/gaps/status').send(body).expect(401)
+    await request(app).put('/api/gaps/status').set(alice.auth).send({ ...body, kbId: null }).expect(403)
+    await request(app).put('/api/gaps/status').set(adminAuth).send({ ...body, kbId: null }).expect(200)
+    await request(app).put('/api/gaps/status').set(adminAuth).send(body).expect(200)
+
+    // 参数校验
+    await request(app).put('/api/gaps/status').set(alice.auth).send({ ...body, status: 'done' }).expect(400)
+    await request(app).put('/api/gaps/status').set(alice.auth).send({ ...body, question: '  ' }).expect(400)
+    await request(app).put('/api/gaps/status').set(alice.auth).send({ ...body, question: 123 }).expect(400)
+    await request(app).put('/api/gaps/status').set(alice.auth).send({ ...body, kbId: '1' }).expect(400)
+    await request(app).put('/api/gaps/status').set(alice.auth).send({ ...body, kbId: undefined }).expect(400)
+    await request(app).put('/api/gaps/status').set(alice.auth).send({ ...body, kbId: 999999 }).expect(404)
+
+    // 接口密钥不能改状态（只允许 GET 和问答）
+    const { isApiKeyAllowed } = await import('../src/auth.ts')
+    expect(isApiKeyAllowed('PUT', '/api/gaps/status')).toBe(false)
+    expect(isApiKeyAllowed('GET', '/api/gaps')).toBe(true)
+  })
+
+  it('知识库的统计只数待处理的缺口；删除知识库时一并清掉状态', async () => {
+    const { adminAuth, alice, aliceKb, ask } = await setup()
+    ask(alice.id, aliceKb, '年假怎么算')
+    ask(alice.id, aliceKb, '报销流程')
+    const gapsOf = async () => (await request(app).get(`/api/kbs/${aliceKb}/stats`).set(alice.auth).expect(200)).body.health.gaps
+    expect(await gapsOf()).toBe(2)
+    await request(app).put('/api/gaps/status').set(alice.auth).send({ kbId: aliceKb, question: '年假怎么算', status: 'resolved' }).expect(200)
+    expect(await gapsOf()).toBe(1)
+
+    await request(app).delete(`/api/kbs/${aliceKb}`).set(adminAuth).expect(200)
+    const { listGapStatuses } = await import('../src/db.ts')
+    expect(listGapStatuses().filter(s => s.kb_id === aliceKb)).toEqual([])
+  })
+})
+
 describe('api keys and MCP', () => {
   async function waitIndexed(docId: number) {
     for (let i = 0; i < 200 && !isDocIndexed(docId); i++) await new Promise(r => setTimeout(r, 10))

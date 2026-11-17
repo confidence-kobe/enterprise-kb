@@ -200,6 +200,7 @@ messages              id · conversation_id · role · content · tool_calls · 
 response_feedback     id · conversation_id · user_id · rating · 差评原因与问答快照 · created_at
 doc_versions          id · doc_id · title · content · size · user_id · username · note · created_at
 gap_events            id · kb_id（可为空）· user_id · question · source · channel · created_at
+gap_status            kb_id（0 = 跨全部知识库）· fingerprint · status · user_id · username · updated_at
 api_keys              id · user_id · name · prefix · key_hash · created_at · expires_at · last_used_at
 audit_events          id · user_id · username · action · entity_type · entity_id · kb_id · detail · ip
 system_config         key · value（例如当前选用的模型）
@@ -655,7 +656,23 @@ return { response, turns, messages }
 | 网页跨库提问、MCP 提问回答"未找到相关内容" | gap_events（source = ai_not_found） |
 | MCP 检索没有结果 | gap_events（source = search_empty，显示为 检索无结果） |
 
-管理员接口：`GET /api/admin/gaps?days=&kbId=`（最近 7/30/90 天）。
+#### 处理状态
+
+每个缺口有三种状态：**待处理**（默认，没有记录）、**已补上**、**不需要补**。状态存在 `gap_status` 表里，按"知识库 + 问题指纹"定位，指纹忽略大小写、空白和标点，所以换个说法标点再问仍是同一条。
+
+- 标为**已补上**之后，如果又有人问到同一个问题（最近一次提问晚于处理时间），缺口自动回到待处理并带「补上后又被问到」标记，说明补的内容没解决问题。
+- 标为**不需要补**的保持不动，要处理必须手动重新打开。
+- 知识库的统计页和管理台的待处理数字都只计待处理的缺口。
+
+接口：
+
+| 接口 | 谁能用 | 说明 |
+|------|--------|------|
+| `GET /api/gaps?days=&kbId=&status=` | 已登录用户 | `status` 取 `open`（默认）、`resolved`、`dismissed`、`all`；返回各状态的数量 `counts`。管理员看全部，普通用户只看自己是所有者的知识库 |
+| `PUT /api/gaps/status` | 管理员、知识库所有者 | 请求体 `{ kbId, question, status }`，`status` 取 `open`（重新打开）、`resolved`、`dismissed`。`kbId` 为 `null`（跨全部知识库的缺口）只有管理员能改。记入审计日志（`gap.status`） |
+| `GET /api/admin/gaps` | 管理员 | 旧路径，行为与 `/api/gaps` 一致 |
+
+接口密钥只能调用 `GET /api/gaps`，不能改状态。
 
 ---
 
