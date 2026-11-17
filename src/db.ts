@@ -324,6 +324,9 @@ export function initDb(dbPath: string): void {
     )
   `)
 
+  // 已补上的缺口是否显示在聊天页的「最近补充」里（默认显示，所有者可以关掉）
+  try { db.exec('ALTER TABLE gap_status ADD COLUMN announce INTEGER NOT NULL DEFAULT 1') } catch { /* 列已存在 */ }
+
   // 「重新验证」的结果：把缺口的问题重新问一遍，记下现在能不能答上。每个缺口只留最近一次。
   db.exec(`
     CREATE TABLE IF NOT EXISTS gap_checks (
@@ -1818,12 +1821,14 @@ export interface GapStatusRow {
   kb_id: number
   fingerprint: string
   status: GapStatus
+  /** 1 = 已补上的缺口显示在聊天页的「最近补充」里 */
+  announce: number
   username: string | null
   updated_at: number
 }
 
 export function listGapStatuses(): GapStatusRow[] {
-  return db.prepare('SELECT kb_id, fingerprint, status, username, updated_at FROM gap_status').all() as GapStatusRow[]
+  return db.prepare('SELECT kb_id, fingerprint, status, announce, username, updated_at FROM gap_status').all() as GapStatusRow[]
 }
 
 /** 标记缺口为已补上或不需要补；已有记录则覆盖，处理时间更新为现在 */
@@ -1831,15 +1836,18 @@ export function setGapStatus(data: {
   kbId: number | null
   fingerprint: string
   status: GapStatus
+  /** 已补上时是否显示在聊天页的「最近补充」里，默认显示 */
+  announce?: boolean
   userId: number
   username: string
 }): void {
   db.prepare(`
-    INSERT INTO gap_status (kb_id, fingerprint, status, user_id, username, updated_at)
-    VALUES (?, ?, ?, ?, ?, strftime('%s','now'))
+    INSERT INTO gap_status (kb_id, fingerprint, status, announce, user_id, username, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'))
     ON CONFLICT(kb_id, fingerprint) DO UPDATE SET
-      status = excluded.status, user_id = excluded.user_id, username = excluded.username, updated_at = excluded.updated_at
-  `).run(data.kbId ?? 0, data.fingerprint, data.status, data.userId, data.username)
+      status = excluded.status, announce = excluded.announce,
+      user_id = excluded.user_id, username = excluded.username, updated_at = excluded.updated_at
+  `).run(data.kbId ?? 0, data.fingerprint, data.status, data.announce === false ? 0 : 1, data.userId, data.username)
 }
 
 /** 重新打开：删掉处理记录，缺口回到待处理 */

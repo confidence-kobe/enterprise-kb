@@ -32,6 +32,8 @@ export interface KnowledgeGapWithStatus extends KnowledgeGap {
   status: GapState
   /** 标记"已补上"之后又有人问到同一个问题：补的内容没解决问题，缺口自动回到待处理 */
   reopened: boolean
+  /** 已补上时是否显示在聊天页的「最近补充」里；没处理过的缺口为 true（没有意义，仅为字段齐全） */
+  announce: boolean
   status_at: number | null
   status_by: string | null
 }
@@ -90,13 +92,14 @@ export function applyGapStatuses(
       ? { answerable: check.answerable === 1, answer: check.answer, checked_at: check.checked_at, checked_by: check.username }
       : null
     const record = statusByKey.get(key)
-    if (!record) return { ...gap, check: checked, status: 'open', reopened: false, status_at: null, status_by: null }
+    if (!record) return { ...gap, check: checked, status: 'open', reopened: false, announce: true, status_at: null, status_by: null }
     const reopened = record.status === 'resolved' && gap.last_at > record.updated_at
     return {
       ...gap,
       check: checked,
       status: reopened ? 'open' : record.status,
       reopened,
+      announce: record.announce !== 0,
       status_at: record.updated_at,
       status_by: record.username,
     }
@@ -110,4 +113,24 @@ export function applyGapStatuses(
 export function isAnswerable(answer: string, notFoundMarker: string): boolean {
   const text = answer.trim()
   return text.length > 0 && !text.includes(notFoundMarker)
+}
+
+export interface RecentAnswer {
+  question: string
+  resolved_at: number
+}
+
+/**
+ * 聊天页「最近补充」要显示哪些问题：最近 days 天内标为已补上、没有关掉公开、之后没人再问到的缺口。
+ * 如果标完之后又验证过、结果是仍答不上，就先不显示——别告诉大家"有答案了"却让他们点进去还是没有。
+ * 只给问题原文和时间，不带任何人的信息。
+ */
+export function recentlyAnswered(gaps: KnowledgeGapWithStatus[], nowSeconds: number, days = 30, limit = 5): RecentAnswer[] {
+  const since = nowSeconds - days * 86400
+  return gaps
+    .filter(gap => gap.status === 'resolved' && gap.announce && gap.status_at != null && gap.status_at >= since)
+    .filter(gap => !(gap.check && !gap.check.answerable && gap.check.checked_at >= gap.status_at!))
+    .sort((a, b) => b.status_at! - a.status_at!)
+    .slice(0, limit)
+    .map(gap => ({ question: gap.question, resolved_at: gap.status_at! }))
 }

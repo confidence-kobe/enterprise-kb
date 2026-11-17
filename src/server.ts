@@ -62,7 +62,7 @@ import { BINARY_DOCUMENT_EXTS } from './documentText.js'
 import { extractDocumentTextInWorker, extractPdfInWorker, ocrInWorker } from './extractInWorker.js'
 import { OCR_IMAGE_EXTS, isScannedPageText } from './ocr.js'
 import { BackupBusyError, BackupScheduler } from './backupScheduler.js'
-import { groupKnowledgeGaps, applyGapStatuses, gapFingerprint, isAnswerable } from './knowledgeGaps.js'
+import { groupKnowledgeGaps, applyGapStatuses, gapFingerprint, isAnswerable, recentlyAnswered } from './knowledgeGaps.js'
 import type { GapState } from './knowledgeGaps.js'
 import { createKnowledgeBaseTools, handleMcpMessage, McpToolError, MCP_PROTOCOL_VERSIONS } from './mcp.js'
 
@@ -2192,6 +2192,23 @@ app.get('/api/gaps', requireAuth, (req: AuthRequest, res) => {
 })
 
 /**
+ * 聊天页的「最近补充」：最近补上了答案的问题。能访问这个知识库的人都能看到，所以只给问题原文和时间，
+ * 不带谁问的、谁处理的；所有者标「已补上」时可以选择不公开。
+ * 只看单个知识库，不做跨库汇总。
+ */
+app.get('/api/kbs/:id/recent-answers', requireAuth, (req: AuthRequest, res) => {
+  const kbId = Number(req.params.id)
+  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
+    res.status(403).json({ error: '无权限' }); return
+  }
+  if (!getKbById(kbId)) { res.status(404).json({ error: '知识库不存在' }); return }
+  const now = Math.floor(Date.now() / 1000)
+  const rows = listKnowledgeGapRows(now - 90 * 86400, kbId)
+  const gaps = applyGapStatuses(groupKnowledgeGaps(rows, Infinity), listGapStatuses(), listGapChecks())
+  res.json({ items: recentlyAnswered(gaps, now) })
+})
+
+/**
  * 重新验证：补完文档后，把缺口的问题用真实模型重新问一遍，看现在能不能答上。
  * 和正常提问的区别：不建对话、不记缺口（验证失败不会让这个缺口的次数增加，也不会把"已补上"的缺口弹回待处理），
  * 只保存最近一次结果。要花模型费用，所以只在人点按钮时才跑，并受问答频率限制。
@@ -2242,7 +2259,10 @@ app.get('/api/admin/gaps', requireAdmin, (req: AuthRequest, res) => {
  * 通过接口密钥调用会被 isApiKeyAllowed 拒绝（只允许 GET 和问答）。
  */
 app.put('/api/gaps/status', requireAuth, (req: AuthRequest, res) => {
-  const { kbId, question, status } = req.body as { kbId?: unknown; question?: unknown; status?: unknown }
+  const { kbId, question, status, announce } = req.body as { kbId?: unknown; question?: unknown; status?: unknown; announce?: unknown }
+  if (announce !== undefined && typeof announce !== 'boolean') {
+    res.status(400).json({ error: 'announce 必须是 true 或 false' }); return
+  }
   if (typeof question !== 'string' || !question.trim()) { res.status(400).json({ error: '问题不能为空' }); return }
   if (status !== 'open' && status !== 'resolved' && status !== 'dismissed') {
     res.status(400).json({ error: '状态只能是 open、resolved 或 dismissed' }); return
@@ -2262,9 +2282,9 @@ app.put('/api/gaps/status', requireAuth, (req: AuthRequest, res) => {
   if (!fingerprint) { res.status(400).json({ error: '问题不能为空' }); return }
 
   if (status === 'open') clearGapStatus(kbId, fingerprint)
-  else setGapStatus({ kbId, fingerprint, status, userId: user.userId, username: user.username })
+  else setGapStatus({ kbId, fingerprint, status, announce: announce as boolean | undefined, userId: user.userId, username: user.username })
   audit(req, 'gap.status', 'kb', {
-    entityId: kbId, kbId, detail: { question: question.trim().slice(0, 200), status: status as GapState },
+    entityId: kbId, kbId, detail: { question: question.trim().slice(0, 200), status: status as GapState, ...(announce === false ? { announce: false } : {}) },
   })
   res.json({ ok: true })
 })
