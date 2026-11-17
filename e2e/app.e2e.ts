@@ -168,6 +168,33 @@ test('knowledge gaps tab: mark as resolved, review, and reopen', async ({ page, 
   expect(errors).toEqual([])
 })
 
+test('knowledge gaps tab: re-verify a question against the knowledge base', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  // 造一条缺口：问一个问题，再对回答点「没找到相关资料」
+  const asked = await request.post(`/api/kbs/${kbId}/ask`, { headers: auth(), data: { question: '病假怎么请？' } })
+  const done = (await asked.text()).split('\n\n').filter(p => p.startsWith('data: ')).map(p => JSON.parse(p.slice(6)))
+    .find(event => event.type === 'done')
+  await request.post(`/api/conversations/${done.conversationId}/feedback`, { headers: auth(), data: { rating: -1, reason: 'not_found' } })
+
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=gaps]')
+
+  // 模型现在能回答（测试用的模拟模型只有问到「补贴」才会说没找到）
+  const answerable = page.locator('#gap-list .gap-row', { hasText: '病假怎么请' })
+  await answerable.getByRole('button', { name: '重新验证' }).click()
+  await expect(answerable).toContainText('验证：能答上了')
+  await answerable.getByText('查看验证时的回答').click()
+  await expect(answerable.locator('.gap-check-answer')).toContainText('年假为每年 10 天')
+
+  // 仍然答不上的：标出「仍答不上」，缺口还在待处理里
+  const stillGap = page.locator('#gap-list .gap-row', { hasText: '出差补贴标准是多少' })
+  await stillGap.getByRole('button', { name: '重新验证' }).click()
+  await expect(stillGap).toContainText('验证：仍答不上')
+  await expect(stillGap.getByRole('button', { name: '已补上' })).toBeVisible()
+  expect(errors).toEqual([])
+})
+
 test('knowledge base owners see the gaps tab for their own knowledge bases only', async ({ page, request }) => {
   const errors = trackErrors(page)
   await request.post('/api/admin/users', { headers: auth(), data: { username: 'gap_owner', password: 'Owner@12345', role: 'user' } })

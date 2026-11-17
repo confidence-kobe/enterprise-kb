@@ -44,7 +44,7 @@ import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createU
          getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS, listKnowledgeGapRows,
          getConfig, setConfig,
          recordGapEvent, NOT_FOUND_MARKER, getKbHealth, listUserActivity,
-         listGapStatuses, setGapStatus, clearGapStatus,
+         listGapStatuses, setGapStatus, clearGapStatus, listGapChecks, saveGapCheck,
          createApiKey, getApiKeyById, listApiKeys, countApiKeys, deleteApiKey, MAX_API_KEYS_PER_USER } from './db.js'
 import type { Document, KnowledgeBase, MessageRow } from './db.js'
 import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
@@ -62,7 +62,7 @@ import { BINARY_DOCUMENT_EXTS } from './documentText.js'
 import { extractDocumentTextInWorker, extractPdfInWorker, ocrInWorker } from './extractInWorker.js'
 import { OCR_IMAGE_EXTS, isScannedPageText } from './ocr.js'
 import { BackupBusyError, BackupScheduler } from './backupScheduler.js'
-import { groupKnowledgeGaps, applyGapStatuses, gapFingerprint } from './knowledgeGaps.js'
+import { groupKnowledgeGaps, applyGapStatuses, gapFingerprint, isAnswerable } from './knowledgeGaps.js'
 import type { GapState } from './knowledgeGaps.js'
 import { createKnowledgeBaseTools, handleMcpMessage, McpToolError, MCP_PROTOCOL_VERSIONS } from './mcp.js'
 
@@ -2176,7 +2176,7 @@ function listGapsForUser(user: NonNullable<AuthRequest['user']>, query: { days?:
     if (kbId && !owned.has(kbId)) return null
     rows = rows.filter(row => row.kb_id != null && owned.has(row.kb_id))
   }
-  const all = applyGapStatuses(groupKnowledgeGaps(rows, Infinity), listGapStatuses())
+  const all = applyGapStatuses(groupKnowledgeGaps(rows, Infinity), listGapStatuses(), listGapChecks())
   const items = all.filter(gap => filter === 'all' || gap.status === filter)
   // 各状态的数量一起返回，页面上切换筛选时不用再请求
   const counts = { open: 0, resolved: 0, dismissed: 0 }
@@ -2189,6 +2189,46 @@ app.get('/api/gaps', requireAuth, (req: AuthRequest, res) => {
   const result = listGapsForUser(req.user!, req.query)
   if (!result) { res.status(403).json({ error: '只有知识库所有者可以查看待补知识' }); return }
   res.json(result)
+})
+
+/**
+ * 重新验证：补完文档后，把缺口的问题用真实模型重新问一遍，看现在能不能答上。
+ * 和正常提问的区别：不建对话、不记缺口（验证失败不会让这个缺口的次数增加，也不会把"已补上"的缺口弹回待处理），
+ * 只保存最近一次结果。要花模型费用，所以只在人点按钮时才跑，并受问答频率限制。
+ * 必须指定知识库（跨全部知识库的缺口没法确定该问哪个库）；管理员或所有者可用；接口密钥不能用。
+ */
+app.post('/api/gaps/verify', requireAuth, qaRateLimit, async (req: AuthRequest, res) => {
+  const { kbId, question } = req.body as { kbId?: unknown; question?: unknown }
+  if (typeof kbId !== 'number' || !Number.isInteger(kbId) || kbId <= 0) {
+    res.status(400).json({ error: 'kbId 必须是知识库编号' }); return
+  }
+  if (typeof question !== 'string' || !gapFingerprint(question)) {
+    res.status(400).json({ error: '问题不能为空' }); return
+  }
+  const kb = getKbById(kbId)
+  if (!kb) { res.status(404).json({ error: '知识库不存在' }); return }
+  if (!canManageKb(kb, req.user)) {
+    res.status(403).json({ error: '只有知识库所有者或管理员可以验证待补知识' }); return
+  }
+
+  const abortCtrl = new AbortController()
+  res.on('close', () => { if (!res.writableEnded) abortCtrl.abort() })
+  try {
+    const asked = question.trim().slice(0, 300)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await kbExecutor(kb, () => {}).run(asked, ALL_TOOLS, [] as any, abortCtrl.signal)
+    if (abortCtrl.signal.aborted) return
+    const answer = result.response.trim()
+    const answerable = isAnswerable(answer, NOT_FOUND_MARKER)
+    saveGapCheck({
+      kbId, fingerprint: gapFingerprint(asked), answerable, answer,
+      userId: req.user!.userId, username: req.user!.username,
+    })
+    audit(req, 'gap.verify', 'kb', { entityId: kbId, kbId, detail: { question: asked.slice(0, 200), answerable } })
+    res.json({ answerable, answer: answer.slice(0, 1000), checked_at: Math.floor(Date.now() / 1000) })
+  } catch (err) {
+    if (!abortCtrl.signal.aborted) res.status(502).json({ error: `验证失败：${(err as Error).message}` })
+  }
 })
 
 /** 旧路径，管理员专用，行为与 /api/gaps 一致 */

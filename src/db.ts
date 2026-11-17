@@ -324,6 +324,20 @@ export function initDb(dbPath: string): void {
     )
   `)
 
+  // 「重新验证」的结果：把缺口的问题重新问一遍，记下现在能不能答上。每个缺口只留最近一次。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gap_checks (
+      kb_id       INTEGER NOT NULL,
+      fingerprint TEXT    NOT NULL,
+      answerable  INTEGER NOT NULL,
+      answer      TEXT    NOT NULL,
+      user_id     INTEGER,
+      username    TEXT,
+      checked_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      PRIMARY KEY (kb_id, fingerprint)
+    )
+  `)
+
   // 对外接口密钥：只存 SHA-256 哈希，明文只在创建时返回一次
   db.exec(`
     CREATE TABLE IF NOT EXISTS api_keys (
@@ -537,6 +551,7 @@ export function deleteKb(id: number): void {
     db.prepare('DELETE FROM doc_chunks WHERE kb_id = ?').run(id)
     db.prepare('DELETE FROM doc_chunk_vectors WHERE kb_id = ?').run(id)
     db.prepare('DELETE FROM gap_status WHERE kb_id = ?').run(id)
+    db.prepare('DELETE FROM gap_checks WHERE kb_id = ?').run(id)
     db.prepare('DELETE FROM knowledge_bases WHERE id = ?').run(id)
   })()
 }
@@ -1830,6 +1845,37 @@ export function setGapStatus(data: {
 /** 重新打开：删掉处理记录，缺口回到待处理 */
 export function clearGapStatus(kbId: number | null, fingerprint: string): void {
   db.prepare('DELETE FROM gap_status WHERE kb_id = ? AND fingerprint = ?').run(kbId ?? 0, fingerprint)
+}
+
+export interface GapCheckRow {
+  kb_id: number
+  fingerprint: string
+  answerable: number
+  answer: string
+  username: string | null
+  checked_at: number
+}
+
+export function listGapChecks(): GapCheckRow[] {
+  return db.prepare('SELECT kb_id, fingerprint, answerable, answer, username, checked_at FROM gap_checks').all() as GapCheckRow[]
+}
+
+/** 保存最近一次验证结果；回答只留前 1000 个字，够看清模型答了什么 */
+export function saveGapCheck(data: {
+  kbId: number
+  fingerprint: string
+  answerable: boolean
+  answer: string
+  userId: number
+  username: string
+}): void {
+  db.prepare(`
+    INSERT INTO gap_checks (kb_id, fingerprint, answerable, answer, user_id, username, checked_at)
+    VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'))
+    ON CONFLICT(kb_id, fingerprint) DO UPDATE SET
+      answerable = excluded.answerable, answer = excluded.answer,
+      user_id = excluded.user_id, username = excluded.username, checked_at = excluded.checked_at
+  `).run(data.kbId, data.fingerprint, data.answerable ? 1 : 0, data.answer.slice(0, 1000), data.userId, data.username)
 }
 
 export function getAllFeedbackStats(): KbFeedbackStats[] {
