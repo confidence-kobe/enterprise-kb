@@ -27,28 +27,22 @@ import * as path from 'node:path'
 import * as fs from 'node:fs'
 import * as url from 'node:url'
 
-import { initDb, ensureAdmin, getUserByUsername, getUserById, listUsers, createUser, deleteUser,
-         listKbsForUser, getAllKbs, getKbById, createKb, deleteKb, updateKbPublic, updateKbStoragePath, updateKbMeta,
+import { initDb, ensureAdmin, getUserByUsername, listKbsForUser, getAllKbs, getKbById, createKb, deleteKb, updateKbPublic, updateKbStoragePath, updateKbMeta,
          updateKbSyncSource, updateKbSyncResult,
          canUserAccessKb, grantKbAccess, revokeKbAccess, listKbMembers,
          listDocs, listDocsWithCounts, listDocsBySourceType, createDoc, updateDocFromSync, deleteDoc, getDocById,
          addDocVersion, listDocVersions, getDocVersion, countDocVersions,
-         updateUserPassword, updateUserRole,
-         listConversations, createConversation, updateConversationTitle, touchConversation,
-         deleteConversation, getConversationById, listMessages, insertMessages, countMessages,
-         countConversations, pinConversation, getKbStats, searchConversations,
+         createConversation, updateConversationTitle, touchConversation,
+         getConversationById, listMessages, insertMessages, countMessages,
+         getKbStats, searchConversations,
          indexDocContent, indexDocContentInBatches, removeDocFromIndex, isDocIndexed, searchDocContent, countDocs,
-         updateDocMeta, updateDocSummary, updateDocIndexStatus, updateDocOcrPages, listAuditEvents,
-         updateKbSystemPrompt, storeChunkVectors, getDocVectorCount, getRelatedDocs,
-         upsertFeedback, getAllFeedbackStats,
-         getNegativeFeedbackReasons, listNegativeFeedback, FEEDBACK_REASONS, listKnowledgeGapRows,
-         getConfig, setConfig,
-         recordGapEvent, NOT_FOUND_MARKER, getKbHealth, listUserActivity,
-         listGapStatuses, createApiKey, getApiKeyById, listApiKeys, countApiKeys, deleteApiKey, MAX_API_KEYS_PER_USER } from './db.js'
-import type { Document, KnowledgeBase, MessageRow } from './db.js'
-import { isEmbeddingEnabled, getEmbeddingModel, embedChunks } from './embedding.js'
+         updateDocMeta, updateDocSummary, updateDocIndexStatus, updateDocOcrPages, updateKbSystemPrompt, storeChunkVectors, getDocVectorCount, getRelatedDocs,
+         listKnowledgeGapRows,
+         getConfig, recordGapEvent, NOT_FOUND_MARKER, getKbHealth, listGapStatuses } from './db.js'
+import type { Document, KnowledgeBase } from './db.js'
+import { isEmbeddingEnabled, embedChunks } from './embedding.js'
 import { chunkDocument } from './documentChunker.js'
-import { requireAuth, requireAdmin, signToken, verifyPassword, verifyLogin, hashPassword, generateApiKey } from './auth.js'
+import { requireAuth } from './auth.js'
 import type { AuthRequest } from './auth.js'
 import { LLMExecutor } from './executor.js'
 import { ALL_TOOLS, collectKbStats, scopeForKbPath, searchAcrossKbs } from './tools.js'
@@ -60,16 +54,23 @@ import { configureProxyFromEnv } from './proxy.js'
 import { BINARY_DOCUMENT_EXTS } from './documentText.js'
 import { extractDocumentTextInWorker, extractPdfInWorker, ocrInWorker } from './extractInWorker.js'
 import { OCR_IMAGE_EXTS, isScannedPageText } from './ocr.js'
-import { BackupBusyError, BackupScheduler } from './backupScheduler.js'
 import { groupKnowledgeGaps, applyGapStatuses } from './knowledgeGaps.js'
 import { createKnowledgeBaseTools, handleMcpMessage, McpToolError, MCP_PROTOCOL_VERSIONS } from './mcp.js'
 import { envValue, parsePositiveInt } from './env.js'
+import { STATS_DAYS, IS_PRODUCTION, PORT, LLM_BASE_URL, LLM_API_KEY, MAX_TURNS, HISTORY_MAX_MESSAGES, HISTORY_MAX_CHARS, LLM_PROVIDER, PROJECT_ROOT, STORAGE_PATH, DB_PATH, BACKUP_DIR, BACKUP_KEEP, BACKUP_INTERVAL_HOURS, APP_VERSION, ADMIN_USER, ADMIN_PASS, CORS_ORIGIN, TRUST_PROXY, validateRuntimeConfig, llm } from './config.js'
 import { audit, canManageKb, canWriteKb, publicKb, publicDoc, requireKbOwnerOrAdmin } from './access.js'
-import { loginRateLimit, qaRateLimit, takeQaQuota, sweepExpired } from './rateLimit.js'
+import { qaRateLimit, takeQaQuota, sweepExpired } from './rateLimit.js'
 import { registerGapRoutes } from './routes/gaps.js'
+import { registerAuthRoutes } from './routes/auth.js'
+import { registerConversationRoutes } from './routes/conversations.js'
+import { serializeMessage } from './messageCodec.js'
+import { registerConfigRoutes, checkLlmOnline } from './routes/config.js'
+import { registerApiKeyRoutes } from './routes/apiKeys.js'
+import { registerAdminRoutes } from './routes/admin.js'
+import { registerBackupRoutes, backupScheduler } from './routes/backups.js'
 
-// 测试需要从入口取到它
-export { sweepExpired }
+// 测试需要从入口取到它们
+export { sweepExpired, backupScheduler }
 
 const activeProxy = configureProxyFromEnv()
 if (activeProxy) console.log(`[proxy] 出站请求使用代理：${activeProxy}`)
@@ -78,87 +79,13 @@ const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
 
 // ── 配置 ──────────────────────────────────────────────
 
-const NODE_ENV      = process.env.NODE_ENV ?? 'development'
-const IS_PRODUCTION = NODE_ENV === 'production'
-const DEFAULT_ADMIN_PASSWORD  = 'Admin@123'
-const EXAMPLE_ADMIN_PASSWORD  = 'change-this-admin-password'
-const DEFAULT_JWT_SECRET      = 'dev-secret-change-me'
-const EXAMPLE_JWT_SECRET      = 'change-this-to-a-random-secret-string-at-least-32-chars'
-
-function isOllamaEndpoint(baseUrl: string): boolean {
-  return /localhost|127\.0\.0\.1/.test(baseUrl) && baseUrl.includes('11434')
-}
-
-/** Ollama 的 OpenAI 兼容接口在 /v1 下，用户常常只填 http://localhost:11434，这里自动补上 */
-function normalizeLlmBaseUrl(raw: string): string {
-  const trimmed = raw.replace(/\/+$/, '')
-  if (isOllamaEndpoint(trimmed) && !trimmed.endsWith('/v1')) return `${trimmed}/v1`
-  return trimmed
-}
-
-const PORT         = parsePositiveInt(envValue('PORT'), 8080, 'PORT')
-const LLM_BASE_URL = normalizeLlmBaseUrl(envValue('LLM_BASE_URL', 'OLLAMA_BASE_URL') ?? 'http://localhost:11434/v1')
-const LLM_API_KEY  = envValue('LLM_API_KEY', 'OLLAMA_API_KEY') ?? 'ollama'
-let currentModel   = envValue('LLM_MODEL', 'OLLAMA_MODEL') ?? 'qwen2.5:7b'
-const MAX_TURNS    = parsePositiveInt(envValue('LLM_MAX_TURNS', 'OLLAMA_MAX_TURNS'), 8, 'LLM_MAX_TURNS')
-const HISTORY_MAX_MESSAGES = parsePositiveInt(envValue('HISTORY_MAX_MESSAGES'), 40, 'HISTORY_MAX_MESSAGES')
-const HISTORY_MAX_CHARS    = parsePositiveInt(envValue('HISTORY_MAX_CHARS'), 40_000, 'HISTORY_MAX_CHARS')
-const OLLAMA_URL   = LLM_BASE_URL.replace(/\/v1\/?$/, '')
-const IS_OLLAMA    = isOllamaEndpoint(LLM_BASE_URL)
-const LLM_PROVIDER = (() => {
-  if (IS_OLLAMA) return 'Ollama'
-  try {
-    const hostname = new URL(LLM_BASE_URL).hostname
-    if (hostname.includes('minimaxi.com')) return 'MiniMax'
-    if (hostname.includes('openai.com')) return 'OpenAI'
-    return hostname
-  } catch {
-    return 'OpenAI-compatible'
-  }
-})()
-const PROJECT_ROOT = path.join(__dirname, '..')
-/** 相对路径按项目根目录解析，而不是按启动命令所在的目录，避免换个目录启动就找不到数据 */
-function resolveFromProject(envVal: string | undefined, fallback: string): string {
-  const val = envVal ?? fallback
-  return path.isAbsolute(val) ? val : path.resolve(PROJECT_ROOT, val)
-}
-const STORAGE_PATH = resolveFromProject(process.env.STORAGE_PATH, 'storage')
-const DB_PATH      = resolveFromProject(process.env.DB_PATH,      'data/enterprise-kb.db')
-const BACKUP_DIR   = resolveFromProject(envValue('BACKUP_DIR'), 'backups')
-const BACKUP_KEEP  = parsePositiveInt(envValue('BACKUP_KEEP'), 7, 'BACKUP_KEEP')
-/** 自动备份间隔（小时），0 或不设置表示关闭 */
-const BACKUP_INTERVAL_HOURS = envValue('BACKUP_INTERVAL_HOURS') === '0'
-  ? 0
-  : parsePositiveInt(envValue('BACKUP_INTERVAL_HOURS'), 0, 'BACKUP_INTERVAL_HOURS')
-const APP_VERSION  = (() => {
-  try { return JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf-8')).version as string }
-  catch { return 'unknown' }
-})()
-const ADMIN_USER   = process.env.ADMIN_USERNAME   ?? 'admin'
-const ADMIN_PASS   = process.env.ADMIN_PASSWORD   ?? 'Admin@123'
-const CORS_ORIGIN  = envValue('CORS_ORIGIN')
-const TRUST_PROXY  = /^(1|true|yes)$/i.test(envValue('TRUST_PROXY') ?? '')
-
-/** 生产环境拒绝默认或示例密钥：这些值写在公开的代码和 .env.example 里，用了等于没设密码 */
-function validateRuntimeConfig(): void {
-  const jwtSecret = process.env.JWT_SECRET
-  if (IS_PRODUCTION) {
-    if (!jwtSecret || jwtSecret === DEFAULT_JWT_SECRET || jwtSecret === EXAMPLE_JWT_SECRET || jwtSecret.length < 32) {
-      throw new Error('生产环境必须把 JWT_SECRET 设置为至少 32 个字符的随机字符串。')
-    }
-    if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === EXAMPLE_ADMIN_PASSWORD) {
-      throw new Error('部署到生产环境前必须修改 ADMIN_PASSWORD。')
-    }
-  }
-}
-
 // ── 初始化 ────────────────────────────────────────────
 
 validateRuntimeConfig()
 if (!fs.existsSync(STORAGE_PATH)) fs.mkdirSync(STORAGE_PATH, { recursive: true })
 initDb(DB_PATH)
 ensureAdmin(ADMIN_USER, ADMIN_PASS)
-currentModel = getConfig('model') ?? currentModel
+llm.model = getConfig('model') ?? llm.model
 
 // ── 文件类型与同步设置 ────────────────────────────────
 
@@ -599,7 +526,7 @@ async function generateDocSummary(docId: number, originalName: string, text: str
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${LLM_API_KEY}` },
       body: JSON.stringify({
-        model: currentModel,
+        model: llm.model,
         messages: [
           { role: 'system', content: '你是文档摘要助手。用1-2句话（不超过100字）概括文档的核心内容，不加引导语，直接输出摘要。' },
           { role: 'user', content: `文档名：${originalName}\n\n内容：\n${excerpt}` },
@@ -778,7 +705,7 @@ app.get('/healthz', (_req, res) => {
 })
 
 app.get('/readyz', async (_req, res) => {
-  res.json({ status: 'ok', llmOnline: await checkLlmOnline(), model: currentModel })
+  res.json({ status: 'ok', llmOnline: await checkLlmOnline(), model: llm.model })
 })
 
 // 根路径重定向到登录页
@@ -787,99 +714,7 @@ app.get('/', (_req, res) => res.redirect('/login.html'))
 
 // ── 认证路由 ──────────────────────────────────────────
 
-app.post('/api/auth/login', loginRateLimit, async (req, res) => {
-  const { username, password } = req.body as { username: unknown; password: unknown }
-  if (!username || !password || typeof username !== 'string' || typeof password !== 'string') {
-    res.status(400).json({ error: '用户名和密码不能为空' }); return
-  }
-
-  const user = getUserByUsername(username)
-  if (!await verifyLogin(password, user?.password_hash) || !user) {
-    audit(req, 'auth.login_failed', 'auth', {
-      userId: user?.id ?? null,
-      username: username || null,
-      detail: { username },
-    })
-    res.status(401).json({ error: '用户名或密码错误' }); return
-  }
-
-  const token = signToken({ userId: user.id, username: user.username, role: user.role, tv: user.token_version })
-  audit(req, 'auth.login', 'auth', { userId: user.id, username: user.username })
-  res.json({ token, user: { id: user.id, username: user.username, role: user.role } })
-})
-
-app.get('/api/me', requireAuth, (req: AuthRequest, res) => {
-  res.json(req.user)
-})
-
-app.patch('/api/me/password', requireAuth, async (req: AuthRequest, res) => {
-  const { currentPassword, newPassword } = req.body as {
-    currentPassword: string; newPassword: string
-  }
-  if (!currentPassword || !newPassword || typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
-    res.status(400).json({ error: '请填写当前密码和新密码' }); return
-  }
-  if (newPassword.length < 6) {
-    res.status(400).json({ error: '新密码至少 6 位' }); return
-  }
-
-  const user = getUserById(req.user!.userId)
-  if (!user || !await verifyPassword(currentPassword, user.password_hash)) {
-    res.status(401).json({ error: '当前密码错误' }); return
-  }
-
-  updateUserPassword(req.user!.userId, await hashPassword(newPassword))
-  audit(req, 'user.password_changed', 'user', { entityId: req.user!.userId })
-  // 改密会使所有旧 Token 失效（含其他设备）；为当前会话签发新 Token
-  const updated = getUserById(req.user!.userId)!
-  const token = signToken({ userId: updated.id, username: updated.username, role: updated.role, tv: updated.token_version })
-  res.json({ ok: true, token })
-})
-
-// ── 接口密钥（只能用登录 Token 管理，密钥本身不能管理密钥） ──────
-
-const API_KEY_EXPIRY_DAYS_MAX = 3650
-
-/** 返回给前端的密钥信息：用白名单挑字段，保证 key_hash 永远不会出现在响应里 */
-function publicApiKey(key: ReturnType<typeof listApiKeys>[number]) {
-  const { id, user_id, username, name, prefix, created_at, expires_at, last_used_at } = key
-  return { id, user_id, username, name, prefix, created_at, expires_at, last_used_at }
-}
-
-app.get('/api/me/api-keys', requireAuth, (req: AuthRequest, res) => {
-  res.json({ items: listApiKeys(req.user!.userId).map(publicApiKey), max: MAX_API_KEYS_PER_USER })
-})
-
-app.post('/api/me/api-keys', requireAuth, (req: AuthRequest, res) => {
-  const { name, expiresInDays } = (req.body ?? {}) as { name?: unknown; expiresInDays?: unknown }
-  const keyName = typeof name === 'string' ? name.trim() : ''
-  if (!keyName || keyName.length > 50) {
-    res.status(400).json({ error: '请填写密钥名称（最多 50 字），例如「Claude 桌面版」' }); return
-  }
-  if (expiresInDays != null && (!Number.isInteger(expiresInDays) || (expiresInDays as number) < 1 || (expiresInDays as number) > API_KEY_EXPIRY_DAYS_MAX)) {
-    res.status(400).json({ error: `有效期必须是 1–${API_KEY_EXPIRY_DAYS_MAX} 天，或不填表示永久有效` }); return
-  }
-  if (countApiKeys(req.user!.userId) >= MAX_API_KEYS_PER_USER) {
-    res.status(400).json({ error: `每人最多 ${MAX_API_KEYS_PER_USER} 个密钥，请先撤销不用的密钥` }); return
-  }
-  const generated = generateApiKey()
-  const expiresAt = expiresInDays == null ? null : Math.floor(Date.now() / 1000) + (expiresInDays as number) * 86400
-  const item = createApiKey({
-    userId: req.user!.userId, name: keyName, prefix: generated.prefix, keyHash: generated.hash, expiresAt,
-  })
-  audit(req, 'apikey.create', 'api_key', {
-    entityId: item.id, detail: { name: keyName, prefix: item.prefix, expiresAt },
-  })
-  res.status(201).json({ key: generated.key, item: publicApiKey(item) })
-})
-
-app.delete('/api/me/api-keys/:keyId', requireAuth, (req: AuthRequest, res) => {
-  const key = getApiKeyById(Number(req.params.keyId))
-  if (!key || key.user_id !== req.user!.userId) { res.status(404).json({ error: '密钥不存在' }); return }
-  deleteApiKey(key.id)
-  audit(req, 'apikey.revoke', 'api_key', { entityId: key.id, detail: { name: key.name, prefix: key.prefix } })
-  res.json({ ok: true })
-})
+registerAuthRoutes(app)
 
 // ── 知识库路由 ────────────────────────────────────────
 
@@ -1449,8 +1284,6 @@ app.delete('/api/kbs/:id/docs/:docId', requireAuth, (req: AuthRequest, res) => {
 
 // ── 统计路由 ──────────────────────────────────────────
 
-/** 统计面板和用户列表里"近期"的天数 */
-const STATS_DAYS = 30
 
 app.get('/api/kbs/:id/stats', requireAuth, (req: AuthRequest, res) => {
   const kbId = Number(req.params.id)
@@ -1511,118 +1344,7 @@ app.get('/api/kbs/:id/stats', requireAuth, (req: AuthRequest, res) => {
   })
 })
 
-// ── 对话历史路由 ──────────────────────────────────────
-
-/**
- * 大模型消息 ⇄ 数据库行。tool_calls 是数组，存成 JSON 字符串；seq 是消息在对话里的顺序，
- * 读回来时按 seq 排序，保证工具调用和工具结果的先后不乱。
- */
-function serializeMessage(msg: Record<string, unknown>, seq: number) {
-  return {
-    role:         msg.role as string,
-    content:      typeof msg.content === 'string' ? msg.content : (msg.content as string | null) ?? null,
-    tool_calls:   ('tool_calls' in msg && msg.tool_calls) ? JSON.stringify(msg.tool_calls) : null,
-    tool_call_id: ('tool_call_id' in msg) ? (msg.tool_call_id as string | null) ?? null : null,
-    seq,
-  }
-}
-
-function deserializeMessage(row: MessageRow): Record<string, unknown> {
-  const base: Record<string, unknown> = { role: row.role, content: row.content ?? null }
-  if (row.tool_calls)   base.tool_calls   = JSON.parse(row.tool_calls)
-  if (row.tool_call_id) base.tool_call_id = row.tool_call_id
-  return base
-}
-
-app.get('/api/kbs/:id/conversations', requireAuth, (req: AuthRequest, res) => {
-  const kbId   = Number(req.params.id)
-  const limit  = Math.min(Number(req.query.limit)  || 20, 100)
-  const offset = Number(req.query.offset) || 0
-  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
-  }
-  const total = countConversations(req.user!.userId, kbId)
-  const items = listConversations(req.user!.userId, kbId, limit, offset)
-  res.json({ items, total, hasMore: offset + items.length < total, nextOffset: offset + items.length })
-})
-
-app.post('/api/kbs/:id/conversations', requireAuth, (req: AuthRequest, res) => {
-  const kbId = Number(req.params.id)
-  if (!canUserAccessKb(req.user!.userId, kbId) && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
-  }
-  const conv = createConversation(req.user!.userId, kbId)
-  res.status(201).json(conv)
-})
-
-app.get('/api/conversations/:convId', requireAuth, (req: AuthRequest, res) => {
-  const conv = getConversationById(Number(req.params.convId))
-  if (!conv) { res.status(404).json({ error: '对话不存在' }); return }
-  if (conv.user_id !== req.user!.userId && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
-  }
-  res.json(conv)
-})
-
-app.get('/api/conversations/:convId/messages', requireAuth, (req: AuthRequest, res) => {
-  const conv = getConversationById(Number(req.params.convId))
-  if (!conv) { res.status(404).json({ error: '对话不存在' }); return }
-  if (conv.user_id !== req.user!.userId && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
-  }
-  const rows = listMessages(conv.id)
-  res.json(rows.map(deserializeMessage))
-})
-
-app.delete('/api/conversations/batch', requireAuth, (req: AuthRequest, res) => {
-  const ids: number[] = req.body?.ids ?? []
-  if (!Array.isArray(ids) || ids.length === 0) {
-    res.status(400).json({ error: '请提供对话 id 列表' }); return
-  }
-  let deleted = 0
-  for (const id of ids) {
-    const conv = getConversationById(id)
-    if (!conv) continue
-    if (conv.user_id !== req.user!.userId && req.user!.role !== 'admin') continue
-    deleteConversation(id)
-    deleted++
-  }
-  audit(req, 'conversation.batch_delete', 'conversation', { detail: { requested: ids.length, deleted } })
-  res.json({ deleted })
-})
-
-app.delete('/api/conversations/:convId', requireAuth, (req: AuthRequest, res) => {
-  const conv = getConversationById(Number(req.params.convId))
-  if (!conv) { res.status(404).json({ error: '对话不存在' }); return }
-  if (conv.user_id !== req.user!.userId && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
-  }
-  deleteConversation(conv.id)
-  audit(req, 'conversation.delete', 'conversation', { entityId: conv.id, kbId: conv.kb_id })
-  res.json({ ok: true })
-})
-
-app.patch('/api/conversations/:convId', requireAuth, (req: AuthRequest, res) => {
-  const conv = getConversationById(Number(req.params.convId))
-  if (!conv) { res.status(404).json({ error: '对话不存在' }); return }
-  if (conv.user_id !== req.user!.userId && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
-  }
-  const { title } = req.body as { title?: string }
-  if (!title?.trim()) { res.status(400).json({ error: '标题不能为空' }); return }
-  updateConversationTitle(conv.id, title.trim().slice(0, 60))
-  res.json({ ok: true })
-})
-
-app.patch('/api/conversations/:convId/pin', requireAuth, (req: AuthRequest, res) => {
-  const conv = getConversationById(Number(req.params.convId))
-  if (!conv) { res.status(404).json({ error: '对话不存在' }); return }
-  if (conv.user_id !== req.user!.userId && req.user!.role !== 'admin') {
-    res.status(403).json({ error: '无权限' }); return
-  }
-  pinConversation(conv.id, Boolean(req.body?.pinned))
-  res.json({ ok: true })
-})
+registerConversationRoutes(app)
 
 // ── 问答路由（SSE） ───────────────────────────────────
 
@@ -1644,7 +1366,7 @@ function kbExecutor(kb: KnowledgeBase, onEvent: (e: QAEvent) => void): LLMExecut
   return new LLMExecutor({
     baseUrl:      LLM_BASE_URL,
     apiKey:       LLM_API_KEY,
-    model:        currentModel,
+    model:        llm.model,
     kbPath,
     scope:        scopeForKbPath(kbPath, kb.id),
     systemPrompt: buildSystemPrompt(kb.name, kbPath, kb.system_prompt),
@@ -1798,7 +1520,7 @@ app.post('/api/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => 
 
   const scope: ToolScope = { cwd: kbDirs[0], allowedDirs: kbDirs, kbIds: allKbs.map(kb => kb.id) }
   const executor = new LLMExecutor({
-    baseUrl: LLM_BASE_URL, apiKey: LLM_API_KEY, model: currentModel,
+    baseUrl: LLM_BASE_URL, apiKey: LLM_API_KEY, model: llm.model,
     kbPath: kbDirs[0], scope, systemPrompt, maxTurns: MAX_TURNS,
     onEvent: (e: QAEvent) => { if (!abortCtrl.signal.aborted) send(e) },
   })
@@ -1825,27 +1547,6 @@ app.post('/api/ask', requireAuth, qaRateLimit, async (req: AuthRequest, res) => 
     clearInterval(keepalive)
     res.end()
   }
-})
-
-// ── 回答质量反馈 ──────────────────────────────────────
-app.post('/api/conversations/:id/feedback', requireAuth, (req: AuthRequest, res) => {
-  const convId = Number(req.params.id)
-  const conv = getConversationById(convId)
-  if (!conv) { res.status(404).json({ error: '对话不存在' }); return }
-  if (conv.user_id !== req.user!.userId) { res.status(403).json({ error: '无权限' }); return }
-  const { rating, reason, comment } = req.body as { rating: 1 | -1; reason?: unknown; comment?: unknown }
-  if (rating !== 1 && rating !== -1) { res.status(400).json({ error: 'rating 必须为 1 或 -1' }); return }
-  if (reason != null && !(FEEDBACK_REASONS as readonly unknown[]).includes(reason)) {
-    res.status(400).json({ error: '无效的差评原因' }); return
-  }
-  if (comment != null && (typeof comment !== 'string' || comment.length > 500)) {
-    res.status(400).json({ error: '补充说明最多 500 字' }); return
-  }
-  upsertFeedback(convId, req.user!.userId, rating, {
-    reason: reason as (typeof FEEDBACK_REASONS)[number] | undefined,
-    comment: comment as string | undefined,
-  })
-  res.json({ ok: true })
 })
 
 // ── 搜索路由 ──────────────────────────────────────────
@@ -1990,235 +1691,12 @@ app.post('/mcp', (req, res, next) => {
 
 // ── 管理员路由 ────────────────────────────────────────
 
-app.get('/api/admin/api-keys', requireAdmin, (_req, res) => {
-  res.json({ items: listApiKeys().map(publicApiKey) })
-})
-
-/** 员工离职或密钥泄露时，管理员可以撤销任何人的密钥 */
-app.delete('/api/admin/api-keys/:keyId', requireAdmin, (req: AuthRequest, res) => {
-  const key = getApiKeyById(Number(req.params.keyId))
-  if (!key) { res.status(404).json({ error: '密钥不存在' }); return }
-  deleteApiKey(key.id)
-  audit(req, 'apikey.revoke', 'api_key', {
-    entityId: key.id, detail: { name: key.name, prefix: key.prefix, owner: key.username },
-  })
-  res.json({ ok: true })
-})
-
-app.get('/api/admin/feedback', requireAdmin, (_req, res) => {
-  const items = getAllFeedbackStats()
-  const total_positive = items.reduce((s, i) => s + i.positive, 0)
-  const total_negative = items.reduce((s, i) => s + i.negative, 0)
-  const total = total_positive + total_negative
-  const satisfaction = total > 0 ? Math.round((total_positive / total) * 100) : null
-  res.json({ items, total_positive, total_negative, satisfaction, reasons: getNegativeFeedbackReasons() })
-})
-
+registerApiKeyRoutes(app)
+registerAdminRoutes(app)
 registerGapRoutes(app, { kbExecutor })
+registerBackupRoutes(app)
 
-/* ── 数据备份 ─────────────────────────────────────── */
-
-export const backupScheduler = new BackupScheduler({
-  paths: { dbPath: DB_PATH, storagePath: STORAGE_PATH, backupDir: BACKUP_DIR },
-  keep: BACKUP_KEEP,
-  intervalHours: BACKUP_INTERVAL_HOURS,
-  appVersion: APP_VERSION,
-})
-
-/** 备份状态与已有备份列表（不返回服务器上的绝对路径） */
-app.get('/api/admin/backups', requireAdmin, (_req, res) => {
-  res.json(backupScheduler.status())
-})
-
-/** 立即备份；备份在后台线程中进行，完成后返回结果 */
-app.post('/api/admin/backups', requireAdmin, async (req: AuthRequest, res) => {
-  try {
-    const result = await backupScheduler.runNow('manual')
-    audit(req, 'backup.create', 'backup', {
-      detail: { name: result.name, documents: result.manifest.counts.documents, removed: result.removed.length },
-    })
-    res.status(201).json({ name: result.name, removed: result.removed, status: backupScheduler.status() })
-  } catch (err) {
-    if (err instanceof BackupBusyError) { res.status(409).json({ error: err.message }); return }
-    audit(req, 'backup.failed', 'backup', { detail: { error: (err as Error).message } })
-    res.status(500).json({ error: `备份失败：${(err as Error).message}` })
-  }
-})
-
-app.get('/api/admin/feedback/negative', requireAdmin, (req, res) => {
-  const limit  = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
-  const offset = Math.max(Number(req.query.offset) || 0, 0)
-  const reasonParam = String(req.query.reason ?? '').trim()
-  let reason: (typeof FEEDBACK_REASONS)[number] | 'none' | undefined
-  if (reasonParam === 'none') reason = 'none'
-  else if (reasonParam) {
-    if (!(FEEDBACK_REASONS as readonly string[]).includes(reasonParam)) {
-      res.status(400).json({ error: '无效的差评原因' }); return
-    }
-    reason = reasonParam as (typeof FEEDBACK_REASONS)[number]
-  }
-  res.json(listNegativeFeedback({ limit, offset, reason }))
-})
-
-app.get('/api/admin/audit', requireAdmin, (req, res) => {
-  const limit = Math.min(Number(req.query.limit) || 50, 200)
-  const offset = Number(req.query.offset) || 0
-  const action = String(req.query.action ?? '').trim()
-  const username = String(req.query.username ?? '').trim()
-  const kbIdRaw = req.query.kbId != null ? Number(req.query.kbId) : undefined
-  const result = listAuditEvents({
-    limit,
-    offset,
-    action: action || undefined,
-    username: username || undefined,
-    kbId: Number.isFinite(kbIdRaw) ? kbIdRaw : undefined,
-  })
-  res.json({ ...result, hasMore: offset + result.items.length < result.total })
-})
-
-app.get('/api/admin/users', requireAdmin, (_req, res) => {
-  const activity = listUserActivity(Math.floor(Date.now() / 1000) - STATS_DAYS * 86400)
-  res.json(listUsers().map(u => ({
-    ...u,
-    last_active_at: activity.get(u.id)?.last_active_at ?? null,
-    questions_30d: activity.get(u.id)?.questions ?? 0,
-  })))
-})
-
-app.post('/api/admin/users', requireAdmin, (req, res) => {
-  const { username, password, role } = req.body as {
-    username: string; password: string; role?: 'admin' | 'user'
-  }
-  if (typeof username !== 'string' || !username.trim() || typeof password !== 'string' || !password) {
-    res.status(400).json({ error: '用户名和密码不能为空' }); return
-  }
-  if (password.length < 6) {
-    res.status(400).json({ error: '密码至少 6 位' }); return
-  }
-  if (role != null && role !== 'admin' && role !== 'user') {
-    res.status(400).json({ error: '角色值无效' }); return
-  }
-  if (getUserByUsername(username)) {
-    res.status(409).json({ error: '用户名已存在' }); return
-  }
-  const user = createUser(username.trim(), password, role ?? 'user')
-  audit(req, 'admin.user_create', 'user', {
-    entityId: user.id,
-    detail: { username: user.username, role: user.role },
-  })
-  res.status(201).json({ id: user.id, username: user.username, role: user.role })
-})
-
-app.delete('/api/admin/users/:id', requireAdmin, (req: AuthRequest, res) => {
-  const id = Number(req.params.id)
-  if (id === req.user!.userId) {
-    res.status(400).json({ error: '不能删除自己' }); return
-  }
-  const target = getUserById(id)
-  if (!target) { res.status(404).json({ error: '用户不存在' }); return }
-  // 他名下的知识库转给执行删除的管理员，文档和对话都保留
-  const transferredKbs = deleteUser(id, req.user!.userId)
-  audit(req, 'admin.user_delete', 'user', {
-    entityId: id,
-    detail: { username: target.username, transferredKbs },
-  })
-  res.json({ ok: true, transferredKbs })
-})
-
-app.patch('/api/admin/users/:id/role', requireAdmin, (req: AuthRequest, res) => {
-  const uid  = Number(req.params.id)
-  const role = req.body?.role
-  if (role !== 'admin' && role !== 'user') {
-    res.status(400).json({ error: '角色值无效' }); return
-  }
-  if (uid === req.user!.userId) {
-    res.status(400).json({ error: '不能修改自己的角色' }); return
-  }
-  updateUserRole(uid, role)
-  audit(req, 'admin.user_role_update', 'user', { entityId: uid, detail: { role } })
-  res.json({ ok: true })
-})
-
-app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) => {
-  const id = Number(req.params.id)
-  const { newPassword } = req.body as { newPassword: unknown }
-  if (typeof newPassword !== 'string' || newPassword.length < 6) {
-    res.status(400).json({ error: '新密码至少 6 位' }); return
-  }
-  if (!getUserById(id)) { res.status(404).json({ error: '用户不存在' }); return }
-  updateUserPassword(id, await hashPassword(newPassword))
-  audit(req, 'admin.user_password_reset', 'user', { entityId: id })
-  res.json({ ok: true })
-})
-
-// ── 服务端配置（供前端读取） ───────────────────────────
-
-/**
- * 大模型服务是否可用（/readyz 和顶栏状态用）。Ollama 查 /api/tags；其他服务查当前模型的
- * /models/<模型名>，顺带确认模型名没填错。超时很短，避免拖慢健康检查。
- */
-async function checkLlmOnline(): Promise<boolean> {
-  if (NODE_ENV === 'test') return true
-  try {
-    if (IS_OLLAMA) {
-      const r = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(2000) })
-      return r.ok
-    }
-    const r = await fetch(`${LLM_BASE_URL}/models/${encodeURIComponent(currentModel)}`, {
-      headers: { Authorization: `Bearer ${LLM_API_KEY}` },
-      signal: AbortSignal.timeout(5000),
-    })
-    return r.ok
-  } catch { return false }
-}
-
-app.get('/api/config', async (_req, res) => {
-  const llmOnline = await checkLlmOnline()
-  res.json({
-    model: currentModel,
-    provider: LLM_PROVIDER,
-    llmOnline,
-    ollamaOnline: llmOnline,
-    embeddingEnabled: isEmbeddingEnabled(),
-    embeddingModel: getEmbeddingModel() || null,
-  })
-})
-
-app.get('/api/config/models', requireAuth, async (_req, res) => {
-  try {
-    if (IS_OLLAMA) {
-      const r = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) })
-      if (r.ok) {
-        const data = await r.json() as { models?: Array<{ name: string }> }
-        const models = (data.models ?? []).map((m: { name: string }) => m.name)
-        res.json({ models: models.length ? models : [currentModel], current: currentModel }); return
-      }
-    } else {
-      const r = await fetch(`${LLM_BASE_URL}/models`, {
-        headers: { Authorization: `Bearer ${LLM_API_KEY}` },
-        signal: AbortSignal.timeout(5000),
-      })
-      if (r.ok) {
-        const data = await r.json() as { data?: Array<{ id?: string }> }
-        const models = (data.data ?? []).map(m => m.id).filter((id): id is string => Boolean(id))
-        res.json({ models: models.length ? models : [currentModel], current: currentModel }); return
-      }
-    }
-    res.json({ models: [currentModel], current: currentModel })
-  } catch {
-    res.json({ models: [currentModel], current: currentModel })
-  }
-})
-
-app.patch('/api/config/model', requireAdmin, (req: AuthRequest, res) => {
-  const model = (req.body?.model as string | undefined)?.trim()
-  if (!model) { res.status(400).json({ error: '模型名不能为空' }); return }
-  currentModel = model
-  setConfig('model', model)
-  console.log(`模型已切换为：${currentModel}`)
-  audit(req, 'config.model_update', 'config', { detail: { model: currentModel } })
-  res.json({ ok: true, model: currentModel })
-})
+registerConfigRoutes(app)
 
 // ── LLM 健康检查 ───────────────────────────────────
 
@@ -2226,7 +1704,7 @@ async function checkLLM(): Promise<void> {
   try {
     const online = await checkLlmOnline()
     if (online) {
-      console.log(`✓  ${LLM_PROVIDER} 模型服务在线，当前模型 "${currentModel}"`)
+      console.log(`✓  ${LLM_PROVIDER} 模型服务在线，当前模型 "${llm.model}"`)
     } else {
       console.warn(`⚠  ${LLM_PROVIDER} 模型服务连接失败 (${LLM_BASE_URL})`)
     }
@@ -2299,7 +1777,7 @@ export function startServer(): void {
   app.listen(PORT, async () => {
   console.log('\n企业知识库系统已启动')
   console.log(`地址：http://localhost:${PORT}`)
-  console.log(`模型：${currentModel}  (${LLM_BASE_URL})`)
+  console.log(`模型：${llm.model}  (${LLM_BASE_URL})`)
   console.log(`存储：${STORAGE_PATH}`)
   console.log(`管理员账户：${ADMIN_USER}\n`)
   await checkLLM()
