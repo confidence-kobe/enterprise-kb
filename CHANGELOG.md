@@ -26,6 +26,11 @@
 - 文档列表接口的分页参数不是数字时（如 `?limit=abc`）不再返回 500，按默认值处理。
 - PowerPoint（.pptx）文件又能解析了。10 月升级到 officeparser 8 之后，它去掉了旧的 `parseOfficeAsync` 函数，导致所有上传的 PPT 都被标记为「失败」。现在改用新的 `parseOffice` 接口，幻灯片文字、表格和演讲者备注都能提取。之前失败的 PPT 在升级后重启服务时会自动重新解析，不需要重新上传。新增测试用一份中文 PPT 覆盖直接解析和后台解析两条路径。
 
+### 内部整理
+
+- 开始拆分过大的 `server.ts`：待补知识的路由拆到 `src/routes/gaps.ts`，权限与审计（`access.ts`）、限速（`rateLimit.ts`）、环境变量读取（`env.ts`）独立成模块。不改变任何接口和行为，原有测试一字未改全部通过。
+- 编译时开启「未使用的变量和参数」检查，顺手清掉了 `server.ts` 里没用到的导入。
+
 ### 依赖
 
 - openai 7.45.1 → 7.53.0：中间版本只涉及 Responses、Realtime、Agents 等接口，问答用的 Chat Completions 流式和工具调用没有变化；已用会并行调用工具、分片返回参数的模拟模型实测网页问答、跨库问答和 MCP 的 `ask_knowledge_base`。
