@@ -930,9 +930,17 @@ npm start        # 生产：运行 dist/server.js
 ```
 enterprise-kb/
 ├── src/
-│   ├── server.ts             # Express 主服务、大部分路由、后台队列（正在按功能逐步拆到 routes/）
+│   ├── server.ts             # Express 主服务、知识库/文档/问答/搜索/MCP 路由、后台队列（正在按功能逐步拆到 routes/）
+│   ├── config.ts             # 运行配置（环境变量读取一次；llm.model 可在运行中切换）
 │   ├── routes/
-│   │   └── gaps.ts           # 待补知识的路由（列表、处理状态、重新验证、最近补充）
+│   │   ├── auth.ts           # 登录、当前用户、改密码
+│   │   ├── apiKeys.ts        # 接口密钥管理（自己的 + 管理员撤销）
+│   │   ├── admin.ts          # 用户管理、审计日志、反馈统计
+│   │   ├── backups.ts        # 手动备份、备份状态
+│   │   ├── config.ts         # 当前模型、可选模型、切换模型、模型在线检查
+│   │   ├── conversations.ts  # 对话历史和回答评价
+│   │   └── gaps.ts           # 待补知识（列表、处理状态、重新验证、最近补充）
+│   ├── messageCodec.ts       # 对话消息与数据库行的转换
 │   ├── access.ts             # 权限判断、返回前端前的信息过滤、审计日志
 │   ├── rateLimit.ts          # 登录和问答限速
 │   ├── env.ts                # 读取环境变量的小工具
