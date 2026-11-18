@@ -16,9 +16,9 @@
 浏览器 / AI 工具
       │  HTTP、SSE
       ▼
-src/server.ts      知识库、文档、问答、搜索、MCP 的路由和启动流程（正在逐步拆分）
+src/server.ts      入口：装配 Express、注册各组路由、启动流程（只有两百多行）
       │
-      ├─ src/routes/            已拆出来的路由（认证、接口密钥、管理员、备份、模型配置、对话、待补知识）
+      ├─ src/routes/            所有路由，一个功能一个文件（认证、知识库、文档、问答、搜索、MCP、管理员……）
       ├─ src/config.ts          运行配置（环境变量只在这里读一次）
       ├─ src/indexQueue.ts      后台索引队列与 OCR 队列（上传后文档怎么变成可检索的）
       ├─ src/folderSync.ts      文件夹同步
@@ -93,9 +93,9 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 | 想了解 | 读这里 |
 |---|---|
 | 对话历史怎么裁剪 | `src/conversationHistory.ts`（文件开头有说明） |
-| MCP 协议 | `src/mcp.ts`，配合 `src/server.ts` 的"MCP 服务"一节 |
+| MCP 协议 | `src/mcp.ts`，配合 `src/routes/mcp.ts` |
 | 文件夹同步 | `src/folderSync.ts` 的 `scanSyncDirectory()`、`syncKnowledgeBase()` |
-| 版本历史 | `src/server.ts` 的"编辑现有文本文档"一节，`src/db.ts` 的"文本文档历史版本" |
+| 版本历史 | `src/routes/docs.ts` 的"编辑现有文本文档"一节，`src/db.ts` 的"文本文档历史版本" |
 | 备份 | `src/backup.ts`、`src/backupScheduler.ts` |
 | 大模型能用哪些工具、能访问什么 | `src/tools.ts`、`src/toolScope.ts` |
 
@@ -109,7 +109,7 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 ① 浏览器  public/chat.js  sendQuestion()
      POST /api/kbs/3/ask  { question, conversationId }
           │
-② 服务端  src/server.ts  app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, …)
+② 服务端  src/routes/qa.ts  app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, …)
      requireAuth          验证 Token，从数据库读出最新的用户信息
      qaRateLimit          每个用户每分钟最多 20 次
      canUserAccessKb      有没有权限读这个知识库
@@ -162,9 +162,9 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 这些不是需要马上修的 bug，而是理解项目时应该知道的边界。按影响从大到小排列。
 
-### 1. `server.ts` 太大
+### 1. ~~`server.ts` 太大~~（已改进）
 
-起点是一个文件约 2,600 行。**正在改进**：按功能拆成路由文件放进 `src/routes/`（已拆出认证、接口密钥、管理员、备份、模型配置、对话、待补知识），共用的底座也各自独立：运行配置（`config.ts`）、权限与审计（`access.ts`）、限速（`rateLimit.ts`）、后台索引队列（`indexQueue.ts`）、文件夹同步（`folderSync.ts`）、上传配置（`upload.ts`）、文件类型限制（`fileTypes.ts`）。现在约 1,200 行，剩下的是知识库与成员、文档、问答、搜索、MCP 这几组路由。拆分不改变行为，每一步都靠完整的测试保护。
+起点是一个文件约 2,600 行、71 条路由。**现在已经拆开**：`server.ts` 只剩两百多行，负责装配和启动；路由按功能拆到 `src/routes/` 下 13 个文件；运行配置（`config.ts`）、权限与审计（`access.ts`）、限速（`rateLimit.ts`）、后台索引队列（`indexQueue.ts`）、文件夹同步（`folderSync.ts`）、上传配置（`upload.ts`）、文件类型限制（`fileTypes.ts`）等共用底座各自独立。拆分前后 71 条路由的清单和注册顺序逐条一致，测试一个字没改。现在最大的是 `routes/docs.ts`（约 380 行）。同样的问题还存在于 `db.ts`（约 1,900 行）、`public/manage.js` 和 `public/chat.js`（各约 2,000 行以上），可以按同样的方式拆。
 
 ### 2. 只能单实例运行
 

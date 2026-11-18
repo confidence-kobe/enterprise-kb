@@ -22,7 +22,7 @@
 
 | 边界 | 入口 | 主要防护措施 | 负责人 |
 | --- | --- | --- | --- |
-| 公网 HTTP → Express | `src/server.ts` 里的路由 | 安全响应头、CORS 策略、JSON 大小限制、认证中间件 | 后端负责人 |
+| 公网 HTTP → Express | `src/server.ts`（装配）和 `src/routes/` 里的路由 | 安全响应头、CORS 策略、JSON 大小限制、认证中间件 | 后端负责人 |
 | 匿名用户 → 已登录用户 | `/api/auth/login` | 密码校验、登录频率限制、签发 JWT | 后端负责人 |
 | 普通用户 → 管理员操作 | `/api/admin/*`、模型配置 | `requireAdmin` | 后端负责人 |
 | API 密钥持有者（脚本、AI 工具） | 任何 `requireAuth` 路由上的 `Authorization: Bearer ekb_…`、`POST /mcp` | `requireAuth` 对密钥做哈希并以密钥主人的身份执行；`isApiKeyAllowed` 只允许 `GET`、两个问答接口和 `/mcp`；`requireAdmin` 和 `/api/me/api-keys` 拒绝密钥 | 后端负责人 |
@@ -84,6 +84,10 @@
 
 ```text
 src/server.ts
+src/routes/
+src/access.ts
+src/rateLimit.ts
+src/config.ts
 src/auth.ts
 src/db.ts
 src/tools.ts

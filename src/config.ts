@@ -68,6 +68,8 @@ export const APP_VERSION  = (() => {
 export const ADMIN_USER   = process.env.ADMIN_USERNAME   ?? 'admin'
 export const ADMIN_PASS   = process.env.ADMIN_PASSWORD   ?? 'Admin@123'
 export const CORS_ORIGIN  = envValue('CORS_ORIGIN')
+/** 允许跨域访问的来源列表（CORS_ORIGIN，逗号分隔）；空表示不额外放开 */
+export const corsOrigins = CORS_ORIGIN?.split(',').map(s => s.trim()).filter(Boolean) ?? []
 export const TRUST_PROXY  = /^(1|true|yes)$/i.test(envValue('TRUST_PROXY') ?? '')
 
 /** 生产环境拒绝默认或示例密钥：这些值写在公开的代码和 .env.example 里，用了等于没设密码 */

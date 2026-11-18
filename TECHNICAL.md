@@ -105,7 +105,7 @@ Enterprise KB 是一套面向企业内部的**本地知识库问答系统**。�
                          │
                          ▼
 ┌─────────────────────────────────────────────────────┐
-│              Express 5（src/server.ts）              │
+│      Express 5（src/server.ts 装配 + routes/）      │
 │                                                     │
 │  ┌──────────┐  ┌──────────┐  ┌────────┐  ┌───────┐  │
 │  │ 认证中间件│  │ REST 路由 │  │ SSE 问答│  │ /mcp  │  │
@@ -784,7 +784,7 @@ html = DOMPurify.sanitize(marked.parse(raw), {
 ### 生产环境启动校验
 
 ```typescript
-// src/server.ts — validateRuntimeConfig()
+// src/config.ts — validateRuntimeConfig()
 if (IS_PRODUCTION) {
   // JWT_SECRET：至少 32 个字符，且不是任何已知的示例值
   // ADMIN_PASSWORD：不是默认值或示例值
@@ -930,21 +930,31 @@ npm start        # 生产：运行 dist/server.js
 ```
 enterprise-kb/
 ├── src/
-│   ├── server.ts             # Express 主服务、知识库/文档/问答/搜索/MCP 路由（正在按功能逐步拆到 routes/）
+│   ├── server.ts             # 入口：装配 Express、注册各组路由、启动与启动时补建索引
 │   ├── config.ts             # 运行配置（环境变量读取一次；llm.model 可在运行中切换）
+│   ├── routes/
+│   │   ├── auth.ts           # 登录、当前用户、改密码
+│   │   ├── apiKeys.ts        # 接口密钥管理（自己的 + 管理员撤销）
+│   │   ├── kbs.ts            # 知识库（增删改、公开、文件夹同步）和成员
+│   │   ├── docs.ts           # 文档（上传、文本文档、历史版本、预览、相关文档、删除）
+│   │   ├── stats.ts          # 知识库统计（聊天页「知识库概况」）
+│   │   ├── conversations.ts  # 对话历史和回答评价
+│   │   ├── qa.ts             # 单库流式问答（SSE）和跨库联合问答
+│   │   ├── search.ts         # 文档内容搜索、重建索引、对话搜索
+│   │   ├── mcp.ts            # MCP 服务端点
+│   │   ├── admin.ts          # 用户管理、审计日志、反馈统计
+│   │   ├── gaps.ts           # 待补知识（列表、处理状态、重新验证、最近补充）
+│   │   ├── backups.ts        # 手动备份、备份状态
+│   │   └── config.ts         # 当前模型、可选模型、切换模型、模型在线检查
+│   ├── kbExecutor.ts         # 单个知识库的问答执行器（问答、MCP、重新验证共用）
+│   ├── access.ts             # 权限判断、返回前端前的信息过滤、审计日志
+│   ├── rateLimit.ts          # 登录和问答限速
+│   ├── env.ts                # 读取环境变量的小工具
 │   ├── fileTypes.ts          # 文件类型白名单、导入限制、OCR 设置
 │   ├── upload.ts             # 网页上传（multer）配置
 │   ├── indexQueue.ts         # 后台索引队列与 OCR 队列
 │   ├── folderSync.ts         # 文件夹同步：路径校验、扫描、同步
 │   ├── documentStore.ts      # 已入库文档的文件名、删除善后、可读文本路径
-│   ├── routes/
-│   │   ├── auth.ts           # 登录、当前用户、改密码
-│   │   ├── apiKeys.ts        # 接口密钥管理（自己的 + 管理员撤销）
-│   │   ├── admin.ts          # 用户管理、审计日志、反馈统计
-│   │   ├── backups.ts        # 手动备份、备份状态
-│   │   ├── config.ts         # 当前模型、可选模型、切换模型、模型在线检查
-│   │   ├── conversations.ts  # 对话历史和回答评价
-│   │   └── gaps.ts           # 待补知识（列表、处理状态、重新验证、最近补充）
 │   ├── messageCodec.ts       # 对话消息与数据库行的转换
 │   ├── access.ts             # 权限判断、返回前端前的信息过滤、审计日志
 │   ├── rateLimit.ts          # 登录和问答限速
