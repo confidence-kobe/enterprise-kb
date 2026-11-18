@@ -28,7 +28,7 @@
 
 ### 内部整理
 
-- 拆分过大的 `server.ts`（2596 行 → 约 1800 行）：认证、接口密钥、管理员、备份、模型配置、对话、待补知识的路由各拆成 `src/routes/` 下的独立文件；运行配置（`config.ts`）、权限与审计（`access.ts`）、限速（`rateLimit.ts`）、环境变量读取（`env.ts`）、对话消息转换（`messageCodec.ts`）独立成模块。不改变任何接口和行为，原有测试一字未改全部通过。
+- 拆分过大的 `server.ts`（2596 行 → 约 1200 行）：认证、接口密钥、管理员、备份、模型配置、对话、待补知识的路由各拆成 `src/routes/` 下的独立文件；运行配置（`config.ts`）、权限与审计（`access.ts`）、限速（`rateLimit.ts`）、环境变量读取（`env.ts`）、对话消息转换（`messageCodec.ts`）、后台索引队列（`indexQueue.ts`）、文件夹同步（`folderSync.ts`）、上传配置（`upload.ts`）、文件类型限制（`fileTypes.ts`）、文档文件善后（`documentStore.ts`）独立成模块。不改变任何接口和行为，原有测试一字未改全部通过。
 - 编译时开启「未使用的变量和参数」检查，顺手清掉了 `server.ts` 里没用到的导入。
 
 ### 依赖

@@ -16,10 +16,13 @@
 浏览器 / AI 工具
       │  HTTP、SSE
       ▼
-src/server.ts      大部分路由、后台队列、启动流程（最大的文件，正在逐步拆分）
+src/server.ts      知识库、文档、问答、搜索、MCP 的路由和启动流程（正在逐步拆分）
       │
       ├─ src/routes/            已拆出来的路由（认证、接口密钥、管理员、备份、模型配置、对话、待补知识）
       ├─ src/config.ts          运行配置（环境变量只在这里读一次）
+      ├─ src/indexQueue.ts      后台索引队列与 OCR 队列（上传后文档怎么变成可检索的）
+      ├─ src/folderSync.ts      文件夹同步
+      ├─ src/upload.ts、fileTypes.ts、documentStore.ts   上传配置、文件类型限制、文档文件的善后
       ├─ src/access.ts          谁能管理、谁能写入知识库；审计日志
       ├─ src/rateLimit.ts       登录和问答限速
       ├─ src/auth.ts            登录 Token 和 API 密钥的认证
@@ -60,7 +63,7 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 ### 第 3 步：文档是怎么入库的（1 小时）
 
-读 `src/server.ts` 里"后台索引队列与 OCR 队列"这一节，从上到下：
+读 `src/indexQueue.ts`（后台索引队列与 OCR 队列），从上到下：
 
 1. `enqueueDocIndex()`：所有入库操作（上传、新建、同步、启动补建）的入口
 2. `processDocIndexJob()`：按文件类型分流，PDF 和 Office 在工作线程里提取文字
@@ -91,7 +94,7 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 |---|---|
 | 对话历史怎么裁剪 | `src/conversationHistory.ts`（文件开头有说明） |
 | MCP 协议 | `src/mcp.ts`，配合 `src/server.ts` 的"MCP 服务"一节 |
-| 文件夹同步 | `src/server.ts` 的 `scanSyncDirectory()`、`syncKnowledgeBase()` |
+| 文件夹同步 | `src/folderSync.ts` 的 `scanSyncDirectory()`、`syncKnowledgeBase()` |
 | 版本历史 | `src/server.ts` 的"编辑现有文本文档"一节，`src/db.ts` 的"文本文档历史版本" |
 | 备份 | `src/backup.ts`、`src/backupScheduler.ts` |
 | 大模型能用哪些工具、能访问什么 | `src/tools.ts`、`src/toolScope.ts` |
@@ -161,7 +164,7 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 ### 1. `server.ts` 太大
 
-起点是一个文件约 2,600 行。**正在改进**：按功能拆成路由文件放进 `src/routes/`（已拆出认证、接口密钥、管理员、备份、模型配置、对话、待补知识），运行配置、权限与审计、限速、环境变量读取也各自独立（`config.ts`、`access.ts`、`rateLimit.ts`、`env.ts`），现在约 1,800 行。剩下的是知识库与成员、文档、问答、搜索、MCP，以及后台索引队列和文件夹同步，它们互相共用索引队列等内部函数，要小心地逐块拆。拆分不改变行为，每一步都靠完整的测试保护。
+起点是一个文件约 2,600 行。**正在改进**：按功能拆成路由文件放进 `src/routes/`（已拆出认证、接口密钥、管理员、备份、模型配置、对话、待补知识），共用的底座也各自独立：运行配置（`config.ts`）、权限与审计（`access.ts`）、限速（`rateLimit.ts`）、后台索引队列（`indexQueue.ts`）、文件夹同步（`folderSync.ts`）、上传配置（`upload.ts`）、文件类型限制（`fileTypes.ts`）。现在约 1,200 行，剩下的是知识库与成员、文档、问答、搜索、MCP 这几组路由。拆分不改变行为，每一步都靠完整的测试保护。
 
 ### 2. 只能单实例运行
 
