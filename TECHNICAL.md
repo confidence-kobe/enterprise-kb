@@ -930,8 +930,13 @@ npm start        # 生产：运行 dist/server.js
 ```
 enterprise-kb/
 ├── src/
-│   ├── server.ts             # Express 主服务、知识库/文档/问答/搜索/MCP 路由、后台队列（正在按功能逐步拆到 routes/）
+│   ├── server.ts             # Express 主服务、知识库/文档/问答/搜索/MCP 路由（正在按功能逐步拆到 routes/）
 │   ├── config.ts             # 运行配置（环境变量读取一次；llm.model 可在运行中切换）
+│   ├── fileTypes.ts          # 文件类型白名单、导入限制、OCR 设置
+│   ├── upload.ts             # 网页上传（multer）配置
+│   ├── indexQueue.ts         # 后台索引队列与 OCR 队列
+│   ├── folderSync.ts         # 文件夹同步：路径校验、扫描、同步
+│   ├── documentStore.ts      # 已入库文档的文件名、删除善后、可读文本路径
 │   ├── routes/
 │   │   ├── auth.ts           # 登录、当前用户、改密码
 │   │   ├── apiKeys.ts        # 接口密钥管理（自己的 + 管理员撤销）
