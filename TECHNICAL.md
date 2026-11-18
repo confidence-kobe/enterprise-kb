@@ -930,7 +930,12 @@ npm start        # 生产：运行 dist/server.js
 ```
 enterprise-kb/
 ├── src/
-│   ├── server.ts             # Express 主服务和所有路由、后台队列
+│   ├── server.ts             # Express 主服务、大部分路由、后台队列（正在按功能逐步拆到 routes/）
+│   ├── routes/
+│   │   └── gaps.ts           # 待补知识的路由（列表、处理状态、重新验证、最近补充）
+│   ├── access.ts             # 权限判断、返回前端前的信息过滤、审计日志
+│   ├── rateLimit.ts          # 登录和问答限速
+│   ├── env.ts                # 读取环境变量的小工具
 │   ├── db.ts                 # 数据访问层、迁移、检索
 │   ├── auth.ts               # JWT、API 密钥、认证中间件
 │   ├── mcp.ts                # MCP 协议处理和知识库工具
