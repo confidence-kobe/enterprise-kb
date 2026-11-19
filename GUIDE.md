@@ -34,7 +34,7 @@ src/server.ts      入口：装配 Express、注册各组路由、启动流程�
       ├─ src/extractWorker.ts 等 在工作线程里提取 PDF/Office 文字、OCR
       └─ src/backup*.ts         备份与恢复
 
-public/            前端：index.html + chat.js（问答页）、manage.html + manage.js（管理台）
+public/            前端：index.html + chat.js（问答页）、manage.html + manage/*.js（管理台，一个功能一个文件）
 ```
 
 **一句话概括核心思路**：上传的文档被切成小段存进 SQLite 的全文索引；提问时，大模型不是一次性拿到所有资料，而是像人一样"先搜、再读、再回答"，通过工具调用自己去检索和阅读，最后标注出处。
@@ -86,7 +86,7 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 ### 第 6 步：前端（按需）
 
-`public/chat.js` 和 `public/manage.js` 开头都有文件结构说明。重点看 chat.js 的 `readSSE()`（怎么接收流式回答）、`renderMd()`（怎么安全地渲染 Markdown）和 `decorateCitations()`（怎么把出处变成编号和来源卡片）。
+`public/chat.js` 和 `public/manage/core.js` 开头都有文件结构说明（管理台的脚本拆在 `public/manage/` 下，加载顺序和规则写在 `core.js` 开头）。重点看 chat.js 的 `readSSE()`（怎么接收流式回答）、`renderMd()`（怎么安全地渲染 Markdown）和 `decorateCitations()`（怎么把出处变成编号和来源卡片）。
 
 ### 第 7 步：其余功能（按兴趣）
 
@@ -164,7 +164,9 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 ### 1. ~~`server.ts` 太大~~（已改进）
 
-起点是一个文件约 2,600 行、71 条路由。**现在已经拆开**：`server.ts` 只剩两百多行，负责装配和启动；路由按功能拆到 `src/routes/` 下 13 个文件；运行配置（`config.ts`）、权限与审计（`access.ts`）、限速（`rateLimit.ts`）、后台索引队列（`indexQueue.ts`）、文件夹同步（`folderSync.ts`）、上传配置（`upload.ts`）、文件类型限制（`fileTypes.ts`）等共用底座各自独立。拆分前后 71 条路由的清单和注册顺序逐条一致，测试一个字没改。现在最大的是 `routes/docs.ts`（约 380 行）。同样的问题还存在于 `db.ts`（约 1,900 行）、`public/manage.js` 和 `public/chat.js`（各约 2,000 行以上），可以按同样的方式拆。
+起点是一个文件约 2,600 行、71 条路由。**现在已经拆开**：`server.ts` 只剩两百多行，负责装配和启动；路由按功能拆到 `src/routes/` 下 13 个文件；运行配置（`config.ts`）、权限与审计（`access.ts`）、限速（`rateLimit.ts`）、后台索引队列（`indexQueue.ts`）、文件夹同步（`folderSync.ts`）、上传配置（`upload.ts`）、文件类型限制（`fileTypes.ts`）等共用底座各自独立。拆分前后 71 条路由的清单和注册顺序逐条一致，测试一个字没改。现在最大的是 `routes/docs.ts`（约 380 行）。管理台前端也按同样的思路拆开了（见下一条）。同样的问题还存在于 `db.ts`（约 1,900 行）和 `public/chat.js`（约 1,900 行）。
+
+补充：`public/manage.js`（约 2,500 行）已拆成 `public/manage/` 下 12 个脚本：公共部分、知识库、待处理、文档、历史版本、账号、审计、反馈、待补知识、设置、API 接入、启动。它们是普通 `<script>`，按 `manage.html` 里的顺序加载、共享全局作用域；页面启动的语句只放在最后加载的 `init.js`，从根上避免了"初始化时后面的 const 还没就绪"的老问题。`test/manageScripts.test.ts` 守着这几条规则。
 
 ### 2. 只能单实例运行
 

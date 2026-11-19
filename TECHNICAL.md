@@ -722,7 +722,7 @@ return { response, turns, messages }
 |------|------|------|
 | 登录 | login.html | 居中的登录卡片，跟随浅色/深色主题 |
 | 问答 | index.html + chat.js | 知识库列表、对话历史、新对话首页、流式问答、出处编号与原文面板、知识库概况 |
-| 管理控制台 | manage.html + manage.js | 左侧导航；待处理（管理员首页）、知识库与文档、成员、用户、审计、反馈与知识缺口、API 接入、设置与备份 |
+| 管理控制台 | manage.html + manage/*.js | 左侧导航；待处理（管理员首页）、知识库与文档、成员、用户、审计、反馈与知识缺口、API 接入、设置与备份 |
 | 图标 | icons.js | 两个页面共用的线条图标（`window.ICONS`），代替 emoji |
 
 静态资源带版本号（如 `style.css?v=44`），修改后要同步更新版本号，避免浏览器缓存旧文件。
@@ -985,7 +985,14 @@ enterprise-kb/
 │   └── nodeVersion.ts        # Node.js 版本检查
 ├── public/
 │   ├── index.html · chat.js        # 问答页
-│   ├── manage.html · manage.js     # 管理控制台
+│   ├── manage.html                 # 管理控制台页面
+│   ├── manage/                     # 管理控制台脚本，按 manage.html 里的顺序加载
+│   │   ├── core.js · init.js       # 公共部分（最先加载）· 页面启动（最后加载）
+│   │   ├── kbs.js · inbox.js       # 知识库与成员 · 待处理首页
+│   │   ├── docs.js · versions.js   # 文档 · 文本文档历史版本
+│   │   ├── users.js · audit.js     # 账号 · 审计日志
+│   │   ├── feedback.js · gaps.js   # 回答反馈 · 待补知识
+│   │   └── settings.js · apikeys.js # 模型与备份 · API 接入
 │   ├── login.html                  # 登录页
 │   ├── icons.js                    # 共用的线条图标
 │   └── style.css                   # 设计系统（颜色变量、组件、深色模式）
