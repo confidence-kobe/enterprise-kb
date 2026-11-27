@@ -39,8 +39,9 @@
     "mammoth": "^1.13.0",
     "marked": "^18.2.0",
     "multer": "^2.5.0",
-    "officeparser": "^8.6.0",
+    "officeparser": "^8.7.1",
     "openai": "^7.57.0",
+
     "pdf-parse": "^2.4.5",
     "tesseract.js": "^7.0.0",
     "undici": "^8.12.4"
