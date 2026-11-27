@@ -22,7 +22,7 @@
 
 | 边界 | 入口 | 主要防护措施 | 负责人 |
 | --- | --- | --- | --- |
-| 公网 HTTP → Express | `src/server.ts` 里的路由 | 安全响应头、CORS 策略、JSON 大小限制、认证中间件 | 后端负责人 |
+| 公网 HTTP → Express | `src/server.ts`（装配）和 `src/routes/` 里的路由 | 安全响应头、CORS 策略、JSON 大小限制、认证中间件 | 后端负责人 |
 | 匿名用户 → 已登录用户 | `/api/auth/login` | 密码校验、登录频率限制、签发 JWT | 后端负责人 |
 | 普通用户 → 管理员操作 | `/api/admin/*`、模型配置 | `requireAdmin` | 后端负责人 |
 | API 密钥持有者（脚本、AI 工具） | 任何 `requireAuth` 路由上的 `Authorization: Bearer ekb_…`、`POST /mcp` | `requireAuth` 对密钥做哈希并以密钥主人的身份执行；`isApiKeyAllowed` 只允许 `GET`、两个问答接口和 `/mcp`；`requireAdmin` 和 `/api/me/api-keys` 拒绝密钥 | 后端负责人 |
@@ -45,6 +45,8 @@
 - API 密钥（`ekb_` + 192 位随机数）只保存 SHA-256 哈希，以密钥主人当前的角色和知识库权限执行。通过路由白名单（`src/auth.ts` 里的 `isApiKeyAllowed`）限制为只读：`GET`/`HEAD`、`POST /api/kbs/:id/ask`、`POST /api/ask` 和 `POST /mcp`。即使密钥属于管理员，管理员接口和密钥管理接口也会拒绝它，所以泄露的密钥不能再创建密钥或修改数据。修改密码不会让密钥失效（密钥与 `token_version` 无关）；要停用密钥，在 API 接入 标签页吊销，管理员也可以通过 `/api/admin/api-keys` 吊销。删除用户会同时删除其密钥。
 - `/mcp` 只提供只读工具。每次调用工具都重新检查知识库权限，所以密钥主人无权读取的知识库不会出现在结果里。
 - 知识库权限检查使用 `canUserAccessKb`、所有者检查或管理员检查。
+- 待补知识（没找到答案的问题）：管理员看全部；普通用户只能看到自己是所有者的知识库的缺口，指定别人的知识库返回 403，跨全部知识库的缺口只有管理员能看。缺口里只有问题原文，不带提问者身份。修改处理状态（`PUT /api/gaps/status`）需要所有者或管理员（`canManageKb`），跨全部知识库的缺口只有管理员能改，接口密钥不能调用（不在 `isApiKeyAllowed` 白名单里），每次修改记入审计日志。重新验证（`POST /api/gaps/verify`）会调用大模型，需要所有者或管理员，必须指定知识库，受每用户问答频率限制，接口密钥不能调用，记入审计日志；它不建对话、不记缺口。删除知识库时一并删除其处理状态和验证结果。
+- 聊天首页的「最近补充」（`GET /api/kbs/:id/recent-answers`）：需要能读取该知识库（`canUserAccessKb` 或管理员）。它会把已补上的问题原文展示给**所有能访问该知识库的人**（公开知识库则是所有登录用户），所以只返回问题和时间，不返回提问者、处理人或次数；所有者或管理员标「已补上」后默认公开，可以在「已补上」里点「不公开」撤回。这是有意识的取舍：问题原文可能含敏感信息，所有者标「已补上」前应看一眼问题内容。系统不记录提问者，所以不做定向通知。
 - 写入文档（上传、新建或编辑文本文档）需要通过 `canUserWriteKb`：所有者、明确添加的成员或管理员。公开状态只开放查看和问答。上传权限在 multer 写入文件之前检查。
 - 文本文档的历史版本保存在数据库里（`doc_versions` 表），不在 `STORAGE_PATH` 下，所以大模型工具和检索都看不到旧内容。能读取知识库的人都能查看版本列表和内容；恢复版本需要通过 `canUserWriteKb`，并记入审计日志。删除文档时一并删除其版本。
 - 登录尝试按 IP 和用户名限制频率，过期的计数每分钟清理一次。
@@ -82,6 +84,10 @@
 
 ```text
 src/server.ts
+src/routes/
+src/access.ts
+src/rateLimit.ts
+src/config.ts
 src/auth.ts
 src/db.ts
 src/tools.ts
