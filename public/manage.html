@@ -39,6 +39,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
           <span class="tab-label">文档</span>
         </button>
+        <button class="tab-btn" data-tab="gaps" id="gaps-tab" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/></svg>
+          <span class="tab-label">待补知识</span><span class="nav-count hidden" id="gaps-count"></span>
+        </button>
         <button class="tab-btn" data-tab="feedback" id="feedback-tab" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           <span class="tab-label">反馈</span>
@@ -102,7 +106,7 @@
           新建知识库
         </button>
       </div>
-      <!-- 统计行和知识库卡片由 manage.js 渲染到 #kb-list -->
+      <!-- 统计行和知识库卡片由 manage/kbs.js 渲染到 #kb-list -->
       <div id="kb-list">
         <div class="feedback-empty">加载中…</div>
       </div>
@@ -250,6 +254,29 @@
     </div>
 
     <!-- 回答反馈标签 -->
+    <!-- 待补知识标签：管理员和知识库所有者可见 -->
+    <div class="tab-panel" id="tab-gaps">
+      <div class="section-header">
+        <h1 class="page-title">待补知识</h1>
+        <div class="audit-filter-bar">
+          <select class="input input-sm" id="gap-status" aria-label="处理状态">
+            <option value="open" selected>待处理</option>
+            <option value="resolved">已补上</option>
+            <option value="dismissed">不需要补</option>
+          </select>
+          <select class="input input-sm" id="gap-days" aria-label="时间范围">
+            <option value="7">近 7 天</option>
+            <option value="30" selected>近 30 天</option>
+            <option value="90">近 90 天</option>
+          </select>
+        </div>
+      </div>
+      <div class="card feedback-reasons-card">
+        <div class="gap-card-sub" style="margin-bottom:10px">AI 回答"未找到相关内容"、用户反馈"没找到相关资料"，以及 AI 助手（MCP）检索不到内容的问题。把答案整理成文档上传到对应知识库，再点「已补上」。如果补上之后又有人问到同一个问题，它会自动回到「待处理」。已补上的问题会显示在聊天页的「最近补充」里（只显示问题，不显示是谁问的），能访问这个知识库的人都看得到；不想公开的，在「已补上」里点「不公开」。</div>
+        <div id="gap-list"></div>
+      </div>
+    </div>
+
     <div class="tab-panel" id="tab-feedback">
       <div class="section-header">
         <h1 class="page-title">回答反馈</h1>
@@ -264,20 +291,6 @@
       <div class="card feedback-reasons-card">
         <div class="feedback-card-title">差评原因分布</div>
         <div id="feedback-reason-bars"></div>
-      </div>
-      <div class="card feedback-reasons-card">
-        <div class="gap-card-head">
-          <div>
-            <div class="feedback-card-title">知识空白</div>
-            <div class="gap-card-sub">AI 回答"未找到相关内容"、用户反馈"没找到相关资料"，以及 AI 助手（MCP）检索不到内容的问题。把答案整理成文档上传到对应知识库即可补上。</div>
-          </div>
-          <select class="input input-sm" id="gap-days" aria-label="时间范围">
-            <option value="7">近 7 天</option>
-            <option value="30" selected>近 30 天</option>
-            <option value="90">近 90 天</option>
-          </select>
-        </div>
-        <div id="gap-list"></div>
       </div>
       <div class="feedback-card-title feedback-list-title">差评明细</div>
       <div id="feedback-list"></div>
@@ -630,6 +643,17 @@
 
   <div id="toast" class="hidden"></div>
   <script src="icons.js?v=2"></script>
-  <script src="manage.js?v=34"></script>
+  <script src="manage/core.js?v=35"></script>
+  <script src="manage/kbs.js?v=35"></script>
+  <script src="manage/inbox.js?v=35"></script>
+  <script src="manage/docs.js?v=35"></script>
+  <script src="manage/versions.js?v=35"></script>
+  <script src="manage/users.js?v=35"></script>
+  <script src="manage/audit.js?v=35"></script>
+  <script src="manage/feedback.js?v=35"></script>
+  <script src="manage/gaps.js?v=35"></script>
+  <script src="manage/settings.js?v=35"></script>
+  <script src="manage/apikeys.js?v=35"></script>
+  <script src="manage/init.js?v=35"></script>
 </body>
 </html>
