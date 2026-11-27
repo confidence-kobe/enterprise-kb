@@ -105,7 +105,7 @@ Enterprise KB 是一套面向企业内部的**本地知识库问答系统**。�
                          │
                          ▼
 ┌─────────────────────────────────────────────────────┐
-│              Express 5（src/server.ts）              │
+│      Express 5（src/server.ts 装配 + routes/）      │
 │                                                     │
 │  ┌──────────┐  ┌──────────┐  ┌────────┐  ┌───────┐  │
 │  │ 认证中间件│  │ REST 路由 │  │ SSE 问答│  │ /mcp  │  │
@@ -200,6 +200,8 @@ messages              id · conversation_id · role · content · tool_calls · 
 response_feedback     id · conversation_id · user_id · rating · 差评原因与问答快照 · created_at
 doc_versions          id · doc_id · title · content · size · user_id · username · note · created_at
 gap_events            id · kb_id（可为空）· user_id · question · source · channel · created_at
+gap_status            kb_id（0 = 跨全部知识库）· fingerprint · status · announce · user_id · username · updated_at
+gap_checks            kb_id · fingerprint · answerable · answer · user_id · username · checked_at
 api_keys              id · user_id · name · prefix · key_hash · created_at · expires_at · last_used_at
 audit_events          id · user_id · username · action · entity_type · entity_id · kb_id · detail · ip
 system_config         key · value（例如当前选用的模型）
@@ -655,7 +657,31 @@ return { response, turns, messages }
 | 网页跨库提问、MCP 提问回答"未找到相关内容" | gap_events（source = ai_not_found） |
 | MCP 检索没有结果 | gap_events（source = search_empty，显示为 检索无结果） |
 
-管理员接口：`GET /api/admin/gaps?days=&kbId=`（最近 7/30/90 天）。
+#### 处理状态
+
+每个缺口有三种状态：**待处理**（默认，没有记录）、**已补上**、**不需要补**。状态存在 `gap_status` 表里，按"知识库 + 问题指纹"定位，指纹忽略大小写、空白和标点，所以换个说法标点再问仍是同一条。
+
+- 标为**已补上**之后，如果又有人问到同一个问题（最近一次提问晚于处理时间），缺口自动回到待处理并带「补上后又被问到」标记，说明补的内容没解决问题。
+- 标为**不需要补**的保持不动，要处理必须手动重新打开。
+- 知识库的统计页和管理台的待处理数字都只计待处理的缺口。
+
+接口：
+
+| 接口 | 谁能用 | 说明 |
+|------|--------|------|
+| `GET /api/gaps?days=&kbId=&status=` | 已登录用户 | `status` 取 `open`（默认）、`resolved`、`dismissed`、`all`；返回各状态的数量 `counts`。管理员看全部，普通用户只看自己是所有者的知识库 |
+| `PUT /api/gaps/status` | 管理员、知识库所有者 | 请求体 `{ kbId, question, status }`，`status` 取 `open`（重新打开）、`resolved`、`dismissed`。`kbId` 为 `null`（跨全部知识库的缺口）只有管理员能改。记入审计日志（`gap.status`） |
+| `POST /api/gaps/verify` | 管理员、知识库所有者 | 请求体 `{ kbId, question }`，`kbId` 必填（跨全部知识库的缺口不能验证）。用真实模型在该知识库里把问题重问一遍，回答没有"未找到相关内容"就算答上了，保存最近一次结果（`gap_checks`）。不建对话、不记缺口，受问答频率限制，记入审计日志（`gap.verify`） |
+| `GET /api/kbs/:id/recent-answers` | 能访问该知识库的人 | 聊天首页的「最近补充」：最近 30 天内标为已补上、没有关闭公开、之后没人再问到、没有被验证为仍答不上的缺口，最多 5 条，只返回 `{ question, resolved_at }` |
+| `GET /api/admin/gaps` | 管理员 | 旧路径，行为与 `/api/gaps` 一致 |
+
+接口密钥只能调用 `GET /api/gaps`，不能改状态，也不能触发验证。
+
+#### 通知提问者的取舍
+
+系统**不记录是谁问的**，所以没法定向通知提问者；改为在聊天首页公共位置显示"最近补充了这些问题的答案"，能访问该知识库的人都看得到，不针对具体的人。代价是当初的提问者可能错过。如果以后要定向通知，需要先在 `gap_events` 和对话里保留提问者身份，并更新 `SECURITY_OWNERSHIP.md` 里"缺口不带提问者身份"的约束。
+
+**验证只能判断模型有没有放弃，判断不了答得对不对。** "答上了"只代表回答里没有"未找到相关内容"；模型编一个答案同样会显示"能答上了"。所以界面上能展开看回答原文，由人确认后再标「已补上」。要系统地衡量答得准不准，用 `npm run eval:qa`（见 `eval/README.md`）。
 
 ---
 
@@ -696,7 +722,7 @@ return { response, turns, messages }
 |------|------|------|
 | 登录 | login.html | 居中的登录卡片，跟随浅色/深色主题 |
 | 问答 | index.html + chat.js | 知识库列表、对话历史、新对话首页、流式问答、出处编号与原文面板、知识库概况 |
-| 管理控制台 | manage.html + manage.js | 左侧导航；待处理（管理员首页）、知识库与文档、成员、用户、审计、反馈与知识缺口、API 接入、设置与备份 |
+| 管理控制台 | manage.html + manage/*.js | 左侧导航；待处理（管理员首页）、知识库与文档、成员、用户、审计、反馈与知识缺口、API 接入、设置与备份 |
 | 图标 | icons.js | 两个页面共用的线条图标（`window.ICONS`），代替 emoji |
 
 静态资源带版本号（如 `style.css?v=44`），修改后要同步更新版本号，避免浏览器缓存旧文件。
@@ -758,7 +784,7 @@ html = DOMPurify.sanitize(marked.parse(raw), {
 ### 生产环境启动校验
 
 ```typescript
-// src/server.ts — validateRuntimeConfig()
+// src/config.ts — validateRuntimeConfig()
 if (IS_PRODUCTION) {
   // JWT_SECRET：至少 32 个字符，且不是任何已知的示例值
   // ADMIN_PASSWORD：不是默认值或示例值
@@ -904,7 +930,35 @@ npm start        # 生产：运行 dist/server.js
 ```
 enterprise-kb/
 ├── src/
-│   ├── server.ts             # Express 主服务和所有路由、后台队列
+│   ├── server.ts             # 入口：装配 Express、注册各组路由、启动与启动时补建索引
+│   ├── config.ts             # 运行配置（环境变量读取一次；llm.model 可在运行中切换）
+│   ├── routes/
+│   │   ├── auth.ts           # 登录、当前用户、改密码
+│   │   ├── apiKeys.ts        # 接口密钥管理（自己的 + 管理员撤销）
+│   │   ├── kbs.ts            # 知识库（增删改、公开、文件夹同步）和成员
+│   │   ├── docs.ts           # 文档（上传、文本文档、历史版本、预览、相关文档、删除）
+│   │   ├── stats.ts          # 知识库统计（聊天页「知识库概况」）
+│   │   ├── conversations.ts  # 对话历史和回答评价
+│   │   ├── qa.ts             # 单库流式问答（SSE）和跨库联合问答
+│   │   ├── search.ts         # 文档内容搜索、重建索引、对话搜索
+│   │   ├── mcp.ts            # MCP 服务端点
+│   │   ├── admin.ts          # 用户管理、审计日志、反馈统计
+│   │   ├── gaps.ts           # 待补知识（列表、处理状态、重新验证、最近补充）
+│   │   ├── backups.ts        # 手动备份、备份状态
+│   │   └── config.ts         # 当前模型、可选模型、切换模型、模型在线检查
+│   ├── kbExecutor.ts         # 单个知识库的问答执行器（问答、MCP、重新验证共用）
+│   ├── access.ts             # 权限判断、返回前端前的信息过滤、审计日志
+│   ├── rateLimit.ts          # 登录和问答限速
+│   ├── env.ts                # 读取环境变量的小工具
+│   ├── fileTypes.ts          # 文件类型白名单、导入限制、OCR 设置
+│   ├── upload.ts             # 网页上传（multer）配置
+│   ├── indexQueue.ts         # 后台索引队列与 OCR 队列
+│   ├── folderSync.ts         # 文件夹同步：路径校验、扫描、同步
+│   ├── documentStore.ts      # 已入库文档的文件名、删除善后、可读文本路径
+│   ├── messageCodec.ts       # 对话消息与数据库行的转换
+│   ├── access.ts             # 权限判断、返回前端前的信息过滤、审计日志
+│   ├── rateLimit.ts          # 登录和问答限速
+│   ├── env.ts                # 读取环境变量的小工具
 │   ├── db.ts                 # 数据访问层、迁移、检索
 │   ├── auth.ts               # JWT、API 密钥、认证中间件
 │   ├── mcp.ts                # MCP 协议处理和知识库工具
@@ -931,7 +985,14 @@ enterprise-kb/
 │   └── nodeVersion.ts        # Node.js 版本检查
 ├── public/
 │   ├── index.html · chat.js        # 问答页
-│   ├── manage.html · manage.js     # 管理控制台
+│   ├── manage.html                 # 管理控制台页面
+│   ├── manage/                     # 管理控制台脚本，按 manage.html 里的顺序加载
+│   │   ├── core.js · init.js       # 公共部分（最先加载）· 页面启动（最后加载）
+│   │   ├── kbs.js · inbox.js       # 知识库与成员 · 待处理首页
+│   │   ├── docs.js · versions.js   # 文档 · 文本文档历史版本
+│   │   ├── users.js · audit.js     # 账号 · 审计日志
+│   │   ├── feedback.js · gaps.js   # 回答反馈 · 待补知识
+│   │   └── settings.js · apikeys.js # 模型与备份 · API 接入
 │   ├── login.html                  # 登录页
 │   ├── icons.js                    # 共用的线条图标
 │   └── style.css                   # 设计系统（颜色变量、组件、深色模式）

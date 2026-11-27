@@ -16,8 +16,15 @@
 浏览器 / AI 工具
       │  HTTP、SSE
       ▼
-src/server.ts      所有路由、后台队列、启动流程（最大的文件）
+src/server.ts      入口：装配 Express、注册各组路由、启动流程（只有两百多行）
       │
+      ├─ src/routes/            所有路由，一个功能一个文件（认证、知识库、文档、问答、搜索、MCP、管理员……）
+      ├─ src/config.ts          运行配置（环境变量只在这里读一次）
+      ├─ src/indexQueue.ts      后台索引队列与 OCR 队列（上传后文档怎么变成可检索的）
+      ├─ src/folderSync.ts      文件夹同步
+      ├─ src/upload.ts、fileTypes.ts、documentStore.ts   上传配置、文件类型限制、文档文件的善后
+      ├─ src/access.ts          谁能管理、谁能写入知识库；审计日志
+      ├─ src/rateLimit.ts       登录和问答限速
       ├─ src/auth.ts            登录 Token 和 API 密钥的认证
       ├─ src/db.ts              所有 SQL：建表迁移、增删改查、全文检索、向量
       ├─ src/executor.ts        和大模型对话：流式输出 + 工具调用循环
@@ -27,7 +34,7 @@ src/server.ts      所有路由、后台队列、启动流程（最大的文件�
       ├─ src/extractWorker.ts 等 在工作线程里提取 PDF/Office 文字、OCR
       └─ src/backup*.ts         备份与恢复
 
-public/            前端：index.html + chat.js（问答页）、manage.html + manage.js（管理台）
+public/            前端：index.html + chat.js（问答页）、manage.html + manage/*.js（管理台，一个功能一个文件）
 ```
 
 **一句话概括核心思路**：上传的文档被切成小段存进 SQLite 的全文索引；提问时，大模型不是一次性拿到所有资料，而是像人一样"先搜、再读、再回答"，通过工具调用自己去检索和阅读，最后标注出处。
@@ -56,7 +63,7 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 ### 第 3 步：文档是怎么入库的（1 小时）
 
-读 `src/server.ts` 里"后台索引队列与 OCR 队列"这一节，从上到下：
+读 `src/indexQueue.ts`（后台索引队列与 OCR 队列），从上到下：
 
 1. `enqueueDocIndex()`：所有入库操作（上传、新建、同步、启动补建）的入口
 2. `processDocIndexJob()`：按文件类型分流，PDF 和 Office 在工作线程里提取文字
@@ -79,16 +86,16 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 ### 第 6 步：前端（按需）
 
-`public/chat.js` 和 `public/manage.js` 开头都有文件结构说明。重点看 chat.js 的 `readSSE()`（怎么接收流式回答）、`renderMd()`（怎么安全地渲染 Markdown）和 `decorateCitations()`（怎么把出处变成编号和来源卡片）。
+`public/chat.js` 和 `public/manage/core.js` 开头都有文件结构说明（管理台的脚本拆在 `public/manage/` 下，加载顺序和规则写在 `core.js` 开头）。重点看 chat.js 的 `readSSE()`（怎么接收流式回答）、`renderMd()`（怎么安全地渲染 Markdown）和 `decorateCitations()`（怎么把出处变成编号和来源卡片）。
 
 ### 第 7 步：其余功能（按兴趣）
 
 | 想了解 | 读这里 |
 |---|---|
 | 对话历史怎么裁剪 | `src/conversationHistory.ts`（文件开头有说明） |
-| MCP 协议 | `src/mcp.ts`，配合 `src/server.ts` 的"MCP 服务"一节 |
-| 文件夹同步 | `src/server.ts` 的 `scanSyncDirectory()`、`syncKnowledgeBase()` |
-| 版本历史 | `src/server.ts` 的"编辑现有文本文档"一节，`src/db.ts` 的"文本文档历史版本" |
+| MCP 协议 | `src/mcp.ts`，配合 `src/routes/mcp.ts` |
+| 文件夹同步 | `src/folderSync.ts` 的 `scanSyncDirectory()`、`syncKnowledgeBase()` |
+| 版本历史 | `src/routes/docs.ts` 的"编辑现有文本文档"一节，`src/db.ts` 的"文本文档历史版本" |
 | 备份 | `src/backup.ts`、`src/backupScheduler.ts` |
 | 大模型能用哪些工具、能访问什么 | `src/tools.ts`、`src/toolScope.ts` |
 
@@ -102,7 +109,7 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 ① 浏览器  public/chat.js  sendQuestion()
      POST /api/kbs/3/ask  { question, conversationId }
           │
-② 服务端  src/server.ts  app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, …)
+② 服务端  src/routes/qa.ts  app.post('/api/kbs/:id/ask', requireAuth, qaRateLimit, …)
      requireAuth          验证 Token，从数据库读出最新的用户信息
      qaRateLimit          每个用户每分钟最多 20 次
      canUserAccessKb      有没有权限读这个知识库
@@ -155,9 +162,11 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 这些不是需要马上修的 bug，而是理解项目时应该知道的边界。按影响从大到小排列。
 
-### 1. `server.ts` 太大
+### 1. ~~`server.ts` 太大~~（已改进）
 
-一个文件约 2,400 行、68 个路由，再加上后台队列和同步逻辑。目前靠分节标题还能读，但继续加功能会越来越难维护。**可以改进**：按功能拆成多个路由文件（认证、知识库、文档、问答、管理），后台队列单独一个文件。拆分不改变行为，有完整的测试保护，风险可控。
+起点是一个文件约 2,600 行、71 条路由。**现在已经拆开**：`server.ts` 只剩两百多行，负责装配和启动；路由按功能拆到 `src/routes/` 下 13 个文件；运行配置（`config.ts`）、权限与审计（`access.ts`）、限速（`rateLimit.ts`）、后台索引队列（`indexQueue.ts`）、文件夹同步（`folderSync.ts`）、上传配置（`upload.ts`）、文件类型限制（`fileTypes.ts`）等共用底座各自独立。拆分前后 71 条路由的清单和注册顺序逐条一致，测试一个字没改。现在最大的是 `routes/docs.ts`（约 380 行）。管理台前端也按同样的思路拆开了（见下一条）。同样的问题还存在于 `db.ts`（约 1,900 行）和 `public/chat.js`（约 1,900 行）。
+
+补充：`public/manage.js`（约 2,500 行）已拆成 `public/manage/` 下 12 个脚本：公共部分、知识库、待处理、文档、历史版本、账号、审计、反馈、待补知识、设置、API 接入、启动。它们是普通 `<script>`，按 `manage.html` 里的顺序加载、共享全局作用域；页面启动的语句只放在最后加载的 `init.js`，从根上避免了"初始化时后面的 const 还没就绪"的老问题。`test/manageScripts.test.ts` 守着这几条规则。
 
 ### 2. 只能单实例运行
 
@@ -167,9 +176,9 @@ public/            前端：index.html + chat.js（问答页）、manage.html + 
 
 如果页面出现 XSS 漏洞，脚本可以读走 Token。目前的防线是：大模型回答经过 DOMPurify 净化、用户输入都会转义。**可以改进**：增加 Content-Security-Policy 响应头（目前没有设置）作为第二道防线，或者改用 HttpOnly Cookie 保存登录状态。
 
-### 4. 回答质量没有自动评估
+### 4. 回答质量的评估要手动跑
 
-现有测试保证"功能正确"：检索能搜到、权限不越界、出处能跳转。浏览器测试用的是模拟大模型，所以"回答得好不好"没有自动化的衡量。目前能看到的信号是用户的 👍/👎 和知识缺口报告。**可以改进**：整理一组典型问题和标准答案，换模型或改提示词时跑一遍对比。
+现有测试保证"功能正确"：检索能搜到、权限不越界、出处能跳转。浏览器测试用的是模拟大模型，衡量不了"回答得好不好"。**已改进**：`npm run eval:qa` 用一组标准问题真实地问一遍并打分，换模型或改提示词时跑一遍对比（见 `eval/README.md`）。它要调用真实大模型，所以没有放进 `npm run check`。另外，管理台的「待补知识」会把没找到答案的问题汇总出来，补完文档后可以点「重新验证」。
 
 ### 5. 检索在超大知识库上会变慢
 
