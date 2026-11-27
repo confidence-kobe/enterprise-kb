@@ -140,7 +140,127 @@ test('admin feedback tab shows stats, reasons and knowledge gaps', async ({ page
   await expect(page.locator('#feedback-stats')).toContainText('回答满意度')
   await expect(page.locator('#feedback-reason-bars')).toContainText('信息过时')
   await expect(page.locator('.feedback-item').first()).toContainText('已改为 15 天')
-  await expect(page.locator('#gap-list')).toContainText('出差补贴标准是多少')
+  expect(errors).toEqual([])
+})
+
+test('knowledge gaps tab: mark as resolved, review, and reopen', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+
+  await page.click('[data-tab=gaps]')
+  const row = page.locator('#gap-list .gap-row', { hasText: '出差补贴标准是多少' })
+  await expect(row).toBeVisible()
+  await expect(page.locator('#gaps-count')).toBeVisible()
+
+  // 标记已补上：从「待处理」里消失，出现在「已补上」里，注明是谁处理的
+  await row.getByRole('button', { name: '已补上' }).click()
+  await expect(row).toHaveCount(0)
+  await page.selectOption('#gap-status', 'resolved')
+  const resolved = page.locator('#gap-list .gap-row', { hasText: '出差补贴标准是多少' })
+  await expect(resolved).toContainText('已补上（admin')
+
+  // 重新打开：回到待处理
+  await resolved.getByRole('button', { name: '重新打开' }).click()
+  await expect(resolved).toHaveCount(0)
+  await page.selectOption('#gap-status', 'open')
+  await expect(page.locator('#gap-list .gap-row', { hasText: '出差补贴标准是多少' })).toBeVisible()
+  expect(errors).toEqual([])
+})
+
+test('knowledge gaps tab: re-verify a question against the knowledge base', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  // 造一条缺口：问一个问题，再对回答点「没找到相关资料」
+  const asked = await request.post(`/api/kbs/${kbId}/ask`, { headers: auth(), data: { question: '病假怎么请？' } })
+  const done = (await asked.text()).split('\n\n').filter(p => p.startsWith('data: ')).map(p => JSON.parse(p.slice(6)))
+    .find(event => event.type === 'done')
+  await request.post(`/api/conversations/${done.conversationId}/feedback`, { headers: auth(), data: { rating: -1, reason: 'not_found' } })
+
+  await signIn(page, await apiLogin(request, 'admin', ADMIN_PASSWORD))
+  await page.goto('/manage.html')
+  await page.click('[data-tab=gaps]')
+
+  // 模型现在能回答（测试用的模拟模型只有问到「补贴」才会说没找到）
+  const answerable = page.locator('#gap-list .gap-row', { hasText: '病假怎么请' })
+  await answerable.getByRole('button', { name: '重新验证' }).click()
+  await expect(answerable).toContainText('验证：能答上了')
+  await answerable.getByText('查看验证时的回答').click()
+  await expect(answerable.locator('.gap-check-answer')).toContainText('年假为每年 10 天')
+
+  // 仍然答不上的：标出「仍答不上」，缺口还在待处理里
+  const stillGap = page.locator('#gap-list .gap-row', { hasText: '出差补贴标准是多少' })
+  await stillGap.getByRole('button', { name: '重新验证' }).click()
+  await expect(stillGap).toContainText('验证：仍答不上')
+  await expect(stillGap.getByRole('button', { name: '已补上' })).toBeVisible()
+  expect(errors).toEqual([])
+})
+
+test('chat home shows recently answered questions and fills the input on click', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  // 造一条缺口并标为已补上
+  const question = '加班怎么调休？'
+  const asked = await request.post(`/api/kbs/${kbId}/ask`, { headers: auth(), data: { question } })
+  const done = (await asked.text()).split('\n\n').filter(p => p.startsWith('data: ')).map(p => JSON.parse(p.slice(6)))
+    .find(event => event.type === 'done')
+  await request.post(`/api/conversations/${done.conversationId}/feedback`, { headers: auth(), data: { rating: -1, reason: 'not_found' } })
+
+  const session = await apiLogin(request, 'admin', ADMIN_PASSWORD)
+  await signIn(page, session)
+  await page.goto('/manage.html')
+  await page.click('[data-tab=gaps]')
+  const row = page.locator('#gap-list .gap-row', { hasText: '加班怎么调休' })
+  await row.getByRole('button', { name: '已补上' }).click()
+  await expect(row).toHaveCount(0)
+
+  // 聊天首页能看到，点一下填进输入框
+  await page.evaluate(id => localStorage.setItem('kb_last_selected_id', String(id)), kbId)
+  await page.goto('/')
+  const answered = page.locator('#welcome-answered')
+  await expect(answered).toBeVisible()
+  await expect(answered).toContainText('最近补充了这些问题的答案')
+  await answered.getByRole('button', { name: question }).click()
+  await expect(page.locator('#question-input')).toHaveValue(question)
+
+  // 在已补上里点「不公开」，聊天首页就不再显示
+  await page.goto('/manage.html')
+  await page.click('[data-tab=gaps]')
+  await page.selectOption('#gap-status', 'resolved')
+  const resolved = page.locator('#gap-list .gap-row', { hasText: '加班怎么调休' })
+  await expect(resolved).toContainText('显示在聊天页')
+  await resolved.getByRole('button', { name: '不公开' }).click()
+  await expect(resolved).toContainText('不在聊天页显示')
+  await page.goto('/')
+  await expect(page.locator('#welcome-title')).not.toHaveText('正在加载知识库…')
+  await expect(page.locator('#welcome-answered')).toBeHidden()
+  expect(errors).toEqual([])
+})
+
+test('knowledge base owners see the gaps tab for their own knowledge bases only', async ({ page, request }) => {
+  const errors = trackErrors(page)
+  await request.post('/api/admin/users', { headers: auth(), data: { username: 'gap_owner', password: 'Owner@12345', role: 'user' } })
+  await request.post('/api/admin/users', { headers: auth(), data: { username: 'gap_nobody', password: 'Nobody@12345', role: 'user' } })
+
+  // 所有者问一个答不上来的问题；管理员库里的缺口（出差补贴）他不该看到
+  const owner = await apiLogin(request, 'gap_owner', 'Owner@12345')
+  const ownerAuth = { Authorization: `Bearer ${owner.token}` }
+  const ownKb = (await (await request.post('/api/kbs', { headers: ownerAuth, data: { name: '所有者的库' } })).json()).id
+  await signIn(page, owner)
+  await page.goto('/')
+  await page.fill('#question-input', '团建补贴有多少？')
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.msg-assistant').last()).toContainText('未找到相关内容')
+
+  await page.goto('/manage.html')
+  await expect(page.locator('#gaps-tab')).toBeVisible()
+  await expect(page.locator('#inbox-tab')).toBeHidden()
+  await page.click('[data-tab=gaps]')
+  await expect(page.locator('#gap-list')).toContainText('团建补贴有多少')
+  await expect(page.locator('#gap-list')).not.toContainText('出差补贴标准是多少')
+
+  // 没有知识库的人看不到这个标签
+  await signIn(page, await apiLogin(request, 'gap_nobody', 'Nobody@12345'))
+  await page.goto('/manage.html')
+  await expect(page.locator('#gaps-tab')).toBeHidden()
   expect(errors).toEqual([])
 })
 
@@ -237,9 +357,9 @@ test('audit log shows readable actions and knowledge base names', async ({ page,
   await page.goto('/manage.html')
   await page.click('[data-tab=audit]')
   await page.selectOption('#audit-action-filter', 'qa.ask')
-  const row = page.locator('#audit-list tr').first()
+  // 其他用例也会提问，最新一行不一定是「人事制度」，按知识库名找
+  const row = page.locator('#audit-list tr', { hasText: '人事制度' }).first()
   await expect(row).toContainText('知识库问答')
-  await expect(row).toContainText('人事制度')
   await expect(row).toContainText('问题：')
   await expect(page.locator('#audit-list')).not.toContainText('qa.ask')
   expect(errors).toEqual([])

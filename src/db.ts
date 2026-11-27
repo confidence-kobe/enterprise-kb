@@ -310,6 +310,37 @@ export function initDb(dbPath: string): void {
     CREATE INDEX IF NOT EXISTS idx_gap_events_time ON gap_events(created_at);
   `)
 
+  // 知识缺口的处理状态。没有记录 = 待处理。kb_id 为 0 表示跨全部知识库的缺口（不能用 NULL：主键里的 NULL 不算重复）。
+  // fingerprint 是问题归并用的指纹（见 knowledgeGaps.ts），同一个问题换个标点再问，仍算同一条。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gap_status (
+      kb_id       INTEGER NOT NULL,
+      fingerprint TEXT    NOT NULL,
+      status      TEXT    NOT NULL CHECK(status IN ('resolved', 'dismissed')),
+      user_id     INTEGER,
+      username    TEXT,
+      updated_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      PRIMARY KEY (kb_id, fingerprint)
+    )
+  `)
+
+  // 已补上的缺口是否显示在聊天页的「最近补充」里（默认显示，所有者可以关掉）
+  try { db.exec('ALTER TABLE gap_status ADD COLUMN announce INTEGER NOT NULL DEFAULT 1') } catch { /* 列已存在 */ }
+
+  // 「重新验证」的结果：把缺口的问题重新问一遍，记下现在能不能答上。每个缺口只留最近一次。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gap_checks (
+      kb_id       INTEGER NOT NULL,
+      fingerprint TEXT    NOT NULL,
+      answerable  INTEGER NOT NULL,
+      answer      TEXT    NOT NULL,
+      user_id     INTEGER,
+      username    TEXT,
+      checked_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      PRIMARY KEY (kb_id, fingerprint)
+    )
+  `)
+
   // 对外接口密钥：只存 SHA-256 哈希，明文只在创建时返回一次
   db.exec(`
     CREATE TABLE IF NOT EXISTS api_keys (
@@ -522,6 +553,8 @@ export function deleteKb(id: number): void {
     db.prepare('DELETE FROM doc_fts WHERE rowid IN (SELECT id FROM doc_chunks WHERE kb_id = ?)').run(id)
     db.prepare('DELETE FROM doc_chunks WHERE kb_id = ?').run(id)
     db.prepare('DELETE FROM doc_chunk_vectors WHERE kb_id = ?').run(id)
+    db.prepare('DELETE FROM gap_status WHERE kb_id = ?').run(id)
+    db.prepare('DELETE FROM gap_checks WHERE kb_id = ?').run(id)
     db.prepare('DELETE FROM knowledge_bases WHERE id = ?').run(id)
   })()
 }
@@ -1779,6 +1812,78 @@ export function listKnowledgeGapRows(since: number, kbId?: number): KnowledgeGap
     ...feedbackRows.map(r => ({ ...r, source: 'feedback_not_found' as const })),
     ...eventRows,
   ]
+}
+
+export type GapStatus = 'resolved' | 'dismissed'
+
+export interface GapStatusRow {
+  /** 0 表示跨全部知识库 */
+  kb_id: number
+  fingerprint: string
+  status: GapStatus
+  /** 1 = 已补上的缺口显示在聊天页的「最近补充」里 */
+  announce: number
+  username: string | null
+  updated_at: number
+}
+
+export function listGapStatuses(): GapStatusRow[] {
+  return db.prepare('SELECT kb_id, fingerprint, status, announce, username, updated_at FROM gap_status').all() as GapStatusRow[]
+}
+
+/** 标记缺口为已补上或不需要补；已有记录则覆盖，处理时间更新为现在 */
+export function setGapStatus(data: {
+  kbId: number | null
+  fingerprint: string
+  status: GapStatus
+  /** 已补上时是否显示在聊天页的「最近补充」里，默认显示 */
+  announce?: boolean
+  userId: number
+  username: string
+}): void {
+  db.prepare(`
+    INSERT INTO gap_status (kb_id, fingerprint, status, announce, user_id, username, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'))
+    ON CONFLICT(kb_id, fingerprint) DO UPDATE SET
+      status = excluded.status, announce = excluded.announce,
+      user_id = excluded.user_id, username = excluded.username, updated_at = excluded.updated_at
+  `).run(data.kbId ?? 0, data.fingerprint, data.status, data.announce === false ? 0 : 1, data.userId, data.username)
+}
+
+/** 重新打开：删掉处理记录，缺口回到待处理 */
+export function clearGapStatus(kbId: number | null, fingerprint: string): void {
+  db.prepare('DELETE FROM gap_status WHERE kb_id = ? AND fingerprint = ?').run(kbId ?? 0, fingerprint)
+}
+
+export interface GapCheckRow {
+  kb_id: number
+  fingerprint: string
+  answerable: number
+  answer: string
+  username: string | null
+  checked_at: number
+}
+
+export function listGapChecks(): GapCheckRow[] {
+  return db.prepare('SELECT kb_id, fingerprint, answerable, answer, username, checked_at FROM gap_checks').all() as GapCheckRow[]
+}
+
+/** 保存最近一次验证结果；回答只留前 1000 个字，够看清模型答了什么 */
+export function saveGapCheck(data: {
+  kbId: number
+  fingerprint: string
+  answerable: boolean
+  answer: string
+  userId: number
+  username: string
+}): void {
+  db.prepare(`
+    INSERT INTO gap_checks (kb_id, fingerprint, answerable, answer, user_id, username, checked_at)
+    VALUES (?, ?, ?, ?, ?, ?, strftime('%s','now'))
+    ON CONFLICT(kb_id, fingerprint) DO UPDATE SET
+      answerable = excluded.answerable, answer = excluded.answer,
+      user_id = excluded.user_id, username = excluded.username, checked_at = excluded.checked_at
+  `).run(data.kbId, data.fingerprint, data.answerable ? 1 : 0, data.answer.slice(0, 1000), data.userId, data.username)
 }
 
 export function getAllFeedbackStats(): KbFeedbackStats[] {
